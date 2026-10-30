@@ -78,16 +78,16 @@ codesign --verify --deep --strict --verbose=2 "$app"
 mkdir -p build/dmg
 cp -R "$app" build/dmg/
 ln -s /Applications build/dmg/Applications
+# The volume's icon too: the file goes in with the rest (the image is sized to its contents), the flag is set on the
+# mounted volume where SetFile (Xcode tools) is around, as hdiutil does not carry a folder's flag over.
+cp "$app/Contents/Resources/AppIcon.icns" build/dmg/.VolumeIcon.icns
 hdiutil create -volname Zagon -srcfolder build/dmg -ov -format UDRW build/rw.dmg
 rm -rf build/dmg
-# The volume's icon too, where SetFile (Xcode tools) is around: on the mounted image, as hdiutil does not carry a
-# folder's custom-icon flag over to the volume.
 if setfile=$(xcrun --find SetFile 2>/dev/null); then
   mnt=$PWD/build/mnt-rw
   hdiutil attach build/rw.dmg -nobrowse -noautoopen -mountpoint "$mnt" >/dev/null
-  cp "$app/Contents/Resources/AppIcon.icns" "$mnt/.VolumeIcon.icns"
   "$setfile" -a C "$mnt"
-  hdiutil detach "$mnt" >/dev/null
+  hdiutil detach "$mnt" >/dev/null || { sleep 2; hdiutil detach -force "$mnt" >/dev/null; }
 fi
 hdiutil convert build/rw.dmg -format UDZO -ov -o build/Zagon.dmg
 rm -f build/rw.dmg

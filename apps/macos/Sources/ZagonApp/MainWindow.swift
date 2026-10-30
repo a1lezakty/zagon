@@ -40,9 +40,10 @@ final class MainWindow: NSObject, NSWindowDelegate {
         let w = window ?? make(app)
         window = w
         app.windowOpen = true
-        // The Dock tile from the bundle's icon, also where Launch Services has not picked it up yet (a fresh build).
-        NSApp.applicationIconImage = Bundle.main.image(forResource: "AppIcon")
         NSApp.setActivationPolicy(.regular)
+        // The Dock tile from the bundle's icon (set once the tile exists), also where Launch Services has not picked it
+        // up yet: a fresh build showed the generic icon.
+        NSApp.applicationIconImage = Bundle.main.image(forResource: "AppIcon")
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -72,7 +73,8 @@ final class MainWindow: NSObject, NSWindowDelegate {
 /// ⌘W closes the window and Zagon keeps running: the app has no File menu to give it that key.
 final class MainNSWindow: NSWindow {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, event.charactersIgnoringModifiers == "w" {
+        // The W key (kVK_ANSI_W) in any layout, Caps Lock or not.
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock) == .command, event.keyCode == 13 {
             performClose(nil)
             return true
         }
@@ -98,8 +100,8 @@ struct ToastView: View {
             HStack(spacing: 10) {
                 Image(systemName: t.error ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                     .font(.system(size: 13)).foregroundColor(t.error ? Z.bad : Z.good)
-                // An error may need its whole reason.
-                Text(t.text).font(.system(size: 13)).foregroundColor(Z.text).lineLimit(t.error ? 3 : 1).help(t.text)
+                Text(t.text).font(.system(size: 13)).foregroundColor(Z.text).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                    .help(t.text)
                 Spacer(minLength: 0)
                 if let url = t.reveal {
                     PillButton(title: t.revealTitle ?? app.f.t("toast.reveal"), height: 28) {
@@ -133,6 +135,7 @@ struct WelcomeBar: View {
             HStack(alignment: .top, spacing: 16) {
                 Banner.blue(Emphasis(before: f.t("welcome.text") + (hider ? "\n" + f.t("welcome.settings") : "")))
                 HStack(alignment: .top, spacing: 6) {
+                    // Numbers inside even where a 1x bar puts them beside: twice the size, they read.
                     MenuBarLabel(five: vm.five?.pct, week: vm.week?.pct, colored: !app.monoIcon, tint: Z.text)
                         .scaleEffect(2).frame(width: 80, height: 36)
                     Image(systemName: "arrow.up.right").font(.system(size: 16, weight: .semibold)).foregroundColor(Z.secondary)

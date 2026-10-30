@@ -58,7 +58,9 @@ enum StatusButton {
 
     static var button: NSStatusBarButton? {
         if let found, found.window != nil { return found }
-        found = NSApp.windows.lazy.filter { $0.className.contains("StatusBar") }.compactMap { $0.contentView.flatMap(find) }.first
+        // The status item's own window first; any window if a later macOS names it otherwise.
+        let windows = NSApp.windows.filter { $0.className.contains("StatusBar") }
+        found = (windows.isEmpty ? NSApp.windows : windows).lazy.compactMap { $0.contentView.flatMap(find) }.first
         return found
     }
 

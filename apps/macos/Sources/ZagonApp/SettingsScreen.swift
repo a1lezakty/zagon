@@ -32,6 +32,7 @@ struct SettingsScreen: View {
                     PillButton(title: f.t("connect.remove"), busy: busy && running == "uninstall") { app.runCLI("uninstall") }
                     PillButton(title: f.t("connect.check"), busy: busy && running == nil) { app.runCLI(nil) }
                 }
+                .disabled(busy)
                 if let e = app.cliError {
                     Text(f.t("connect.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad)
                         .fixedSize(horizontal: false, vertical: true)

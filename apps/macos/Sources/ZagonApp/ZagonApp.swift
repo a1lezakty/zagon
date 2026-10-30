@@ -390,7 +390,9 @@ final class AppState: ObservableObject {
         guard let bin = Self.cliPath, !cliBusy else { return }
         if command == "install", Connect.temporaryLocation(Bundle.main.bundlePath) {
             cliError = f.t("connect.moveFirst")
-            say(f.t("connect.failedInstall", f.t("connect.moveFirst")), error: true, reveal: Bundle.main.bundleURL,
+            // From the DMG, Finder shows where to drag it from; a translocated copy is a hidden folder, not worth showing.
+            let dmg = Bundle.main.bundlePath.hasPrefix("/Volumes/")
+            say(f.t("connect.failedInstall", f.t("connect.moveFirst")), error: true, reveal: dmg ? Bundle.main.bundleURL : nil,
                 revealTitle: f.t("connect.revealApp"))
             return
         }
@@ -547,11 +549,7 @@ final class UpdateReminders: NSObject, SPUStandardUserDriverDelegate, SPUUpdater
         found(state.userInitiated ? nil : update.displayVersionString)
     }
     func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) { found(nil) }
-    func standardUserDriverWillFinishUpdateSession() {
-        found(nil)
-        // A check that only brought a running session forward gets no result callback.
-        MainActor.assumeIsolated { app?.updateChecked(found: nil, error: nil, quiet: true) }
-    }
+    func standardUserDriverWillFinishUpdateSession() { found(nil) }
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         let v = item.displayVersionString
@@ -564,6 +562,12 @@ final class UpdateReminders: NSObject, SPUStandardUserDriverDelegate, SPUUpdater
         let e = error as NSError
         guard e.code != 1001 else { return }  // SUNoUpdateError: updaterDidNotFindUpdate says it
         MainActor.assumeIsolated { app?.updateChecked(found: nil, error: e.localizedDescription) }
+    }
+    /// After every cycle, also one that a check only brought forward (no result callback then): forget the check.
+    /// The selector is spelled out, so a mismatch fails the build instead of never being called.
+    @objc(updater:didFinishUpdateCycleForUpdateCheck:error:)
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
+        MainActor.assumeIsolated { app?.updateChecked(found: nil, error: nil, quiet: true) }
     }
 
     // Sparkle calls its user driver's delegate on the main thread.

@@ -64,7 +64,7 @@ enum Snapshots {
                 .background(Color(hex: Palette.muted))
                 let name = "menubar-\(colored ? "color" : "mono")-\(beside ? "beside" : "inside")"
                 for scale in [1, 2] as [CGFloat] {
-                    ok = write(sheet, width: 1100, scale: scale, name + "@\(Int(scale))x", dir) && ok
+                    ok = write(sheet, width: 1280, scale: scale, name + "@\(Int(scale))x", dir) && ok
                 }
             }
         }
