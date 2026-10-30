@@ -115,28 +115,32 @@ extension DaySummary {
     }
 
     /// The days' summaries for the AI, cards numbered `[1]…` across the days, at most `maxPeriodDigest` characters:
-    /// when all of it does not fit (a month), each card is cut to its title, time and first points, so every day is in.
+    /// when not every day fits (a month), the cards are cut to their title, time and first points, then to the title
+    /// and time; days that still do not fit are left out (their cards come back as unused refs).
     static func periodDigest(_ docs: [SummaryDoc], from: String, to: String, _ w: Words) -> String {
         let head = w.t("Период: \(w.date(from)) — \(w.date(to)). Дней с работой: \(docs.count).\n",
                        "Period: \(w.date(from)) to \(w.date(to)). Days with work: \(docs.count).\n")
-        func render(full: Bool) -> String {
+        /// level 0: all of it; 1: no overviews, what it was and what is left, two points; 2: titles and time.
+        func render(_ level: Int) -> (text: String, complete: Bool) {
             var out = head, n = 0
             for d in docs {
-                var b = "\n" + w.t("День ", "Day ") + w.date(d.from) + (full ? ": " + d.overview : "")
+                var b = "\n" + w.t("День ", "Day ") + w.date(d.from) + (level == 0 ? ": " + d.overview : "")
                 for i in d.items {
                     n += 1
                     b += "\n  [\(n)] \(i.project) · \(i.heading) — \(w.dur(i.sec))."
-                    if full, let was = i.was { b += w.t(" Было: ", " Was: ") + was }
-                    if !i.done.isEmpty { b += w.t(" Сделано: ", " Done: ") + i.done.prefix(full ? SummaryDoc.maxDone : 2).joined(separator: "; ") }
-                    if full, let left = i.left { b += w.t(" Осталось: ", " Left: ") + left }
+                    if level == 0, let was = i.was { b += w.t(" Было: ", " Was: ") + was }
+                    if level < 2, !i.done.isEmpty {
+                        b += w.t(" Сделано: ", " Done: ") + i.done.prefix(level == 0 ? SummaryDoc.maxDone : 2).joined(separator: "; ")
+                    }
+                    if level == 0, let left = i.left { b += w.t(" Осталось: ", " Left: ") + left }
                 }
-                if out.count + b.count > maxPeriodDigest { break }
+                if out.count + b.count > maxPeriodDigest { return (out, false) }
                 out += b
             }
-            return out
+            return (out, true)
         }
-        let full = render(full: true)
-        return full.count < maxPeriodDigest - 2000 ? full : render(full: false)
+        for level in 0..<2 { let r = render(level); if r.complete { return r.text } }
+        return render(2).text
     }
 
     static func periodInstruction(_ w: Words) -> String {

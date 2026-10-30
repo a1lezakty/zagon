@@ -190,6 +190,22 @@ import Testing
         #expect(try s.kept(week.key)?.engine == "claude")
     }
 
+    @Test func aMonthsDigestHasEveryDay() {
+        let item = SummaryDoc.Item(project: "alpha", title: String(repeating: "t", count: 60), was: String(repeating: "w", count: 300),
+                                   done: Array(repeating: String(repeating: "d", count: 200), count: 5), left: String(repeating: "l", count: 300), sec: 600)
+        let days = DaySummary.range("2026-10-01", "2026-10-31").map { SummaryDoc(lang: "en", from: $0, to: $0, overview: "o", items: Array(repeating: item, count: 6)) }
+        let d = DaySummary.periodDigest(days, from: "2026-10-01", to: "2026-10-31", .english)
+        #expect(d.count <= DaySummary.maxPeriodDigest && d.contains("[186] alpha") && !d.contains("Was: "))
+        let two = DaySummary.periodDigest(Array(days.prefix(2)), from: "2026-10-01", to: "2026-10-02", .english)
+        #expect(two.contains("[12] alpha") && two.contains("Was: ") && two.contains("Left: "))  // all of it fits
+    }
+
+    @Test func commitsNameTheirTask() {
+        #expect(DaySummary.mentions("proj-1: fix", "PROJ-1") && DaySummary.mentions("Fix (PROJ-1)", "PROJ-1"))
+        #expect(!DaySummary.mentions("PROJ-12 fix", "PROJ-1") && !DaySummary.mentions("XPROJ-1", "PROJ-1"))
+        #expect(DaySummary.mentions("fix #123 now", "#123") && !DaySummary.mentions("fix #1234", "#123"))
+    }
+
     @Test func weeksAndMonths() {
         for d in ["2026-10-26", "2026-10-30", "2026-11-01"] { #expect(DaySummary.week(of: d)! == ("2026-10-26", "2026-11-01")) }
         #expect(DaySummary.month("2026-02")! == ("2026-02-01", "2026-02-28") && DaySummary.month("2026-12")! == ("2026-12-01", "2026-12-31"))

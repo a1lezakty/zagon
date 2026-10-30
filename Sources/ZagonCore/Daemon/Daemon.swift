@@ -295,7 +295,7 @@ extension Daemon {
             s.log = log
             while true {
                 s.config.summaryAt = NotifyConfig.load(paths).summaryAt
-                do { if try s.autoTick() { log("summary: written") } } catch { log("summary: error: \(error)") }
+                do { if try s.autoTick() { log("summary: written") } } catch { log("summary: not written today: \(error)") }
                 store.db.releaseMemory(); z_release_memory()
                 sleep(60)
             }

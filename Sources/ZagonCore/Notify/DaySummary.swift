@@ -185,13 +185,11 @@ public struct DaySummary {
             else { groups.append(Group(project: p, key: k, sessions: [s])) }
         }
         var extra: [Group] = []
-        let linker = try? TaskLinker()
         for c in f.commits {
             // A commit goes to the card of the task it names, else to the project's first card.
             for subject in c.subjects {
                 let mine = groups.indices.filter { groups[$0].project == c.repo }
-                let named = Set((linker?.keys(in: subject) ?? []).map { $0.uppercased() })
-                if let i = mine.first(where: { groups[$0].key.map { named.contains($0.uppercased()) } ?? false }) ?? mine.first {
+                if let i = mine.first(where: { groups[$0].key.map { DaySummary.mentions(subject, $0) } ?? false }) ?? mine.first {
                     groups[i].commits.append(subject)
                 } else if let i = extra.firstIndex(where: { $0.project == c.repo }) { extra[i].commits.append(subject) }
                 else { extra.append(Group(project: c.repo, commits: [subject])) }
@@ -221,6 +219,17 @@ public struct DaySummary {
             : w.t("Проекты: \(Set(items.map(\.project)).count), сессии: \(f.sessions.count), коммиты: \(commits).",
                   "Projects: \(Set(items.map(\.project)).count), sessions: \(f.sessions.count), commits: \(commits).")
         return SummaryDoc(lang: w.en ? "en" : "ru", from: f.day, to: f.day, overview: overview, items: items)
+    }
+
+    /// `key` in `text` as a word of its own, any case (`PROJ-1` is not in `PROJ-12`), whatever the key pattern.
+    static func mentions(_ text: String, _ key: String) -> Bool {
+        let t = Array(text.uppercased()), k = Array(key.uppercased())
+        guard !k.isEmpty, t.count >= k.count else { return false }
+        func word(_ c: Character) -> Bool { c.isLetter || c.isNumber }
+        for i in 0...(t.count - k.count) where Array(t[i..<(i + k.count)]) == k {
+            if (i == 0 || !word(t[i - 1]) || !word(k[0])) && (i + k.count == t.count || !word(t[i + k.count])) { return true }
+        }
+        return false
     }
 
     /// Who waited for you longest.

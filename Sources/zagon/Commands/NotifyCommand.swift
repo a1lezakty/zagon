@@ -172,7 +172,7 @@ struct SummaryCommand: ParsableCommand {
             print("\(a) to \(b): \(worked.count) days with sessions, \(missing.count) without a summary; \(calls) AI calls to write it")
             return
         }
-        if !refresh, let k = try summary.kept(key) { return try show(key, k) }
+        if !refresh, let k = try summary.kept(key), !(calls > 0 && k.engine == "none") { return try show(key, k) }
         if !missing.isEmpty && calls > 0 && !yes {
             warn("\(missing.count) days have no summary yet: \(calls) AI calls in all. Run again with --yes, or see them with --plan.")
             throw ExitCode(3)
