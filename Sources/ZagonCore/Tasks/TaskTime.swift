@@ -187,16 +187,13 @@ public enum TaskTime {
         return o
     }
 
-    /// Sum of the increases of a limit's used percent inside [from, to) (drops at a reset are not subtracted).
+    /// Growth of a limit's usage inside [from, to) (`LimitUsage`: an older reading re-sent is no drop and rise again).
+    /// After a reset the new period counts from 0.
     static func limitGrowth(_ db: SQLite, tool: String, window: String, from: Timestamp, to: Timestamp) throws -> Double {
-        var prev = try db.one("SELECT used_pct FROM limit_snapshot WHERE tool=? AND window=? AND ts < ? ORDER BY ts DESC LIMIT 1",
-                              [.text(tool), .text(window), .real(from)]) { $0.real(0) }
-        var sum = 0.0
-        try db.query("SELECT used_pct FROM limit_snapshot WHERE tool=? AND window=? AND ts >= ? AND ts < ? ORDER BY ts",
-                     [.text(tool), .text(window), .real(from), .real(to)]) { r in
-            let v = r.real(0)
-            if let p = prev, v > p { sum += v - p }
-            prev = v
+        var u = try LimitUsage(db, tool: tool, window: window, before: from), sum = 0.0
+        try u.read(db, from: from, to: to) { _, before, now, new in
+            let p = now.pct ?? 0
+            sum += new ? p : max(0, p - (before ?? p))
         }
         return sum
     }

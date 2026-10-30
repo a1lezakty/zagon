@@ -95,6 +95,48 @@ extension Store {
     }
 }
 
+/// One limit's usage as its readings come in, oldest first. Usage only grows within a window period (`resets_at` within
+/// 2 minutes), so a lower reading is an older one re-sent and the period's highest so far stands (see
+/// `Store.latestLimits`); a reading of a period before the current one is a late report and is skipped. Readings without
+/// `resets_at` are taken as they come.
+struct LimitUsage {
+    let tool: String, window: String
+    /// The usage now and its period's reset; nil before any reading.
+    private(set) var pct: Double?, resets: Timestamp?
+
+    /// The usage just before `t`: the highest reading of the newest period seen before it.
+    init(_ db: SQLite, tool: String, window: String, before t: Timestamp) throws {
+        self.tool = tool; self.window = window
+        if let (p, r) = try db.one("""
+            SELECT max(used_pct), resets_at FROM limit_snapshot WHERE tool = ?1 AND window = ?2 AND ts < ?3
+              AND coalesce(resets_at, ts) >= (SELECT max(coalesce(resets_at, ts)) FROM limit_snapshot
+                                              WHERE tool = ?1 AND window = ?2 AND ts < ?3) - 120
+            """, [.text(tool), .text(window), .real(t)], { ($0.optReal(0), $0.optReal(1)) }), let p {
+            pct = p; resets = r
+        }
+    }
+
+    /// Folds one reading in: nil = skipped, true = it opened a new period after a known one.
+    mutating func add(_ v: Double, resets r: Timestamp?) -> Bool? {
+        guard let p = pct, let r, let cur = resets else { pct = v; resets = r; return false }
+        if r < cur - 120 { return nil }
+        if r > cur + 120 { pct = v; resets = r; return true }
+        pct = max(p, v)
+        return false
+    }
+
+    /// Folds in the readings of [from, to), oldest first; `each(ts, usage before, after, new period)` for each one taken.
+    mutating func read(_ db: SQLite, from: Timestamp, to: Timestamp,
+                       _ each: (Timestamp, Double?, LimitUsage, Bool) -> Void) throws {
+        try db.query("""
+            SELECT ts, used_pct, resets_at FROM limit_snapshot WHERE tool = ? AND window = ? AND ts >= ? AND ts < ? ORDER BY ts
+            """, [.text(tool), .text(window), .real(from), .real(to)]) { r in
+            let before = pct
+            if let new = add(r.real(1), resets: r.optReal(2)) { each(r.real(0), before, self, new) }
+        }
+    }
+}
+
 // MARK: - live sessions
 
 public enum LiveState: String, Sendable, Equatable {
