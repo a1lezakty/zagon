@@ -3,6 +3,7 @@ import SwiftUI
 import ZagonUIModel
 
 /// The app menu: Settings… ⌘, and the screens ⌘1…⌘7 (back and forth in a day, week or month: ⌘[ ⌘] in `Header`).
+@MainActor
 struct ZagonCommands: Commands {
     let app: AppState
 

@@ -149,7 +149,7 @@ public struct MainVM: Sendable {
                   Stat(f.cost(today.cost), f.t("stat.apiPrices"))]
 
         let windows = [limits.fiveHour, limits.week].compactMap { $0 }
-        let tools = windows.compactMap(\.tool).reduce(into: [Tool]()) { if !$0.contains($1) { $0.append($1) } }
+        let tools = [Tool.claude, .codex].filter { t in windows.contains { $0.tool == t } }
         limitsHeader = (tools.isEmpty ? f.t("limit.header.none")
             : f.t("limit.header", tools.map { $0 == .codex ? "Codex" : "Claude" }.joined(separator: " · "))).uppercased()
         let age = windows.compactMap(\.readAt).max().map { f.now.timeIntervalSince($0) }
