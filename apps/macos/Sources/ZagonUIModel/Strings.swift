@@ -15,7 +15,7 @@ enum Strings {
 
         "limit.five": "5 hours", "limit.week": "Week",
         "limit.resets": "resets {0}", "limit.in": "in {0}", "limit.wasReset": "reset {0}",
-        "pace.ahead": "{0} ahead of even pace", "pace.behind": "{0} behind even pace", "pace.even": "on even pace",
+        "pace.ahead": "{0} ahead of schedule", "pace.behind": "{0} behind schedule", "pace.even": "on schedule",
         "limit.left": "left",
         "settings.view": "Menu bar", "settings.view.limits": "Limits", "settings.view.rings": "Rings",
         "settings.view.pace": "Pace", "settings.view.weekdays": "Count only weekdays for the week's pace",
@@ -176,7 +176,7 @@ enum Strings {
 
         "limit.five": "5 часов", "limit.week": "Неделя",
         "limit.resets": "сброс {0}", "limit.in": "через {0}", "limit.wasReset": "сброшен {0}",
-        "pace.ahead": "на {0} быстрее ровного темпа", "pace.behind": "на {0} медленнее ровного темпа", "pace.even": "ровный темп",
+        "pace.ahead": "на {0} впереди графика", "pace.behind": "на {0} позади графика", "pace.even": "по графику",
         "limit.left": "осталось",
         "settings.view": "Строка меню", "settings.view.limits": "Лимиты", "settings.view.rings": "Кольца",
         "settings.view.pace": "Темп", "settings.view.weekdays": "Темп недели — считать только будни",
