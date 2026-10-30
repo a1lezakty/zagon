@@ -1,4 +1,5 @@
 import Foundation
+import ZagonCore
 
 // One value type per screen: everything a view shows, already formatted and laid out (fractions 0…1).
 // Views stay dumb; these are tested on Linux.
@@ -175,12 +176,6 @@ public struct UsageRowVM: Sendable, Equatable {
     public var color: UInt32
 }
 
-public struct DoneVM: Sendable, Equatable {
-    public var project: String
-    public var text: String
-    public var color: UInt32
-}
-
 public struct DayVM: Sendable {
     public var title: String
     public var stats: [Stat]
@@ -189,6 +184,9 @@ public struct DayVM: Sendable {
     public var longestWait: String?
     public var summaryNote: String?
     public var isEmpty: Bool
+    /// "What was done": the written summary as cards, or without one the day's projects from this Mac's data.
+    public var summary: SummaryVM?
+    public var projects: [DoneProjectVM]
     let data: DayData
     let f: Fmt
 
@@ -216,10 +214,12 @@ public struct DayVM: Sendable {
             longestWait = f.t("day.longestWait", w.0, f.duration(w.1.end.timeIntervalSince(w.1.start)), f.time(w.1.start),
                               f.time(w.1.end))
         }
-        summaryNote = d.summaryInfo.map { s in
-            s.weekPct.map { f.t("day.summaryNote", s.engine, f.time(s.at), f.decimal($0, digits: 1)) }
-                ?? f.t("day.summaryNote.short", s.engine, f.time(s.at))
-        }
+        let doc = d.doc
+        summary = d.summaryInfo.flatMap { s in doc.map { SummaryVM(KeptSummary(doc: $0, engine: s.engine, at: s.at), period: false, f) } }
+        summaryNote = d.summaryInfo.flatMap { s in
+            s.weekPct.map { f.t("day.summaryNote", SummaryVM.engineName(s.engine), f.time(s.at), f.decimal($0, digits: 1)) }
+        } ?? summary?.note
+        projects = d.projects.enumerated().map { DoneProjectVM($1, index: $0, f) }
         isEmpty = d.lanes.isEmpty && d.totals.sessionSec == 0 && d.totals.tokens == 0
     }
 
@@ -245,22 +245,18 @@ public struct DayVM: Sendable {
         n.isEmpty ? f.t(dim == .agent ? "usage.mainThread" : "other") : n
     }
 
-    /// No summary written (yet): session titles stand in.
-    public var hasSummary: Bool { !data.summary.isEmpty }
-
-    public func done(titles: Bool) -> [DoneVM] {
-        (titles || !hasSummary ? data.titles : data.summary).enumerated().map {
-            DoneVM(project: $1.project, text: $1.text, color: Palette.series($0))
-        }
-    }
+    public var hasSummary: Bool { summary != nil }
 
     /// The day as Markdown, for worklogs and notes.
     public var markdown: String {
         var out = "# \(title)\n\n" + stats.map { "- \($0.label): \($0.value)" }.joined(separator: "\n") + "\n"
         for n in limitNotes { out += "- \(n.text)\n" }
-        let done = data.summary.isEmpty ? data.titles : data.summary
-        if !done.isEmpty {
-            out += "\n## \(f.t("day.done"))\n\n" + done.map { "- **\($0.project)** — \($0.text)" }.joined(separator: "\n") + "\n"
+        if let s = summary {
+            out += "\n## \(f.t("day.done"))\n\n" + s.markdown + "\n"
+        } else if !projects.isEmpty {
+            out += "\n## \(f.t("day.done"))\n\n" + projects.map { p in
+                "### \(p.name) — \(p.numbers)\n\n" + p.sessions.map { "- " + $0 }.joined(separator: "\n")
+            }.joined(separator: "\n\n") + "\n"
         }
         return out
     }
@@ -455,7 +451,8 @@ public struct CalendarVM: Sendable {
         DayCardVM(title: f.dayTitle(d.day),
                   stats: [Stat(f.duration(d.totals.sessionSec), f.t("cal.work")), Stat(f.tokens(d.totals.tokens), f.t("stat.tokens")),
                           Stat(f.cost(d.totals.cost), f.t("cal.byApi"))],
-                  bullets: (d.summary.isEmpty ? d.titles : d.summary).prefix(3).map { "\($0.project): \($0.text)" })
+                  bullets: d.doc.map { $0.items.prefix(3).map { ($0.project.isEmpty ? "" : $0.project + ": ") + $0.heading } }
+                      ?? d.projects.prefix(3).map { f.t.nonEmpty($0.name, "other") + ": " + $0.sessions.prefix(2).map(\.title).joined(separator: "; ") })
     }
 
     public static func hits(_ hits: [SearchHit], _ f: Fmt) -> [SearchHitVM] {

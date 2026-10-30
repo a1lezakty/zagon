@@ -9,6 +9,9 @@ struct CalendarScreen: View {
     @State private var query: String?
     /// Hits of the last search that finished (searched off the main thread, 250 ms after the typing stops).
     @State private var found: [SearchHit] = []
+    /// A range chosen for its summary (keys); nil = the shown month's.
+    @State private var range: [String]?
+    @State private var picking = false
     @Environment(\.isSnapshot) private var snapshot
 
     var body: some View {
@@ -32,10 +35,27 @@ struct CalendarScreen: View {
                 grid(vm)
                 dayCard(CalendarVM.card(app.provider.day(sel), f), sel).frame(width: 320)
             }
+            summary(at)
             ZoneApprox(at: sel)
             search
         }
-        .onChange(of: app.zoneShown) { _ in anchor = nil; selected = nil }
+        .onChange(of: app.zoneShown) { _ in anchor = nil; selected = nil; range = nil }
+        .sheet(isPresented: $picking) {
+            RangeSheet(shown: $picking) { a, b in range = [StoreDataProvider.day(a, app.zone), StoreDataProvider.day(b, app.zone)] }
+                .environmentObject(app)
+        }
+    }
+
+    /// The month's summary, or the chosen range's.
+    func summary(_ at: Date) -> some View {
+        let f = app.f, z = app.zone, first = f.startOfMonth(at)
+        let r = range ?? [StoreDataProvider.day(first, z), StoreDataProvider.day(f.addDays(-1, to: f.addMonths(1, to: first)), z)]
+        let title = range == nil ? f.t("sum.month")
+            : f.t("sum.range", f.dayRange(StoreDataProvider.start(r[0], z), StoreDataProvider.start(r[1], z)))
+        return PeriodSummaryCard(title: title, from: r[0], to: r[1]) {
+            if range != nil { PillButton(title: f.t("sum.back"), height: 30, radius: 8, fontSize: 12) { range = nil } }
+            PillButton(title: f.t("sum.period"), height: 30, radius: 8, fontSize: 12) { picking = true }
+        }
     }
 
     func grid(_ vm: CalendarVM) -> some View {

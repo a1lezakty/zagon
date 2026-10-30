@@ -5,11 +5,10 @@ import ZagonUIModel
 struct DayScreen: View {
     @EnvironmentObject private var app: AppState
     @State private var dim: UsageDimension = .project
-    @State private var titles = false
 
     var body: some View {
         let f = app.f
-        let vm = DayVM(app.provider.day(app.day), f)
+        let vm = DayVM(dayData, f)
         Page {
             Header(vm.title, prev: { app.day = f.addDays(-1, to: app.day) }, next: { app.day = f.addDays(1, to: app.day) }) {
                 PillButton(title: f.t("today"), height: 32, radius: 8) { app.day = f.startOfDay(f.now) }
@@ -59,25 +58,45 @@ struct DayScreen: View {
         }
     }
 
+    /// The day as the store has it, with the summary the CLI just answered when the pull has not brought it yet.
+    var dayData: DayData {
+        var d = app.provider.day(app.day)
+        if let r = app.summaryJob(dayKey).result, r.at > d.summaryInfo?.at ?? .distantPast {
+            d.doc = r.doc
+            d.summaryInfo = SummaryInfo(engine: r.engine, at: r.at, weekPct: nil)
+        }
+        return d
+    }
+
+    var dayKey: String { StoreDataProvider.day(app.day, app.zone) }
+
     func done(_ vm: DayVM) -> some View {
         let f = app.f
-        let items = vm.done(titles: titles)
         return Card(spacing: 12, stretch: true) {
-            HStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
                 H2(text: f.t("day.done"))
                 Spacer(minLength: 0)
-                // Without a summary there is only the titles' list: nothing to switch.
-                if vm.hasSummary {
-                    Segmented(items: [f.t("day.summary"), f.t("day.titles")], selected: titles ? 1 : 0) { titles = $0 == 1 }
-                }
+                SummaryButton(from: dayKey, to: dayKey, has: vm.hasSummary)
             }
-            ForEach(items.indices, id: \.self) { i in
-                HStack(alignment: .top, spacing: 10) {
-                    Dot(color: Color(hex: items[i].color)).padding(.top, 6)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(items[i].project).font(.system(size: 13, weight: .semibold)).foregroundColor(Z.text)
-                        Text(items[i].text).font(.system(size: 13)).foregroundColor(Z.body).lineSpacing(3)
-                            .fixedSize(horizontal: false, vertical: true)
+            if let s = vm.summary {
+                SummaryCards(vm: s, note: false).id(dayKey)
+            } else {
+                Text(f.t("sum.fallback")).font(.system(size: 12)).foregroundColor(Z.muted)
+                ForEach(vm.projects.indices, id: \.self) { i in
+                    let p = vm.projects[i]
+                    HStack(alignment: .top, spacing: 10) {
+                        Dot(color: Color(hex: p.color)).padding(.top, 6)
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(p.name).font(.system(size: 13, weight: .semibold)).foregroundColor(Z.text)
+                                Spacer(minLength: 0)
+                                Text(p.numbers).font(mono(12)).foregroundColor(Z.secondary)
+                            }
+                            ForEach(p.sessions.indices, id: \.self) { j in
+                                Text(p.sessions[j]).font(.system(size: 13)).foregroundColor(Z.body).lineSpacing(2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                     }
                 }
             }

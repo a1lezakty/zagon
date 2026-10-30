@@ -34,6 +34,9 @@ struct WeekScreen: View {
                 projects(vm)
             }
             .fixedSize(horizontal: false, vertical: true)
+            let monday = f.startOfWeek(at)
+            PeriodSummaryCard(title: f.t("sum.week"), from: StoreDataProvider.day(monday, app.zone),
+                              to: StoreDataProvider.day(f.addDays(6, to: monday), app.zone))
         }
         // A date kept from the old zone may fall into the next or the previous week.
         .onChange(of: app.zoneShown) { _ in anchor = nil }

@@ -371,26 +371,72 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 Lane(title: Self.title(l.title, l.project, l.id), host: shown(l.host),
                      intervals: l.intervals.map { Interval(Self.date($0.start), Self.date($0.end), waiting: $0.waiting) })
             }
-            let titles = d.lanes.map { DoneItem($0.project ?? "", $0.title ?? "") }
+            let kept = try kept(key)
             return DayData(
                 day: start, totals: Totals(sessionSec: d.sessionSec, userSec: d.userSec, tokens: d.tokens.total, cost: d.cost),
                 limitHits: d.limitHits.map { Interval(Self.date($0.start), Self.date($0.end)) },
                 weekPctStart: d.weekPctStart, weekPctEnd: d.weekPctEnd, lanes: lanes,
                 usage: [.project: rows(d.byProject), .model: rows(d.byModel, name: Self.modelName), .agent: rows(d.byAgent),
                         .tool: d.byTool.map { UsageRow($0.name, tokens: $0.count, cost: 0) }, .host: rows(d.byHost) { shown($0.isEmpty ? nil : $0) }],
-                summary: d.summary.map { Self.doneItems($0.text) } ?? [], titles: titles,
-                summaryInfo: d.summary.map { SummaryInfo(engine: $0.engine, at: Self.date($0.created), weekPct: nil) })
+                doc: kept?.doc, projects: Self.projects(d, branches: try branches(d.lanes.map(\.id))),
+                summaryInfo: kept.map { SummaryInfo(engine: $0.engine, at: $0.at, weekPct: nil) })
         }
     }
 
-    /// Summary text: one line per item, "project: what was done" (a leading "- " is dropped).
-    static func doneItems(_ text: String) -> [DoneItem] {
-        text.split(separator: "\n").compactMap { raw in
-            var line = raw.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("- ") { line.removeFirst(2) }
-            guard !line.isEmpty else { return nil }
-            guard let r = line.range(of: ": ") else { return DoneItem("", line) }
-            return DoneItem(String(line[..<r.lowerBound]), String(line[r.upperBound...]))
+    /// The day by project without a written summary: its sessions with their working time and branch, most time first;
+    /// the price is the project's (tokens count for the directory they were spent in).
+    static func projects(_ d: DayDetail, branches: [String: String]) -> [DoneProject] {
+        var out: [String: DoneProject] = [:]
+        for l in d.lanes {
+            let sec = l.intervals.filter { !$0.waiting }.reduce(0) { $0 + $1.end - $1.start }
+            let p = l.project ?? ""
+            out[p, default: DoneProject(p, sec: 0, cost: 0, sessions: [])].sec += sec
+            out[p]?.sessions.append(DoneSession(l.title ?? String(l.id.split(separator: ":").last?.prefix(8) ?? ""),
+                                                branch: branches[l.id], sec: sec))
+        }
+        for u in d.byProject { out[u.name]?.cost = u.cost }
+        return out.values.map { p in
+            var p = p
+            p.sessions.sort { ($0.sec, $1.title) > ($1.sec, $0.title) }
+            return p
+        }.sorted { ($0.name.isEmpty ? 1 : 0, -$0.sec, $0.name) < ($1.name.isEmpty ? 1 : 0, -$1.sec, $1.name) }
+    }
+
+    /// `session.git_branch` of these sessions (none for a detached HEAD or outside git).
+    func branches(_ ids: [String]) throws -> [String: String] {
+        var out: [String: String] = [:]
+        guard !ids.isEmpty else { return out }
+        // ponytail: one bound value per session of the day; chunks if a day ever nears SQLite's 32766 variables.
+        try query.db.query("SELECT id, git_branch FROM session WHERE id IN (\(ids.map { _ in "?" }.joined(separator: ",")))",
+                           ids.map { .text($0) }) { r in
+            if let id = r.text(0), let b = r.text(1), !b.isEmpty, b != "HEAD" { out[id] = b }
+        }
+        return out
+    }
+
+    // MARK: summaries
+
+    /// The kept summary of a day or a period: one written by an AI over one made without, the newest of each.
+    public func summary(_ key: String) -> KeptSummary? { read(nil) { try kept(key) } }
+
+    /// Free text from before counts as none (read queue).
+    func kept(_ key: String) throws -> KeptSummary? {
+        var out: KeptSummary?
+        try query.db.query("SELECT engine, text, created FROM summary WHERE day = ? ORDER BY engine = 'none', created DESC",
+                           [.text(key)]) { r in
+            if out == nil, let d = SummaryDoc.decode(r.text(1) ?? "") { out = KeptSummary(doc: d, engine: r.text(0) ?? "", at: Self.date(r.real(2))) }
+        }
+        return out
+    }
+
+    /// Keeps a summary a CLI just answered, so it shows before the next pull brings it (the pull replaces it then).
+    public func keep(_ s: KeptSummary) {
+        guard let writer else { return }
+        writeQueue.sync {
+            do {
+                try writer.db.run("INSERT OR REPLACE INTO summary(day, engine, text, created) VALUES(?, ?, ?, ?)",
+                                  [.text(s.doc.key), .text(s.engine), .text(s.doc.json), .real(s.at.timeIntervalSince1970)])
+            } catch { Log.shared.write("summary not kept: " + Remote.brief(error)) }
         }
     }
 
