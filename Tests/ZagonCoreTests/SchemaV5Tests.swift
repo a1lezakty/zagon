@@ -126,8 +126,9 @@ func channelText(_ s: String) -> String {
         let out = parse([assistantLine(T0, id: "m1", tools: [("toolu_1", "Bash")], command: "tmux send-keys -t w 'x' Enter"),
                          assistantLine(T0 + 1, id: "m2", tools: [("toolu_2", "Bash")], command: "tmux capture-pane -p -t w"),
                          assistantLine(T0 + 2, id: "m3", tools: [("toolu_3", "Grep")], command: "send-keys"),
-                         assistantLine(T0 + 3, id: "m4", tools: [("toolu_4", "Bash")], command: "grep -rn send-keys .")])
-        #expect(out.relays == [Relay(sessionId: "claude:S", ts: T0, targets: ["w"])])
+                         assistantLine(T0 + 3, id: "m4", tools: [("toolu_4", "Bash")], command: "grep -rn send-keys ."),
+                         assistantLine(T0 + 4, id: "m5", tools: [("toolu_5", "Bash")], command: "tmux send -t w2 x Enter")])
+        #expect(out.relays == [Relay(sessionId: "claude:S", ts: T0, targets: ["w"]), Relay(sessionId: "claude:S", ts: T0 + 4, targets: ["w2"])])
     }
 
     func userMsgs(_ env: ClaudeEnv, _ s: String) -> Int { env.int("SELECT user_msgs FROM session WHERE id = ?", [.text("claude:" + s)]) }
@@ -170,14 +171,14 @@ func channelText(_ s: String) -> String {
         // Channel messages are always the human's, even right after a relay.
         env.write("-w-c/C.jsonl", lines: [userLine(T0 + 10 * minute + 3, content: channelText("hi"),
                                                    extra: #","isMeta":true,"origin":\#(channelOrigin),"turnOrigin":"peer""#)])
-        // An unnamed session: a relay aimed at a named session is not for it, one aimed at `$w` is.
+        // An unnamed session: a relay aimed at another session's name is not for it.
         env.write("-w-o/O.jsonl", lines: [#"{"type":"agent-name","agentName":"Other","sessionId":"O"}"#])
         env.write("-w-u/U.jsonl", lines: [typed(T0 + 3, session: "U"), typed(T0 + 10 * minute + 4, session: "U"),
                                           typed(T0 + 20 * minute + 3, session: "U")])
         env.scan()
         // W: aimed elsewhere: yours; `docs` names it (prefix of "docs site"); `$w` could be anyone: not yours.
-        // U: `other` names O, `docs` names W: yours; `$w`: not yours.
-        #expect(userMsgs(env, "W") == 1 && userMsgs(env, "C") == 1 && userMsgs(env, "U") == 2)
+        // U: `other` is O's name: yours; `docs` is no session's whole name, `$w` anyone's: not yours.
+        #expect(userMsgs(env, "W") == 1 && userMsgs(env, "C") == 1 && userMsgs(env, "U") == 1)
         // A relay of the session itself does not count (it typed into some other pane).
         let env2 = ClaudeEnv()
         env2.write(mainFile, lines: [assistantLine(T0, id: "a1", tools: [("toolu_1", "Bash")], command: "tmux send-keys -t x y"),
@@ -292,6 +293,20 @@ func channelText(_ s: String) -> String {
         try asBeforeV5(env)
         try FileManager.default.removeItem(atPath: env.path(mainFile))
         #expect(env.scan().recountsKept == 1 && perSession() == "claude:0=5,claude:S=7")
+    }
+
+    @Test func aRequestMovedToTheNextHourDoesNotBlockTheRecount() throws {
+        // Tailed in two passes the first hour's row went away; read in one batch it nets to an all-zero row.
+        let env = ClaudeEnv()
+        let h = Double(Time.hour(T0) + 3600)
+        env.write(mainFile, lines: [typed(h - 30), assistantLine(h - 1, id: "m1", output: 1)])
+        env.scan()
+        env.append(mainFile, assistantLine(h + 1, id: "m1", output: 9, cacheWrite: 5, cacheWrite1h: 5) + "\n")
+        env.scan()
+        #expect(env.int("SELECT count(*) FROM usage_hour") == 1)
+        try asBeforeV5(env)
+        #expect(env.scan().recountsKept == 0)
+        #expect(env.int("SELECT sum(output) FROM usage_hour") == 9 && env.int("SELECT sum(cache_write_1h) FROM usage_hour") == 5)
     }
 
     @Test func exportKeepsTheOldUsageShapeAndAddsTheSplit() throws {

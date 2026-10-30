@@ -232,8 +232,8 @@ public struct ClaudeParser: LineParser {
         text.utf8.count > textLimit ? String(decoding: text.utf8.prefix(textLimit), as: UTF8.self) : text
     }
 
-    /// A shell command that types into a terminal pane.
-    static func typesKeys(_ cmd: String) -> Bool { cmd.contains("send-keys") || cmd.contains("paste-buffer") }
+    /// A shell command that may type into a terminal pane (`relayTargets` decides).
+    static func typesKeys(_ cmd: String) -> Bool { cmd.contains("tmux") }
 
     /// Targets of every `tmux send-keys` / `send` / `paste-buffer` call in a shell command (tmux's own options, then the
     /// command, then its options up to the first argument, as tmux reads them): the session name of `-t name`,
@@ -412,7 +412,7 @@ public struct ClaudeParser: LineParser {
                     ok = ok && c.object { c, k in
                         guard keyIs(k, "command"), let raw = c.rawString() else { return false }
                         // Decoded only for the rare command that types into a terminal.
-                        if contains(raw, "send-keys") || contains(raw, "paste-buffer") {
+                        if contains(raw, "tmux") {
                             guard let s = ByteScanner.unescape(raw, limit: .max) else { ok = false; return true }
                             b.command = s
                         }

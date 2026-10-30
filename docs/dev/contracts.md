@@ -116,7 +116,7 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   is busy is written when it is typed, not when it is handed over, so the same window holds). When W has a name (a
   Claude title of rank ≥ agent name: `claude --name`, `/rename`), only a relay whose target is that name counts
   (letters and digits, lower case; equal or one a prefix of the other, so `-t docs` matches `docs site`); without a
-  name (the default, and every Codex session), a relay counts unless its target names another session; a relay
+  name (the default, and every Codex session), a relay counts unless its target is another session's name; a relay
   without a plain target (`$s`, `%3`, none) counts for any session. The `read` before a relayed message goes with it;
   it still starts a turn (working time). A relay is a Bash tool call that runs `tmux send-keys` / `send` /
   `paste-buffer` (parsed as tmux reads its options: a command that only mentions them is not one). Limits:

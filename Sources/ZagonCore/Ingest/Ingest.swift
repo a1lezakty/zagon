@@ -199,7 +199,8 @@ public final class Ingest {
         try db.query("""
             SELECT session_id, agent, hour, model, sum(input), sum(output), sum(cache_read), sum(cache_write), sum(requests)
             FROM usage_hour WHERE file_id = ? GROUP BY 1, 2, 3, 4
-            """, [.int(file)]) { r in
+            HAVING sum(requests) <> 0 OR sum(input) <> 0 OR sum(output) <> 0 OR sum(cache_read) <> 0 OR sum(cache_write) <> 0
+            """, [.int(file)]) { r in  // an all-zero row (a request moved to the next hour within one batch) is nothing
             c.usage["\(r.text(0) ?? "") \(r.text(1) ?? "") \(r.int(2)) \(r.text(3) ?? "")"] = (4...8).map { r.int(Int32($0)) }
         }
         try db.query("SELECT session_id, hour, name, sum(n) FROM tool_use WHERE file_id = ? GROUP BY 1, 2, 3", [.int(file)]) { r in
@@ -276,12 +277,13 @@ public final class Ingest {
                 guard fd >= 0 else { return }
                 defer { close(fd) }
                 guard tailMatches(fd, f) else { return try done() }  // a copy of another version of the file
+                let kept = stats.recountsKept
                 try recount(&f, fd: fd, path: d.path, relative: rel, source: src)
+                if stats.recountsKept == kept { stats.fromArchive += 1 }
                 if f.offset < n {  // lines written after the last pass, before the original went
                     f.size = n
                     try read(fd: fd, file: &f, path: d.path, relative: rel, source: src)
                 }
-                stats.fromArchive += 1
                 try save(f)
             }
         }
