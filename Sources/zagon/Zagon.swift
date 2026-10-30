@@ -27,5 +27,6 @@ struct Zagon: ParsableCommand {
             TaskCommand.self,
             LogCommand.self,
             TzCommand.self,
+            UpdateCommand.self,
         ])
 }

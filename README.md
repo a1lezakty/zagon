@@ -10,7 +10,7 @@ There are two versions on one core:
   in SQLite, answers in the terminal, and answers Claude and Codex through MCP.
 - **macOS app**: a menu bar item and a window. It reads the same data locally and from your servers over SSH.
 
-The macOS app (in development, sample data): the menu bar, then the Day, Week and Calendar windows.
+The macOS app (sample data): the menu bar, then the Day, Week and Calendar windows.
 
 <p align="center"><img src="docs/images/main.png" width="320" alt="Menu bar: 5-hour and weekly limits with a forecast, sessions waiting for you, sessions working, today's totals"></p>
 
@@ -20,8 +20,9 @@ The macOS app (in development, sample data): the menu bar, then the Day, Week an
 
 ![Calendar: hours per day of the month, the selected day, search across sessions](docs/images/calendar.png)
 
-> **Status: early development, no releases yet.** The table below shows what already works in `main` and what
-> is still on its way. Commands in this README are the ones the current `main` build has.
+> **Status: early releases (0.x).** Binaries and the macOS app are on the
+> [Releases](https://github.com/a1lezakty/zagon/releases) page. Commands in this README are the ones the latest
+> release has.
 
 | Feature | State |
 |---|---|
@@ -34,15 +35,18 @@ The macOS app (in development, sample data): the menu bar, then the Day, Week an
 | Notifications (Telegram, ntfy) and a Telegram bot | works |
 | Daily "what was done" summary (`zagon summary`, sent in the evening) | works |
 | Compressed archive of transcripts, kept after Claude Code deletes them (`zagon archive`) | works |
-| Context handoff between sessions and tools | coming |
-| Task list, worklog plan, Jira | coming |
-| macOS app | not yet released |
-| Install script, release binaries, Homebrew | not yet |
+| Context handoff between sessions and tools (`zagon handoff`, MCP `handoff_*`) | works |
+| Task list, worklog plan, Jira (`zagon task`, `zagon log`, MCP `task_*`, `worklog_*`) | works |
+| macOS app: menu bar, Day / Week / Calendar / Tasks windows, servers over SSH, self-updating | works |
+| Release binaries, install script, `zagon update` | works |
+| Homebrew | not yet |
 
 ## Privacy
 
 - Everything stays local and there is no telemetry. The only network requests are the notifications you configure
-  (Telegram Bot API or ntfy, through `curl`).
+  (Telegram Bot API or ntfy, through `curl`), Jira if you connect it, and updates: `zagon update` goes to GitHub only
+  when you run it (the service never checks), and the macOS app checks its update feed on GitHub once a day (turn
+  that off in its settings).
 - It reads only local files: Claude Code transcripts (`~/.claude/projects`), Codex session files and its thread index
   (`~/.codex/sessions`, `~/.codex/archived_sessions`, `~/.codex/state_*.sqlite`), plus what its own hooks and status
   line wrapper record.
@@ -65,14 +69,16 @@ The macOS app (in development, sample data): the menu bar, then the Day, Week an
 
 ## Install on a Linux server
 
-There are no releases yet. Take the `zagon-linux-x86_64` or `zagon-linux-aarch64` binary from the latest successful
-`core` workflow run (Actions → artifacts), or [build from source](#build-from-source).
-
 ```sh
-install -m 755 zagon-linux-x86_64 ~/.local/bin/zagon
-zagon install --enable-service
+curl -fsSL https://raw.githubusercontent.com/a1lezakty/zagon/main/install.sh | sh -s -- --enable-service
 zagon doctor
 ```
+
+The script downloads the latest `zagon-linux-x86_64` or `zagon-linux-aarch64` from Releases, checks it against
+`SHA256SUMS`, puts it in `/usr/local/bin` (as root) or `~/.local/bin`, and runs `zagon install` with the arguments
+after `--`. Without `--enable-service` the service unit is written but not started. To do it by hand: download the
+binary for your CPU from [Releases](https://github.com/a1lezakty/zagon/releases), then
+`install -m 755 zagon-linux-x86_64 ~/.local/bin/zagon && zagon install --enable-service`.
 
 `zagon doctor` lists what is installed, shows the service log, and exits with 1 if something is missing. Then set up
 [notifications](#notifications) if you want them.
@@ -112,6 +118,18 @@ that is already in place. Unknown keys and the formatting of your JSON files are
   only Zagon's entries are removed.
 - The database in `~/.zagon` stays. Delete that directory yourself if you want it gone.
 
+### Update
+
+```sh
+zagon update --check    # is there a newer release?
+zagon update            # replace the binary and restart the service
+```
+
+`zagon update` downloads the latest release for your CPU, checks it against `SHA256SUMS`, and only then replaces
+its own binary (atomically, in the same directory). The old binary stays next to it as `zagon.prev`: move it back to
+roll back. Running services are restarted. If the binary is in `/usr/local/bin`, run `sudo zagon update`. On macOS
+the app updates itself, the `zagon` inside it included.
+
 ## Use
 
 ```sh
@@ -127,6 +145,10 @@ zagon notify test              # a test message to every configured channel
 zagon tz Asia/Almaty           # the zone days are cut in (no argument: show it; `system` = the machine's)
 zagon daemon --verbose         # what the service runs: follow files, keep totals current, notify, archive
 zagon export --since 0         # changed totals as NDJSON, read by the macOS app over SSH
+zagon handoff latest --to claude   # a summary of a session to continue it in a new one (claude|codex|gemini|cursor|clipboard|file)
+zagon task list                # your tasks with their time; task add|show|todo|note|done|status|link|import|suggest
+zagon log plan 2026-10-29      # what to log to Jira that day; log commit writes it (asks first)
+zagon update                   # the latest release (see Update above)
 ```
 
 - Every report takes `--json`.
@@ -148,12 +170,11 @@ codex mcp add zagon -- zagon mcp
 
 `zagon install` does the same.
 
-Tools that work now: `limits`, `sessions`, `day`, `week`, `range`, `search`, `export_day`. Answers are short and
-carry numbers; a long one, such as a day exported to Markdown, goes to a file in `~/.zagon/exports`.
+Tools: `limits`, `sessions`, `day`, `week`, `range`, `search`, `export_day`, `settings_timezone`. Answers are short
+and carry numbers; a long one, such as a day exported to Markdown, goes to a file in `~/.zagon/exports`.
 
-Coming: these are already listed, and until their packages land they answer "not available in this build":
 - handoff: `handoff_create`, `handoff_get`, `handoff_list`, and the prompt `/mcp__zagon__resume <id|latest>`;
-- tasks: `task_list`, `task_get`, `task_create`, `task_update`;
+- tasks: `task_list`, `task_get`, `task_create`, `task_update`, `task_suggestions`, `task_suggestions_answer`;
 - worklogs: `worklog_plan`, `worklog_commit` (needs `confirm: true` and is meant only for an explicit request).
 
 ## Notifications
@@ -203,18 +224,19 @@ timeout = 120               # seconds; on failure the summary is built without A
 
 Check with `zagon notify test`. The service reads the file when it starts, so restart it after a change.
 
-## macOS app (not yet released)
+## macOS app
 
-The app will ship as a DMG with an ad-hoc signature, because there is no paid Apple developer account. macOS
-blocks such an app on first launch:
+Download `Zagon.dmg` from [Releases](https://github.com/a1lezakty/zagon/releases/latest). The app has an ad-hoc
+signature, because there is no paid Apple developer account, so macOS blocks it on first launch:
 
 1. Open the DMG and drag Zagon to Applications.
 2. Open it once. macOS says it cannot verify the developer.
 3. Go to System Settings → Privacy & Security and click **Open Anyway** next to the Zagon message. On macOS 15 and
    later, right-click → Open no longer bypasses this.
 
-It needs macOS 13 or later. It will add servers from `~/.ssh/config`, and each server needs the server version
-installed.
+It needs macOS 13 or later. It offers servers from `~/.ssh/config`; each server needs the Linux version installed.
+After that the app updates itself: it checks for a new release once a day and asks before installing (the update is
+signed; turn the check off in its settings).
 
 ## Build from source
 
@@ -239,6 +261,8 @@ does the following on every push:
 - builds and tests;
 - builds static x86_64 and aarch64 binaries and fails if one is over 20 MB;
 - runs a smoke scan over the anonymized test fixtures.
+
+Releases come from a `v*` tag through `.github/workflows/release.yml`; see [docs/RELEASING.md](docs/RELEASING.md).
 
 Contracts between packages are in `docs/dev/contracts.md`.
 
