@@ -145,7 +145,7 @@ enum Strings {
         "tasks.noWork": "No tasks worked on in the last 7 days. Your other Jira issues are under “More in Jira”.",
         "draft.caps": "Suggested", "draft.title": "New task: {0} · {1}", "draft.create": "Create",
         "draft.createJira": "Create in Jira…", "draft.reject": "Not needed", "draft.jiraTitle": "Create a task in Jira",
-        "draft.project": "Project", "draft.type": "Type: Task", "draft.name": "Title", "draft.description": "Description",
+        "draft.project": "Project", "draft.type": "Type: {0}", "draft.name": "Title", "draft.description": "Description",
         "draft.links": "{0} of work gets linked to the new task.", "draft.creating": "Creating…",
 
         "worklog.title": "What to log — {0}", "worklog.yourTime": "your work time",
@@ -338,7 +338,7 @@ enum Strings {
         "tasks.noWork": "За 7 дней работы ни по одной задаче. Остальные задачи Jira — в «Ещё в Jira».",
         "draft.caps": "Предложено", "draft.title": "Новая задача: {0} · {1}", "draft.create": "Создать",
         "draft.createJira": "Создать в Jira…", "draft.reject": "Не надо", "draft.jiraTitle": "Создать задачу в Jira",
-        "draft.project": "Проект", "draft.type": "Тип: Task", "draft.name": "Название", "draft.description": "Описание",
+        "draft.project": "Проект", "draft.type": "Тип: {0}", "draft.name": "Название", "draft.description": "Описание",
         "draft.links": "К новой задаче привяжется {0} работы.", "draft.creating": "Создаю…",
 
         "worklog.title": "Что логировать — {0}", "worklog.yourTime": "твоё рабочее время",

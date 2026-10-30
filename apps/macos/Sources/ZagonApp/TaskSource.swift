@@ -22,6 +22,12 @@ extension AppState {
 
     enum TaskLoad { case list, card(String), plan(String), drafts }
 
+    /// The issue type a new task gets in Jira project `project` of the current source (nil: not known).
+    func jiraType(_ project: String) async -> String? {
+        guard let s = currentTaskSource, let b = taskBackend?(s) else { return nil }
+        return await Task.detached { try? b.jiraType(project) }.value
+    }
+
     /// Loads what is not there yet (or again, with `force`).
     func loadTasks(_ what: TaskLoad, force: Bool = false) {
         guard let s = currentTaskSource else { return }

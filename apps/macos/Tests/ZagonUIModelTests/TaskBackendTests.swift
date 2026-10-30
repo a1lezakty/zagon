@@ -33,6 +33,7 @@ final class TaskBackendTests: XCTestCase {
             "task drafts") if [ -e "$HOME/old-drafts" ]; then echo "Error: Unexpected argument 'drafts'" >&2; exit 64; fi
                 cat "$HOME/drafts.json" ;;
             "task jira-projects") if [ -e "$HOME/no-jira" ]; then echo "Error: Jira is not connected ([jira] in config.toml)" >&2; exit 1; fi
+                case "$3" in --type-of=*) echo "Задача"; exit 0 ;; esac
                 echo '{"default":"PROJ","projects":[{"key":"OPS","name":"Operations"},{"key":"PROJ","name":"Project"}]}' ;;
             "task accept") case "$*" in
                 *--create-in-jira*) if [ -e "$HOME/jira-fails" ]; then echo "Error: Jira: HTTP 400 summary too long" >&2; exit 1; fi
@@ -206,6 +207,9 @@ final class TaskBackendTests: XCTestCase {
         XCTAssertEqual(jira, TaskBackend.JiraProjects(default: "PROJ", projects: [.init(key: "OPS", name: "Operations"),
                                                                                    .init(key: "PROJ", name: "Project")]))
         XCTAssertEqual(calls, ["task|drafts|--json|", "task|jira-projects|--json|"])
+        // The type by its name in that Jira.
+        XCTAssertEqual(try b.jiraType("PROJ"), "Задача")
+        XCTAssertEqual(calls.last, "task|jira-projects|--type-of=PROJ|")
         let utc = TimeZone(identifier: "UTC")!
         let card = TaskBackend.draft(try XCTUnwrap(drafts.first), Fmt(lang: .en, timeZone: utc, now: Date()))
         XCTAssertEqual([card.title, card.meta, card.name, card.worked],

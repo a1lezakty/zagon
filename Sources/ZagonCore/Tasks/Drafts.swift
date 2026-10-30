@@ -218,6 +218,12 @@ extension TaskSuggester {
         return (p.contains { $0.key == d } ? d : nil, p)
     }
 
+    /// The issue type a new task gets in Jira project `project`, by its name there (`Task`, maybe translated).
+    public func jiraTaskType(_ project: String) throws -> String {
+        guard let jira else { throw TaskError("Jira is not connected ([jira] in config.toml)") }
+        return try jira.taskType(project.uppercased()).name
+    }
+
     /// What `createInJira` would do; Jira is only read (its projects, the issue type).
     public func jiraPlan(_ id: String, project: String? = nil, title: String? = nil, description: String? = nil) throws -> JiraCreatePlan {
         guard let jira else { throw TaskError("Jira is not connected ([jira] in config.toml)") }

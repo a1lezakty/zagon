@@ -37,7 +37,7 @@ struct TasksScreen: View {
                 let id = x.draft.id
                 JiraCreateSheet(f: f, draft: x.draft, jira: x.jira, create: { project, title, text, done in
                     app.decideDraft(id, done: done) { try $0.createInJira(id, project: project, title: title, description: text) }
-                }, close: { jiraDraft = nil })
+                }, typeOf: { await app.jiraType($0) }, close: { jiraDraft = nil })
             }
         }
         .task(id: "\(String(describing: app.currentTaskSource))|\(detail?.key ?? "")") {
@@ -354,16 +354,20 @@ struct JiraCreateSheet: View {
     let jira: TaskBackend.JiraProjects
     /// Makes it; `done` gets the failure (nil: made).
     let create: (_ project: String, _ title: String, _ description: String, _ done: @escaping (String?) -> Void) -> Void
+    /// The issue type the task gets in a project (nil: not known).
+    let typeOf: (String) async -> String?
     let close: () -> Void
     @State private var project: String
     @State private var title: String
     @State private var text: String
     @State private var running = false
     @State private var error: String?
+    @State private var type: String?
 
     init(f: Fmt, draft: DraftVM, jira: TaskBackend.JiraProjects,
-         create: @escaping (String, String, String, @escaping (String?) -> Void) -> Void, close: @escaping () -> Void) {
-        self.f = f; self.draft = draft; self.jira = jira; self.create = create; self.close = close
+         create: @escaping (String, String, String, @escaping (String?) -> Void) -> Void,
+         typeOf: @escaping (String) async -> String?, close: @escaping () -> Void) {
+        self.f = f; self.draft = draft; self.jira = jira; self.create = create; self.typeOf = typeOf; self.close = close
         // No guess: without a last-used (or most-used) project the user picks one.
         _project = State(initialValue: jira.default.flatMap { d in jira.projects.contains { $0.key == d } ? d : nil } ?? "")
         _title = State(initialValue: draft.name)
@@ -378,7 +382,7 @@ struct JiraCreateSheet: View {
                 if project.isEmpty { Text("—").tag("") }
                 ForEach(jira.projects, id: \.key) { p in Text(p.key + " · " + p.name).tag(p.key) }
             }
-            Text(f.t("draft.type")).font(.system(size: 13)).foregroundColor(Z.secondary)
+            if !project.isEmpty { Text(f.t("draft.type", type ?? "…")).font(.system(size: 13)).foregroundColor(Z.secondary) }
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(f.t("draft.name")).foregroundColor(Z.secondary)
@@ -418,5 +422,12 @@ struct JiraCreateSheet: View {
         .padding(20).frame(width: 520)
         .background(Z.popover)
         .interactiveDismissDisabled(running)
+        // The type Jira gives a task differs by project (and its language).
+        .task(id: project) {
+            type = nil
+            guard !project.isEmpty else { return }
+            let t = await typeOf(project)
+            if !Task.isCancelled { type = t ?? "—" }
+        }
     }
 }

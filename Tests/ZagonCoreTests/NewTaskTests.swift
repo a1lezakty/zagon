@@ -169,6 +169,7 @@ struct NewTaskJiraTests {
         #expect(ps.map(\.key) == ["OPS", "PROJ"] && d == "PROJ")                  // most of your issues are there
         let plan = try x.s.jiraPlan("N1", title: "Retries for dialogs")
         #expect(plan.project == "PROJ" && plan.type == "Задача" && plan.title == "Retries for dialogs" && plan.description == "Was: lost.\nDone: retries.")
+        #expect(try x.s.jiraTaskType("proj") == "Задача")                        // what the app shows
         #expect(try x.s.jiraPlan("N1", description: "").description == "")      // cleared on purpose: stays empty
         #expect(try issues(m).count == 2)                                        // planning writes nothing
         #expect(try x.s.jiraPlan("N1", project: "nope").project == nil)

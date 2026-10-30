@@ -106,6 +106,8 @@ public struct TaskBackend: Sendable {
     }
     /// Fails when Jira is not connected there.
     public func jiraProjects() throws -> JiraProjects { try decode(["task", "jira-projects", "--json"]).0 }
+    /// The issue type a new task gets in Jira project `project` there (its name in that Jira).
+    public func jiraType(_ project: String) throws -> String { try answer(["task", "jira-projects", "--type-of=" + project]) }
     /// The suggestions, and the Jira projects to make them in when there are any (nil: Jira does not answer there).
     public func suggestions() throws -> (drafts: [NewTaskDraft], jira: JiraProjects?) {
         let d = try drafts()
