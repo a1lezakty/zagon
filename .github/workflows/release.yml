@@ -114,7 +114,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [version, linux, macos]
     runs-on: ubuntu-24.04
     permissions:
@@ -140,8 +140,7 @@ jobs:
           tag=$GITHUB_REF_NAME
           git fetch --force origin "refs/tags/$tag:refs/tags/$tag"  # the annotated tag object, not a lightweight copy
           if [ "$(git cat-file -t "$tag")" = tag ]; then
-            git tag -l --format='%(contents:body)' "$tag" > notes.md
-            [ -s notes.md ] || git tag -l --format='%(contents:subject)' "$tag" > notes.md
+            { git tag -l --format='%(contents:subject)' "$tag"; echo; git tag -l --format='%(contents:body)' "$tag"; } > notes.md
           else
             prev=$(git describe --tags --abbrev=0 --match 'v*' "$tag^" 2>/dev/null || true)
             git log --no-merges --format='- %s' ${prev:+"$prev.."}"$tag" > notes.md

@@ -37,13 +37,15 @@ struct UpdateCommand: ParsableCommand {
             throw InstallError("\(asset) is not listed in \(base)/SHA256SUMS")
         }
         if try Self.sha256(exe) == want { print("zagon \(zagonVersion) is up to date"); return }
-        if check { print("zagon \(zagonVersion): a newer release is available; run `zagon update`"); return }
+        if check { print("zagon \(zagonVersion): the release differs from this binary; `zagon update` installs it"); return }
 
         guard access(dir, W_OK) == 0, access(exe, W_OK) == 0 else {
             throw InstallError("cannot write \(exe): run sudo zagon update (or reinstall to ~/.local/bin)")
         }
         // Same directory as the binary, so the final rename is atomic.
-        let tmp = dir + "/.zagon-update-\(getpid())"
+        let tmp = dir + "/.zagon-update-\(getpid())", fd = Sys.createExclusive(tmp)
+        guard fd >= 0 else { throw InstallError("cannot create \(tmp)") }
+        close(fd)
         defer { _ = Sys.remove(tmp) }
         guard Sys.run([curl, "-fsSL", "--max-time", "600", "-o", tmp, base + "/" + asset]) == 0 else {
             throw InstallError("cannot download \(base)/\(asset)")
@@ -54,14 +56,17 @@ struct UpdateCommand: ParsableCommand {
         guard probe.status == 0 else { throw InstallError("the downloaded binary does not run here (exit \(probe.status)): nothing replaced") }
         let new = String(decoding: probe.out, as: UTF8.self).split(separator: "\n").first.map(String.init) ?? "?"
 
-        let prev = exe + ".prev"
-        _ = Sys.remove(prev)
-        guard link(exe, prev) == 0 || Sys.readFile(exe).map({ Sys.writeFile(prev, $0, mode: 0o755) }) == true else {
+        // The old binary becomes .prev only once its copy is complete: a failure here keeps the previous .prev.
+        let prev = exe + ".prev", prevTmp = prev + ".new"
+        _ = Sys.remove(prevTmp)
+        guard link(exe, prevTmp) == 0 || Sys.readFile(exe).map({ Sys.writeFile(prevTmp, $0, mode: 0o755) }) == true,
+              rename(prevTmp, prev) == 0 else {
+            _ = Sys.remove(prevTmp)
             throw InstallError("cannot keep the old binary as \(prev): nothing replaced")
         }
         guard rename(tmp, exe) == 0 else { throw InstallError("cannot replace \(exe) (errno \(errno))") }
         print("zagon \(zagonVersion) -> \(new) (\(exe); the old one is \(Sys.basename(prev)))")
-        Self.restartServices()
+        Self.restartServices(exe)
         #else
         print("On macOS Zagon.app updates itself (and the zagon inside it); check in its settings.")
         #endif
@@ -85,12 +90,12 @@ struct UpdateCommand: ParsableCommand {
         return String(h).lowercased()
     }
 
-    /// Restarts the zagon units that are running (try-restart leaves stopped ones alone): the system units
-    /// (`zagon-<user>.service`) as root, the user unit of this account, or of the sudo user via `--machine`.
-    static func restartServices() {
+    /// Restarts the running zagon units whose ExecStart is this binary (try-restart leaves stopped ones alone): the
+    /// system units (`zagon-<user>.service`) as root, the user unit of this account, or of the sudo user via `--machine`.
+    static func restartServices(_ exe: String) {
         guard let sc = Sys.which("systemctl") else { return }
         let sysDir = Installer.Options().systemUnitDir
-        for f in Sys.listDir(sysDir).sorted() where f.hasPrefix("zagon") && f.hasSuffix(".service") {
+        for f in Sys.listDir(sysDir).sorted() where f.hasPrefix("zagon") && f.hasSuffix(".service") && runs(sysDir + "/" + f, exe) {
             if geteuid() == 0 {
                 print(Sys.run([sc, "try-restart", f], quiet: true) == 0 ? "service: \(f) restarted" : "service: restarting \(f) failed")
             } else {
@@ -98,12 +103,21 @@ struct UpdateCommand: ParsableCommand {
             }
         }
         let account = try? Account.target(explicit: nil)
-        guard Sys.exists(Installer.Options(user: account).userUnitDir + "/zagon.service") else { return }
+        guard runs(Installer.Options(user: account).userUnitDir + "/zagon.service", exe) else { return }
         let machine = account.map { ["--machine=\($0.name)@"] } ?? []
         if Sys.run([sc, "--user"] + machine + ["try-restart", "zagon.service"], quiet: true) == 0 {
             print("service: zagon.service (systemd --user) restarted")
-        } else {
-            print("service: restart it as its user: systemctl --user restart zagon.service")
+        } else if let account {  // under sudo; for your own account a failure means no user manager, nothing to restart
+            print("service: as \(account.name): systemctl --user restart zagon.service")
         }
+    }
+
+    /// Whether `unit` starts `exe`: `ExecStart=<path> daemon` (path quoted if it has spaces), as `zagon install` writes it.
+    static func runs(_ unit: String, _ exe: String) -> Bool {
+        guard let text = Sys.readFile(unit).map({ String(decoding: $0, as: UTF8.self) }),
+              let line = text.split(separator: "\n").first(where: { $0.hasPrefix("ExecStart=") }) else { return false }
+        let cmd = line.dropFirst("ExecStart=".count)
+        let path = cmd.hasPrefix("\"") ? cmd.dropFirst().prefix { $0 != "\"" } : cmd.prefix { $0 != " " }
+        return Sys.realPath(String(path)) == exe
     }
 }
