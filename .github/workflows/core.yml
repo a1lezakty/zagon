@@ -16,6 +16,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Start with the zone the tests force in-process (QueryFixture sets TZ=UTC), as scripts/dev.sh does: otherwise
+  # Settings.startTZ may be read before that and /tz tests see a zone change that is not there.
+  TZ: UTC
   # same SDK as scripts/dev.sh
   SDK_URL: https://download.swift.org/swift-6.4.1-release/static-sdk/swift-6.4.1-RELEASE/swift-6.4.1-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz
   SDK_SUM: cef5592d7430ed3c5ae1ddda479849c6f5252bd94a5723db1559f984caf38a7c

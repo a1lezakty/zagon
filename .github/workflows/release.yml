@@ -1,0 +1,151 @@
+name: release
+
+# A tag v* builds everything and publishes a GitHub Release. Run by hand (workflow_dispatch) it only builds the
+# artifacts: nothing is published. How to cut a version: docs/RELEASING.md.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for a test build, e.g. 0.1.0 (artifacts only, no release)'
+        required: true
+        default: '0.0.0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # same SDK as core.yml and scripts/dev.sh
+  SDK_URL: https://download.swift.org/swift-6.4.1-release/static-sdk/swift-6.4.1-RELEASE/swift-6.4.1-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz
+  SDK_SUM: cef5592d7430ed3c5ae1ddda479849c6f5252bd94a5723db1559f984caf38a7c
+  SDKS: .build-sdks
+  MAX_STATIC_BYTES: 20000000
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        env:
+          INPUT: ${{ inputs.version }}
+        run: |
+          case $GITHUB_REF in refs/tags/v*) v=${GITHUB_REF_NAME#v} ;; *) v=$INPUT ;; esac
+          echo "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::version must be x.y.z, got '$v'"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  linux:
+    needs: version
+    runs-on: ubuntu-24.04
+    container: swift:6.4.1-bookworm
+    timeout-minutes: 40
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stamp the version
+        run: |
+          sed -i "s/^let zagonVersion = \"dev\"$/let zagonVersion = \"$VERSION\"/" Sources/zagon/Version.swift
+          grep -qF "\"$VERSION\"" Sources/zagon/Version.swift
+      - name: Static Linux SDK (cached)
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SDKS }}
+          key: static-linux-sdk-${{ env.SDK_SUM }}
+      - name: Install the SDK
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: swift sdk install "$SDK_URL" --checksum "$SDK_SUM" --swift-sdks-path "$SDKS"
+      - name: Build static (x86_64, aarch64)
+        run: |
+          mkdir -p dist
+          for arch in x86_64 aarch64; do
+            set -- -c release --swift-sdks-path "$SDKS" --swift-sdk "$arch-swift-linux-musl"
+            swift build "$@" -Xlinker -s --product zagon
+            cp "$(swift build "$@" --show-bin-path)/zagon" "dist/zagon-linux-$arch"
+          done
+      - name: Size guard and version
+        run: |
+          for f in dist/zagon-linux-*; do
+            size=$(stat -c %s "$f")
+            echo "$f: $size bytes (limit $MAX_STATIC_BYTES)"
+            [ "$size" -le "$MAX_STATIC_BYTES" ] || { echo "::error::$f is over the limit (Foundation imported?)"; exit 1; }
+          done
+          [ "$(dist/zagon-linux-x86_64 --version)" = "$VERSION" ] || { echo "::error::--version is not $VERSION"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/
+          if-no-files-found: error
+
+  macos:
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stamp the version
+        run: |
+          sed -i '' "s/^let zagonVersion = \"dev\"$/let zagonVersion = \"$VERSION\"/" Sources/zagon/Version.swift
+          grep -qF "\"$VERSION\"" Sources/zagon/Version.swift
+      # Contract with apps/macos: release-mac.sh <version> <build> leaves Zagon.dmg, Zagon.zip (the Sparkle update)
+      # and appcast.xml (signed with SPARKLE_ED_PRIVATE_KEY, enclosure
+      # https://github.com/<repo>/releases/download/v<version>/Zagon.zip) in apps/macos/build/.
+      - name: App, DMG, appcast
+        working-directory: apps/macos
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: scripts/release-mac.sh "$VERSION" "$GITHUB_RUN_NUMBER"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            apps/macos/build/Zagon.dmg
+            apps/macos/build/Zagon.zip
+            apps/macos/build/appcast.xml
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [version, linux, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: assets
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Release notes (tag annotation, else the commits since the previous tag)
+        run: |
+          tag=$GITHUB_REF_NAME
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"  # the annotated tag object, not a lightweight copy
+          if [ "$(git cat-file -t "$tag")" = tag ]; then
+            { git tag -l --format='%(contents:subject)' "$tag"; echo; git tag -l --format='%(contents:body)' "$tag"; } > notes.md
+          else
+            prev=$(git describe --tags --abbrev=0 --match 'v*' "$tag^" 2>/dev/null || true)
+            git log --no-merges --format='- %s' ${prev:+"$prev.."}"$tag" > notes.md
+          fi
+          cat notes.md
+      - name: Publish
+        run: |
+          gh release create "$GITHUB_REF_NAME" assets/* --title "Zagon $VERSION" --notes-file notes.md --verify-tag

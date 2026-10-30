@@ -5,6 +5,7 @@ import ArgumentParser
 struct Zagon: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Tracker of Claude Code and Codex CLI sessions.",
+        version: zagonVersion,
         subcommands: [
             ScanCommand.self,
             TodayCommand.self,
@@ -26,5 +27,6 @@ struct Zagon: ParsableCommand {
             TaskCommand.self,
             LogCommand.self,
             TzCommand.self,
+            UpdateCommand.self,
         ])
 }
