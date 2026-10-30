@@ -26,6 +26,7 @@ struct MenuBarLabel: View {
                     .font(Font(NSFont.menuBarFont(ofSize: 0) as CTFont).monospacedDigit())
             }
         }
+        .fixedSize()
     }
 
     func number(_ pct: Int?) -> Text {
@@ -53,8 +54,12 @@ struct MenuBarLabel: View {
 /// system appearance).
 @MainActor
 enum StatusButton {
+    private static weak var found: NSStatusBarButton?
+
     static var button: NSStatusBarButton? {
-        NSApp.windows.lazy.compactMap { $0.contentView.flatMap(find) }.first
+        if let found, found.window != nil { return found }
+        found = NSApp.windows.lazy.filter { $0.className.contains("StatusBar") }.compactMap { $0.contentView.flatMap(find) }.first
+        return found
     }
 
     private static func find(_ v: NSView) -> NSStatusBarButton? {
@@ -67,11 +72,12 @@ enum StatusButton {
         return name == .darkAqua || name == .vibrantDark
     }
 
-    private static var watching: NSKeyValueObservation?
+    private static var watching: (button: NSStatusBarButton, kvo: NSKeyValueObservation)?
 
-    /// Calls `changed` when the bar turns dark or light (wallpaper, appearance), once the button exists.
+    /// Calls `changed` when the bar turns dark or light (wallpaper, appearance), once the button exists; a new button
+    /// (MenuBarExtra made the item again) is watched instead.
     static func watch(_ changed: @escaping @MainActor () -> Void) {
-        guard watching == nil, let b = button else { return }
-        watching = b.observe(\.effectiveAppearance) { _, _ in Task { @MainActor in changed() } }
+        guard let b = button, watching?.button !== b else { return }
+        watching = (b, b.observe(\.effectiveAppearance) { _, _ in Task { @MainActor in changed() } })
     }
 }

@@ -15,7 +15,7 @@ for arch in arm64 x86_64; do
 done
 
 app=build/Zagon.app
-rm -rf "$app" build/Zagon.dmg build/dmg build/AppIcon.iconset
+rm -rf "$app" build/Zagon.dmg build/rw.dmg build/dmg build/AppIcon.iconset
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 lipo -create "${slices[@]}" -output "$app/Contents/MacOS/Zagon"
 lipo -info "$app/Contents/MacOS/Zagon"
@@ -78,11 +78,17 @@ codesign --verify --deep --strict --verbose=2 "$app"
 mkdir -p build/dmg
 cp -R "$app" build/dmg/
 ln -s /Applications build/dmg/Applications
-# The volume's icon too, where SetFile (Xcode tools) is around to flag the folder as having one.
-if setfile=$(xcrun --find SetFile 2>/dev/null); then
-  cp "$app/Contents/Resources/AppIcon.icns" build/dmg/.VolumeIcon.icns
-  "$setfile" -a C build/dmg
-fi
-hdiutil create -volname Zagon -srcfolder build/dmg -ov -format UDZO build/Zagon.dmg
+hdiutil create -volname Zagon -srcfolder build/dmg -ov -format UDRW build/rw.dmg
 rm -rf build/dmg
+# The volume's icon too, where SetFile (Xcode tools) is around: on the mounted image, as hdiutil does not carry a
+# folder's custom-icon flag over to the volume.
+if setfile=$(xcrun --find SetFile 2>/dev/null); then
+  mnt=$PWD/build/mnt-rw
+  hdiutil attach build/rw.dmg -nobrowse -noautoopen -mountpoint "$mnt" >/dev/null
+  cp "$app/Contents/Resources/AppIcon.icns" "$mnt/.VolumeIcon.icns"
+  "$setfile" -a C "$mnt"
+  hdiutil detach "$mnt" >/dev/null
+fi
+hdiutil convert build/rw.dmg -format UDZO -ov -o build/Zagon.dmg
+rm -f build/rw.dmg
 echo "built $app and build/Zagon.dmg ($version, $build)"

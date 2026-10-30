@@ -150,7 +150,7 @@ struct CalendarScreen: View {
                         .padding(.vertical, 6).padding(.horizontal, 8)
                         .background(RoundedRectangle(cornerRadius: 6).fill(Z.popover))
                         .textSelection(.enabled)
-                    PillButton(title: f.t("copy"), height: 30, radius: 8, fontSize: 12) { copyToPasteboard(h.command) }
+                    CopyButton(title: f.t("copy"), height: 30, radius: 8, fontSize: 12) { h.command }
                 }
                 .padding(.vertical, 10).padding(.horizontal, 12)
                 .background(RoundedRectangle(cornerRadius: 10).fill(Z.inset))

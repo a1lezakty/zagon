@@ -26,10 +26,11 @@ struct SettingsScreen: View {
                     Text(f.t("connect.onlyApp")).foregroundColor(Z.muted)
                 }
                 HStack(spacing: 8) {
-                    let busy = app.cliBusy
-                    PillButton(title: busy ? f.t("connect.busy") : f.t("connect.button"), primary: true) { app.runCLI("install") }
-                    PillButton(title: busy ? f.t("connect.busy") : f.t("connect.remove")) { app.runCLI("uninstall") }
-                    PillButton(title: busy ? f.t("connect.busy") : f.t("connect.check")) { app.runCLI(nil) }
+                    let busy = app.cliBusy, running = app.cliCommand
+                    PillButton(title: busy && running == "install" ? f.t("connect.connecting") : f.t("connect.button"), primary: true,
+                               busy: busy && running == "install") { app.runCLI("install") }
+                    PillButton(title: f.t("connect.remove"), busy: busy && running == "uninstall") { app.runCLI("uninstall") }
+                    PillButton(title: f.t("connect.check"), busy: busy && running == nil) { app.runCLI(nil) }
                 }
                 if let e = app.cliError {
                     Text(f.t("connect.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad)
@@ -162,7 +163,7 @@ struct SettingsScreen: View {
     func collect(_ f: Fmt) {
         do {
             let zip = try app.collectDiagnostics()
-            app.say(f.t("settings.diag.saved", Log.scrub(zip.path)), reveal: zip, seconds: 10)
+            app.say(f.t("settings.diag.saved"), reveal: zip, seconds: 10)
         } catch {
             app.say(f.t("settings.diag.failed", Log.scrub(String(describing: error))), error: true)
         }

@@ -39,6 +39,8 @@ final class AppState: ObservableObject {
     /// Claude Code / Codex connection by the CLI inside Zagon.app (nil = not checked, or not running from the app).
     @Published var cli: Connect.Status?
     @Published private(set) var cliBusy = false
+    /// What runs while `cliBusy`: `install`, `uninstall`, nil = `doctor`.
+    private(set) var cliCommand: String?
     @Published private(set) var cliError: String?
     /// Tasks and the worklog plan: whose `zagon` answers (nil = the provider's own, the design sample) and what came
     /// back per source (`TaskSource.swift`).
@@ -77,7 +79,7 @@ final class AppState: ObservableObject {
             guard zoneID != oldValue else { return }
             if persist { UserDefaults.standard.set(zoneID, forKey: "timeZone") }
             rezone()
-            if persist { say(f.t("zone.changed", Zones.label(zone, at: provider.now))) }
+            if persist { say(f.t("zone.changed", zone.identifier)) }
         }
     }
     var zone: TimeZone { zoneID.flatMap(TimeZone.init(identifier:)) ?? .autoupdatingCurrent }
@@ -116,18 +118,21 @@ final class AppState: ObservableObject {
         updater.checkForUpdates(nil)
     }
 
-    func updateChecked(found: String?, error: String?) {
+    /// `quiet`: the session ended without a result; only forget the check.
+    func updateChecked(found: String?, error: String?, quiet: Bool = false) {
         guard checkingUpdates else { return }
         checkingUpdates = false
+        if quiet { return }
         if let error { say(f.t("update.failed", error), error: true) }
         else if let found { say(f.t("update.found", found)) }
-        else { say(f.t("update.latest", Self.version)) }
+        else { say(f.t("update.latest", Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev")) }
     }
 
     @Published var toast: Toast?
 
-    func say(_ text: String, error: Bool = false, reveal: URL? = nil, seconds: Double = 4) {
-        let t = Toast(text: text, error: error, reveal: reveal)
+    /// The one place results are shown (a VoiceOver announcement belongs here too).
+    func say(_ text: String, error: Bool = false, reveal: URL? = nil, revealTitle: String? = nil, seconds: Double = 4) {
+        let t = Toast(text: text, error: error, reveal: reveal, revealTitle: revealTitle)
         toast = t
         guard !error else { return }
         Task { [weak self] in
@@ -281,7 +286,6 @@ final class AppState: ObservableObject {
             try next.save(path)
             notify = next
             notifyError = nil
-            say(f.t("settings.notify.saved"))
         } catch {
             notifyError = Log.scrub(String(describing: error))
             Log.shared.write("config.toml not saved: \(notifyError ?? "")")
@@ -289,14 +293,13 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// A server just checked: the pull that includes it says whether it answered.
-    private var awaitingHost: String?
+    /// Servers just checked: the pull that includes one says whether it answered.
+    private var awaitingHosts: Set<String> = []
 
     func setRemote(_ host: String, on: Bool) {
         remoteHosts = on ? remoteHosts + [host] : remoteHosts.filter { $0 != host }
         UserDefaults.standard.set(remoteHosts, forKey: "remoteHosts")
-        awaitingHost = on ? host : nil
-        if !on { say(f.t("servers.off", host)) }
+        if on { awaitingHosts.insert(host) } else { awaitingHosts.remove(host) }
         guard let store else { return }
         // Unchecked: its sessions and days leave the numbers now, not only stop updating.
         if !on { store.dropServer(host) { [weak self] in self?.revision += 1 } }
@@ -387,10 +390,12 @@ final class AppState: ObservableObject {
         guard let bin = Self.cliPath, !cliBusy else { return }
         if command == "install", Connect.temporaryLocation(Bundle.main.bundlePath) {
             cliError = f.t("connect.moveFirst")
-            say(f.t("connect.failed", f.t("connect.moveFirst")), error: true)
+            say(f.t("connect.failedInstall", f.t("connect.moveFirst")), error: true, reveal: Bundle.main.bundleURL,
+                revealTitle: f.t("connect.revealApp"))
             return
         }
         if let command { connectDismissed = command == "uninstall" }
+        cliCommand = command
         cliBusy = true
         cliError = nil
         Task.detached {
@@ -410,11 +415,11 @@ final class AppState: ObservableObject {
     }
 
     private func reportCLI(_ command: String?, _ status: Connect.Status?) {
-        if let e = cliError { return say(f.t("connect.failed", e), error: true) }
+        if let e = cliError { return say(f.t(command == "install" ? "connect.failedInstall" : "connect.failed", e), error: true) }
         guard let status else { return }
         if command == "uninstall" { return say(f.t("connect.removed")) }
         if !status.missing.isEmpty { return say(f.t("connect.missing", status.missing.joined(separator: ", ")), error: true) }
-        if command == "install" { say(f.t("connect.done"), seconds: 10) } else { say(f.t("connect.checked")) }
+        if command == "install" { say(f.t("connect.done"), seconds: 8) } else { say(f.t("connect.checked")) }
     }
 
     /// A server that fails only gets a grey dot; the next attempt comes on schedule.
@@ -431,10 +436,10 @@ final class AppState: ObservableObject {
             guard let self else { return }
             self.pulling = false
             if changed { self.revision += 1 }
-            if let h = self.awaitingHost, hosts.contains(h) {
-                self.awaitingHost = nil
+            for h in self.awaitingHosts.intersection(hosts) {
+                self.awaitingHosts.remove(h)
                 if let e = self.hostErrors[h] {
-                    self.say(self.f.t("servers.failed", h, e == Remote.oldZagon ? self.f.t("servers.oldZagon") : e), error: true)
+                    self.say(e == Remote.oldZagon ? h + ": " + self.f.t("servers.oldZagon") : self.f.t("servers.failed", h, e), error: true)
                 } else {
                     self.say(self.f.t("servers.ok", h))
                 }
@@ -542,7 +547,11 @@ final class UpdateReminders: NSObject, SPUStandardUserDriverDelegate, SPUUpdater
         found(state.userInitiated ? nil : update.displayVersionString)
     }
     func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) { found(nil) }
-    func standardUserDriverWillFinishUpdateSession() { found(nil) }
+    func standardUserDriverWillFinishUpdateSession() {
+        found(nil)
+        // A check that only brought a running session forward gets no result callback.
+        MainActor.assumeIsolated { app?.updateChecked(found: nil, error: nil, quiet: true) }
+    }
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         let v = item.displayVersionString
@@ -578,7 +587,6 @@ struct MainPanel: View {
                 ZoneClock()
                 settings
             }
-            ToastView()
             if let problem = app.problem { Banner.amber(Emphasis(before: f.t("main.storeFailed", problem))) }
             if app.scanning { Text(f.t("main.scanning")).font(.system(size: 12)).foregroundColor(Z.muted) }
             if let v = app.updateFound {
@@ -588,10 +596,13 @@ struct MainPanel: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Banner.blue(Emphasis(before: f.t("connect.banner")))
                     HStack(spacing: 8) {
-                        PillButton(title: app.cliBusy ? f.t("connect.connecting") : f.t("connect.button"), primary: true, expand: true) {
+                        let installing = app.cliBusy && app.cliCommand == "install"
+                        PillButton(title: installing ? f.t("connect.connecting") : f.t("connect.button"), primary: true, expand: true,
+                                   busy: installing) {
                             app.runCLI("install")
                         }
-                        PillButton(title: f.t("connect.notNow")) { app.connectDismissed = true }
+                        .disabled(app.cliBusy)
+                        PillButton(title: f.t("connect.notNow")) { app.connectDismissed = true }.disabled(app.cliBusy)
                     }
                 }
             }
@@ -600,6 +611,7 @@ struct MainPanel: View {
                 SessionsBlock(vm: vm, showIdle: $showIdle)
             }
             TotalsBlock(vm: vm)
+            ToastView()
             HStack(spacing: 8) {
                 PillButton(title: f.t("main.openWindow"), primary: true, expand: true) { open(nil) }
                 PillButton(title: f.t("main.daySummary"), expand: true) { open(.day) }
@@ -757,6 +769,7 @@ struct SessionsBlock: View {
 struct WaitingRow: View {
     let s: SessionRowVM
     @EnvironmentObject private var app: AppState
+    @State private var copied = false
     var body: some View {
         HStack(spacing: 10) {
             Dot(color: Z.waiting)
@@ -766,14 +779,15 @@ struct WaitingRow: View {
             }
             Spacer(minLength: 0)
             Text(s.time).font(mono(12)).foregroundColor(Z.bad).lineLimit(1)
-            Button { copyToPasteboard(s.command) } label: {
-                Image(systemName: "terminal").font(.system(size: 12)).foregroundColor(Z.text)
+            Button { copy(s.command, $copied) } label: {
+                Image(systemName: copied ? "checkmark" : "terminal").font(.system(size: 12))
+                    .foregroundColor(copied ? Z.good : Z.text)
                     .frame(width: 28, height: 28)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Color(hex: 0x3A2C2D)))
                     .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(hex: 0x4D3234)))
             }
-            .buttonStyle(.plain)
-            .help(app.f.t("main.copyCommand") + ": " + s.command)
+            .buttonStyle(Pressable())
+            .help(copied ? app.f.t("copied") : app.f.t("main.copyCommand") + ": " + s.command)
         }
         .padding(.vertical, 9).padding(.horizontal, 10)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color(hex: 0x2E2425)))
@@ -785,6 +799,7 @@ struct SessionRow: View {
     let s: SessionRowVM
     let dot: Color
     @EnvironmentObject private var app: AppState
+    @State private var copied = false
     var body: some View {
         HStack(spacing: 10) {
             Dot(color: dot)
@@ -793,11 +808,11 @@ struct SessionRow: View {
                 Text(s.subtitle).font(.system(size: 12)).foregroundColor(Z.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
-            Text(s.time).font(mono(12)).foregroundColor(Z.secondary).lineLimit(1)
+            Text(copied ? app.f.t("copied") : s.time).font(mono(12)).foregroundColor(copied ? Z.good : Z.secondary).lineLimit(1)
         }
         .padding(.vertical, 7).padding(.horizontal, 10)
         .contentShape(Rectangle())
-        .onTapGesture { copyToPasteboard(s.command) }
+        .onTapGesture { copy(s.command, $copied) }
         .help(app.f.t("main.copyCommand") + ": " + s.command)
     }
 }

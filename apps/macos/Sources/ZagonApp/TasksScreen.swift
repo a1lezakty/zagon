@@ -216,9 +216,9 @@ struct TasksScreen: View {
             Flow(spacing: 8, lineSpacing: 8) {
                 PillButton(title: f.t("task.continueClaude"), primary: true, height: 38, radius: 10, fontSize: 14) {}
                 PillButton(title: f.t("task.continueCodex"), height: 38, radius: 10, fontSize: 14) {}
-                PillButton(title: f.t("task.copySummary"), height: 38, radius: 10, fontSize: 14) {
-                    copyToPasteboard(([d.key + " " + d.title, d.description] + d.done.map { "\($0.day): \($0.text)" })
-                        .filter { !$0.isEmpty }.joined(separator: "\n\n"))
+                CopyButton(title: f.t("task.copySummary"), height: 38, radius: 10, fontSize: 14) {
+                    ([d.key + " " + d.title, d.description] + d.done.map { "\($0.day): \($0.text)" })
+                        .filter { !$0.isEmpty }.joined(separator: "\n\n")
                 }
             }
             .padding(.top, 4)

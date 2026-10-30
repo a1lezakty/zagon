@@ -46,6 +46,8 @@ jobs:
           path: apps/macos/build/snapshots
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: Zagon-dmg
           path: apps/macos/build/Zagon.dmg
+          if-no-files-found: ignore

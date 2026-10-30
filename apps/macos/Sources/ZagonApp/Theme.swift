@@ -57,6 +57,37 @@ func copyToPasteboard(_ s: String) {
     NSPasteboard.general.setString(s, forType: .string)
 }
 
+/// Copies and raises `copied` for 1.5 s, so the place that copied can say so.
+@MainActor
+func copy(_ s: String, _ copied: Binding<Bool>) {
+    copyToPasteboard(s)
+    copied.wrappedValue = true
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied.wrappedValue = false }
+}
+
+/// A text button that copies, then reads "Copied ✓" for 1.5 s.
+struct CopyButton: View {
+    let title: String
+    var height: CGFloat = 36
+    var radius: CGFloat = 9
+    var fontSize: CGFloat = 13
+    let text: () -> String
+    @EnvironmentObject private var app: AppState
+    @State private var copied = false
+    var body: some View {
+        PillButton(title: copied ? app.f.t("copied.button") : title, height: height, radius: radius, fontSize: fontSize) {
+            copy(text(), $copied)
+        }
+    }
+}
+
+/// Plain, but a press shows.
+struct Pressable: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.opacity(configuration.isPressed ? 0.75 : 1)
+    }
+}
+
 // MARK: snapshot mode
 
 private struct SnapshotKey: EnvironmentKey { static let defaultValue = false }
@@ -188,21 +219,29 @@ struct PillButton: View {
     var radius: CGFloat = 9
     var fontSize: CGFloat = 13
     var expand = false
+    /// Working: a spinner before the title, and no clicks.
+    var busy = false
     let action: () -> Void
+    @Environment(\.isEnabled) private var enabled
     var body: some View {
         Button(action: action) {
-            Text(title)
-                .font(.system(size: fontSize, weight: primary ? .semibold : .medium))
-                .foregroundColor(primary ? Z.onAccent : Z.text)
-                .lineLimit(1)
-                .padding(.horizontal, expand ? 8 : 14)
-                .frame(maxWidth: expand ? .infinity : nil)
-                .frame(height: height)
-                .background(RoundedRectangle(cornerRadius: radius).fill(primary ? Z.week : Z.button))
-                .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(primary ? Color.clear : Z.buttonBorder))
-                .contentShape(Rectangle())
+            HStack(spacing: 6) {
+                if busy { ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 14, height: 14) }
+                Text(title)
+                    .font(.system(size: fontSize, weight: primary ? .semibold : .medium))
+                    .foregroundColor(primary ? Z.onAccent : Z.text)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, expand ? 8 : 14)
+            .frame(maxWidth: expand ? .infinity : nil)
+            .frame(height: height)
+            .background(RoundedRectangle(cornerRadius: radius).fill(primary ? Z.week : Z.button))
+            .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(primary ? Color.clear : Z.buttonBorder))
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(Pressable())
+        .disabled(busy)
+        .opacity(busy || !enabled ? 0.6 : 1)
     }
 }
 
