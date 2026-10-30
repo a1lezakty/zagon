@@ -72,4 +72,52 @@ import Testing
         let n = Notifier(store: s, config: NotifyConfig(), channels: [])
         #expect(try n.forecast(s.latestLimits()[0]) == nil)
     }
+
+    /// Readings of one window as (offset in minutes from 10:00 local on 20.10, percent, reset in hours from 10:00).
+    func store(_ window: String, _ rows: [(Double, Double, Double)]) throws -> Store {
+        let s = try Store(path: ":memory:"), at = Time.localMidnight(2026, 10, 20) + 10 * hour
+        for (m, pct, r) in rows {
+            try s.addLimitSnapshot(LimitSnapshot(tool: .claude, window: window, usedPct: pct, resetsAt: at + r * hour,
+                                                 windowMinutes: window == "five_hour" ? 300 : 10080, ts: at + m * minute))
+        }
+        return s
+    }
+
+    /// Task shares of the weekly limit add up its growth: an idle session re-sending an older percent between the
+    /// working one's readings is no drop and rise again.
+    @Test func limitGrowthCountsAReSentOlderPercentOnce() throws {
+        let at = Time.localMidnight(2026, 10, 20) + 10 * hour
+        // 20 % before the range; in it: re-sent 12, 22, re-sent 12, 24, re-sent 12, 25 (+5); the reset at 11:30; then 3,
+        // a late 12 of the ended week, 5 (+5).
+        let s = try store("seven_day", [(-60, 20, 1.5), (10, 12, 1.5), (20, 22, 1.5), (30, 12, 1.5), (40, 24, 1.5), (50, 12, 1.5),
+                                        (60, 25, 1.5), (95, 3, 169.5), (100, 12, 1.5), (110, 5, 169.5)])
+        let g = try TaskTime.limitGrowth(s.db, tool: "claude", window: "seven_day", from: at, to: at + 2 * hour)
+        #expect(g == 10)  // the old sum of rises: 10 + 12 + 13 + 9 = 44
+        // A reading without a reset time inside a known period is part of it: 40, 30 (re-sent, no reset), 41 = +1.
+        let n = try store("seven_day", [(0, 40, 50), (20, 41, 50)])
+        try n.addLimitSnapshot(LimitSnapshot(tool: .claude, window: "seven_day", usedPct: 30, windowMinutes: 10080, ts: at + 10 * minute))
+        #expect(try TaskTime.limitGrowth(n.db, tool: "claude", window: "seven_day", from: at - hour, to: at + hour) == 1)
+    }
+
+    /// The Day screen: a re-sent lower reading neither ends a stretch at 100 % nor becomes the week's percent at the end of
+    /// the day; the Week screen's percent per day likewise.
+    @Test func dayAndWeekUseTheUsageNotTheLastReading() throws {
+        let at = Time.localMidnight(2026, 10, 20) + 10 * hour
+        let five = try store("five_hour", [(0, 100, 2), (10, 97, 2), (20, 100, 2), (180, 4, 7)])
+        let q = Query(store: five)
+        #expect(try q.limitHits(from: at - hour, to: at + 5 * hour) == [Interval(at, at + 2 * hour)])  // old: 2 stretches
+
+        let week = try Query(store: store("seven_day", [(-900, 29, 50), (0, 30, 50), (10, 33, 50), (20, 28, 50)]))
+        let d = try week.day("2026-10-20")
+        #expect(d.weekPctStart == 30 && d.weekPctEnd == 33)  // old: 30 and 28
+        #expect(try week.week(from: "2026-10-19").limitByDay[1] == 33)
+        // The day starts with a re-sent reading below the day before's 35 %: it starts at 35.
+        let primed = try Query(store: store("seven_day", [(-900, 35, 50), (0, 30, 50), (10, 36, 50)])).day("2026-10-20")
+        #expect(primed.weekPctStart == 35 && primed.weekPctEnd == 36)
+
+        // The day before ended at 100 % with a reset at 23:00; at 00:01 an idle status line re-sends that 100 %.
+        let midnight = Time.localMidnight(2026, 10, 20)
+        let late = try store("five_hour", [(-690, 100, -11), (-599, 100, -11), (60, 3, 4)])  // 22:30, 00:01, 11:00
+        #expect(try Query(store: late).limitHits(from: midnight, to: midnight + 86400) == [])
+    }
 }

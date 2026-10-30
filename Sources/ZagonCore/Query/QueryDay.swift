@@ -106,11 +106,10 @@ extension Query {
 
         d.lanes = try lanes(from: s, to: e)
         d.limitHits = try limitHits(from: s, to: e)
-        try db.query("""
-            SELECT used_pct FROM limit_snapshot WHERE window = 'seven_day' AND tool = 'claude' AND ts >= ? AND ts < ? ORDER BY ts
-            """, [.real(s), .real(e)]) { row in
-            if d.weekPctStart == nil { d.weekPctStart = row.real(0) }
-            d.weekPctEnd = row.real(0)
+        var week = try LimitUsage(db, tool: "claude", window: "seven_day", before: s)
+        try week.read(db, from: s, to: e) { _, _, u, _ in
+            if d.weekPctStart == nil { d.weekPctStart = u.pct }
+            d.weekPctEnd = u.pct
         }
         d.summary = try db.one("SELECT engine, text, created FROM summary WHERE day = ? ORDER BY engine = 'none', created DESC LIMIT 1",
                                [.text(day)]) { StoredSummary(engine: $0.text(0) ?? "", text: $0.text(1) ?? "", created: $0.real(2)) }
@@ -220,28 +219,23 @@ extension Query {
         return out.sorted { (first($0), $0.id) < (first($1), $1.id) }
     }
 
-    /// 5-hour readings at 100 % chained into stretches; a stretch ends at the next lower reading or the reset.
-    /// A stretch carried over from the day before starts at midnight.
+    /// 5-hour usage at 100 % chained into stretches; a stretch ends at the next lower usage (a new period: an older
+    /// reading re-sent does not count, `LimitUsage`) or the reset. A stretch carried over from the day before starts at
+    /// midnight.
     func limitHits(from s: Timestamp, to e: Timestamp) throws -> [Interval] {
         var out: [Interval] = []
         var open: (start: Timestamp, resets: Timestamp?)?
-        if let (pct, resets) = try db.one("""
-            SELECT used_pct, resets_at FROM limit_snapshot WHERE window = 'five_hour' AND tool = 'claude' AND ts < ?
-            ORDER BY ts DESC LIMIT 1
-            """, [.real(s)], { ($0.real(0), $0.optReal(1)) }), pct >= 99.5, let r = resets, r > s {
-            open = (s, r)
-        }
+        var five = try LimitUsage(db, tool: "claude", window: "five_hour", before: s)
+        if let pct = five.pct, pct >= 99.5, let r = five.resets, r > s { open = (s, r) }
         func close(_ at: Timestamp) {
             guard let o = open else { return }
             out.append(Interval(o.start, min(at, o.resets ?? at, e)))
             open = nil
         }
-        try db.query("""
-            SELECT used_pct, resets_at, ts FROM limit_snapshot WHERE window = 'five_hour' AND tool = 'claude' AND ts >= ? AND ts < ?
-            ORDER BY ts
-            """, [.real(s), .real(e)]) { row in
-            let full = row.real(0) >= 99.5, ts = row.real(2)
-            if full, open == nil { open = (ts, row.optReal(1)) } else if !full { close(ts) }
+        try five.read(db, from: s, to: e) { ts, _, u, _ in
+            let full = (u.pct ?? 0) >= 99.5
+            // A 100 % re-sent after its period reset (an idle status line past midnight) opens nothing.
+            if full, open == nil, (u.resets ?? .infinity) > ts { open = (ts, u.resets) } else if !full { close(ts) }
         }
         close(e)
         return out
@@ -267,10 +261,13 @@ extension Query {
         for s in x.suffix(7) { for (p, sec) in s.projectSec { previousSec[p, default: 0] += sec } }
         var limit: [Double?] = []
         for (s, e) in ranges.prefix(7) {
-            limit.append(e > s ? try db.one("""
-                SELECT used_pct FROM limit_snapshot WHERE window = 'seven_day' AND tool = 'claude' AND ts >= ? AND ts < ?
-                ORDER BY ts DESC LIMIT 1
-                """, [.real(s), .real(e)]) { $0.real(0) } : nil)
+            // The usage after the day's last reading (`LimitUsage`); nil for a day without readings.
+            var last: Double?
+            if e > s {
+                var u = try LimitUsage(db, tool: "claude", window: "seven_day", before: s)
+                try u.read(db, from: s, to: e) { _, _, x, _ in last = x.pct }
+            }
+            limit.append(last)
         }
         return WeekDetail(days: days, projects: projects, totals: totals(x.prefix(7)), previous: totals(x.suffix(7)),
                           previousSec: previousSec, limitByDay: limit)
