@@ -40,6 +40,7 @@ import Darwin
 ///     engine = "claude"           # claude | codex | none
 ///     model = "haiku"
 ///     timeout = 120               # seconds; on failure or timeout the summary falls back to "none"
+///     time = "20:00"              # when the service writes the day summary ("" = off; wins over [notify] summary_at)
 public struct NotifyConfig: Sendable, Equatable {
     public var enabled = true
     /// Thresholds per limit category (`claude.five_hour`, `codex.week`, `codex.<limit_id>`…); missing = `defaultLimits`.
@@ -108,6 +109,7 @@ public struct NotifyConfig: Sendable, Equatable {
         if let v = s("summary", "engine") { c.summaryEngine = v }
         if let v = s("summary", "model"), !v.isEmpty { c.summaryModel = v }
         if let v = n("summary", "timeout"), v > 0 { c.summaryTimeout = v }
+        if let v = s("summary", "time") { c.summaryAt = clock(v) }
         return c
     }
 

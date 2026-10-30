@@ -112,7 +112,7 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertEqual(usage.map(\.name).last, "other")
         XCTAssertEqual(usage[0].share, 10.6 / 31.2, accuracy: 1e-9)
         XCTAssertEqual(vm.usage(.agent).first?.name, "main thread")
-        XCTAssertEqual(vm.done(titles: true).first?.project, "tracker")
+        XCTAssertEqual(vm.summary?.cards.first?.title, "api-server · PROJ-12 Check the payment webhook retries — 6h 10m, $118")
         XCTAssertTrue(vm.markdown.hasPrefix("# Thursday, October 29\n"))
         XCTAssertTrue(DayVM(p.day(p.at(4, 0)), f).timeline.lanes.isEmpty)
         let reset = DayData(day: p.at(29, 0), totals: Totals(sessionSec: 3600, tokens: 1, cost: 1), weekPctStart: 95, weekPctEnd: 37)

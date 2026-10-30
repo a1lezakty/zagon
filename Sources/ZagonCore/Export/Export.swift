@@ -14,6 +14,8 @@ import Foundation
 ///   with a change: the complete `day_agg` rows of that day and host, the `usage_hour` and `tool_use` rows of the day
 ///   (summed over files) and your-time intervals clipped to the day; together they replace what the client had for
 ///   that day (rows that vanished are gone). `ExportImport` is the reference client;
+/// - `{"type":"summary","day","engine","text","created","seq"}` per summary kept after `since` (`SummaryDoc` JSON in
+///   `text`, `day` = its day or `from..to`);
 /// - `{"type":"limit",…}` the latest reading per (tool, window), every time (a handful of rows).
 public enum Export {
     struct Header: Encodable { var type = "export"; var schema: Int; var since: Int; var seq: Int; var version: String? }
@@ -54,6 +56,7 @@ public enum Export {
     struct ActivityLine: Encodable {
         var type = "activity"; var sessionId: String, kind: String, start: Double, end: Double, cwd: String?
     }
+    struct SummaryLine: Encodable { var type = "summary"; var day: String, engine: String, text: String, created: Double, seq: Int }
     struct LimitLine: Encodable {
         var type = "limit"
         var tool: String, window: String, usedPct: Double, resetsAt: Double?, windowMinutes: Int?, ts: Double
@@ -152,6 +155,18 @@ public enum Export {
             try out(DayLine(day: day, host: host, seq: dseq, start: start, end: end, rows: rows, usage: usage,
                             usageCwd: usageCwd, tools: tools, user: user))
         }
+
+        // Summaries kept after `since` (`DaySummary.save` numbers them in `meta`); the first export sends every one.
+        var summaries: [SummaryLine] = []
+        try db.query("""
+            SELECT s.day, s.engine, s.text, s.created, coalesce(m.value, 0) FROM summary s
+            LEFT JOIN meta m ON m.key = 'summary_seq:' || s.day
+            WHERE s.text LIKE '{%' AND (coalesce(m.value, 0) > ?1 OR ?1 = 0) ORDER BY s.day, s.created
+            """, [.int(Int64(since))]) {
+            summaries.append(SummaryLine(day: $0.text(0) ?? "", engine: $0.text(1) ?? "", text: $0.text(2) ?? "",
+                                         created: $0.real(3), seq: $0.int(4)))
+        }
+        for x in summaries { try out(x) }
 
         for l in try store.latestLimits() {
             try out(LimitLine(tool: l.tool.rawValue, window: l.window, usedPct: l.usedPct, resetsAt: l.resetsAt,

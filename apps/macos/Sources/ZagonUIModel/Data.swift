@@ -1,4 +1,5 @@
 import Foundation
+import ZagonCore
 
 // What the screens need from the core, already aggregated. A real provider maps ZagonCore's Store (local or
 // `zagon export` from servers) onto these; `MockDataProvider` serves the design sample. Durations are seconds,
@@ -18,10 +19,13 @@ public protocol ZagonDataProvider {
     func worklog(_ day: Date) -> WorklogData
     /// Readings of the current window and some before it, oldest first (the pace view).
     func limitHistory(_ kind: LimitKind) -> [LimitPoint]
+    /// The kept summary of a day or a period (`SummaryDoc.key`); nil = none.
+    func summary(_ key: String) -> KeptSummary?
 }
 
 extension ZagonDataProvider {
     public func limitHistory(_ kind: LimitKind) -> [LimitPoint] { [] }
+    public func summary(_ key: String) -> KeptSummary? { nil }
 }
 
 public enum Tool: String, Sendable { case claude, codex }
@@ -108,10 +112,31 @@ public struct UsageRow: Sendable {
     public init(_ name: String, tokens: Int, cost: Double) { self.name = name; self.tokens = tokens; self.cost = cost }
 }
 
-public struct DoneItem: Sendable {
-    public var project: String
-    public var text: String
-    public init(_ project: String, _ text: String) { self.project = project; self.text = text }
+/// A session of the day as the fallback "what was done" lists it (no written summary).
+public struct DoneSession: Sendable, Equatable {
+    public var title: String
+    public var branch: String?
+    public var sec: Double
+    public init(_ title: String, branch: String? = nil, sec: Double) { self.title = title; self.branch = branch; self.sec = sec }
+}
+
+/// A project of the day without a written summary: its sessions, time and price.
+public struct DoneProject: Sendable, Equatable {
+    public var name: String
+    public var sec: Double
+    public var cost: Double
+    public var sessions: [DoneSession]
+    public init(_ name: String, sec: Double, cost: Double, sessions: [DoneSession]) {
+        self.name = name; self.sec = sec; self.cost = cost; self.sessions = sessions
+    }
+}
+
+/// A written summary of a day or a period as kept (`summary` table) or just answered by a CLI.
+public struct KeptSummary: Sendable, Equatable {
+    public var doc: SummaryDoc
+    public var engine: String
+    public var at: Date
+    public init(doc: SummaryDoc, engine: String, at: Date) { self.doc = doc; self.engine = engine; self.at = at }
 }
 
 public struct SummaryInfo: Sendable {
@@ -131,16 +156,17 @@ public struct DayData: Sendable {
     public var weekPctEnd: Double?
     public var lanes: [Lane]
     public var usage: [UsageDimension: [UsageRow]]
-    /// "What was done" from the AI summary and, alternatively, from session titles.
-    public var summary: [DoneItem]
-    public var titles: [DoneItem]
+    /// "What was done": the written summary (nil: none yet, or free text from before) and, without it, the day's
+    /// projects from this Mac's data.
+    public var doc: SummaryDoc?
+    public var projects: [DoneProject]
     public var summaryInfo: SummaryInfo?
     public init(day: Date, totals: Totals, limitHits: [Interval] = [], weekPctStart: Double? = nil,
                 weekPctEnd: Double? = nil, lanes: [Lane] = [], usage: [UsageDimension: [UsageRow]] = [:],
-                summary: [DoneItem] = [], titles: [DoneItem] = [], summaryInfo: SummaryInfo? = nil) {
+                doc: SummaryDoc? = nil, projects: [DoneProject] = [], summaryInfo: SummaryInfo? = nil) {
         self.day = day; self.totals = totals; self.limitHits = limitHits; self.weekPctStart = weekPctStart
-        self.weekPctEnd = weekPctEnd; self.lanes = lanes; self.usage = usage; self.summary = summary
-        self.titles = titles; self.summaryInfo = summaryInfo
+        self.weekPctEnd = weekPctEnd; self.lanes = lanes; self.usage = usage; self.doc = doc
+        self.projects = projects; self.summaryInfo = summaryInfo
     }
 }
 

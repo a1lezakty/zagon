@@ -340,6 +340,11 @@ let day0 = Time.dayBounds("2026-10-30")!.start
         #expect(try n.tick(now: day0 + 23 * 3600).isEmpty)
         #expect(try n.tick(now: day0 + 86400 + 19 * 3600 + 1) == ["worklog"])
         #expect(ch.sent.last?.buttons.first?.first?.data == "log:ok:2026-10-31")
+        // At a time inside quiet hours the summary is still written, only not sent.
+        n.config.summaryAt = 23 * 60 + 30; n.config.quiet = ClockRange(start: 23 * 60, end: 8 * 60)
+        let before = ch.sent.count
+        #expect(try n.tick(now: day0 + 86400 + 23.6 * 3600).isEmpty)
+        #expect(built == ["2026-10-30", "2026-10-31"] && ch.sent.count == before)
     }
 }
 
@@ -579,23 +584,54 @@ struct ChannelTests {
         #expect(f.commits.first?.subjects == ["Add parser tests"])
         #expect(one.waitingSec == 0.6 * 3600)
         let plain = DaySummary.plain(f, .ru)
-        #expect(plain.hasPrefix("• repo — 15 мин: Parser fixes. Файлы: Parser.swift, ParserTests.swift. Коммиты (1): Add parser tests."))
+        #expect(plain.items == [SummaryDoc.Item(project: "repo", title: "Parser fixes", was: "Fix the parser please and add tests",
+                                                done: ["«Parser fixes» — 15 мин", "Коммиты (1): Add parser tests",
+                                                       "Файлы (2): Parser.swift, ParserTests.swift"], sec: 900, cost: plain.items[0].cost)])
+        #expect(plain.overview == "Проекты: 1, сессии: 1, коммиты: 1.")
         #expect(DaySummary.longestWait(f, .ru) == "Дольше всех ждала тебя repo — 36 мин.")
         #expect(DaySummary.headline(f, .ru).hasPrefix("Пт, 30 октября. Сессии работали 15 мин, ты — 0 мин. 300 токенов."))
         let d = DaySummary.digest(f, .ru)
-        #expect(d.contains("«Fix the parser please and add tests»") && d.contains("Коммиты в repo: Add parser tests"))
+        #expect(d.contains("[1] Проект repo (Claude), сессия «Parser fixes», работала 15 мин.")
+                && d.contains("«Fix the parser please and add tests»") && d.contains("Коммиты в repo: Add parser tests"))
         var big = f
         big.sessions = Array(repeating: one, count: 500)
         #expect(DaySummary.digest(big, .ru).count <= DaySummary.maxDigest)
         // The same in English.
         let en = Words.english
-        #expect(DaySummary.plain(f, en).hasPrefix("• repo — 15 min: Parser fixes. Files: Parser.swift, ParserTests.swift. Commits (1): Add parser tests."))
+        #expect(DaySummary.plain(f, en).items.first?.done == ["“Parser fixes” — 15 min", "Commits (1): Add parser tests",
+                                                              "Files (2): Parser.swift, ParserTests.swift"])
         #expect(DaySummary.longestWait(f, en) == "Waited for you longest: repo — 36 min.")
         #expect(DaySummary.headline(f, en).hasPrefix("Fri, October 30. Sessions worked 15 min, you 0 min. 300 tokens."))
         let e = DaySummary.digest(f, en)
         #expect(e.contains("“Fix the parser please and add tests”") && e.contains("Commits in repo: Add parser tests") && !e.contains("токенов"))
-        #expect(DaySummary.instruction(en).contains("Write in English") && DaySummary.instruction(.ru).contains("Напиши по-русски"))
-        #expect(DaySummary.plain(DaySummary.Facts(day: "2026-10-30"), en) == "No sessions this day.")
+        #expect(DaySummary.instruction(en).contains("Write in English") && DaySummary.instruction(.ru).contains("Пиши по-русски"))
+        #expect(DaySummary.plain(DaySummary.Facts(day: "2026-10-30"), en).overview == "No sessions this day.")
+        #expect(DaySummary.plain(DaySummary.Facts(day: "2026-10-30"), en).items.isEmpty)
+    }
+
+    @Test(.enabled(if: Sys.which("git") != nil)) func cardsOfLinkedTasks() throws {
+        var (s, _) = try setUp()
+        let tasks = Tasks(store: s.store)
+        let t = try tasks.add(title: "Parser crash", key: "PROJ-1")
+        try tasks.link(t.id, session: "claude:s1", how: .manual)
+        let f = try s.facts("2026-10-30", now: day0 + 21 * 3600)
+        #expect(f.tasks == ["PROJ-1": "Parser crash"] && f.sessions.first?.tasks == ["PROJ-1"])
+        let d = DaySummary.digest(f, .ru)
+        #expect(d.contains("Задачи: PROJ-1 «Parser crash»") && d.contains(", задача PROJ-1, работала"))
+        #expect(DaySummary.plain(f, .ru).items.first?.heading == "PROJ-1 Parser crash")
+        let fakeBin = makeTempDir()
+        Sys.writeFile(fakeBin + "/claude", [0], mode: 0o755)
+        s.searchPath = fakeBin + ":/usr/bin:/bin"
+        let real = s.runner
+        s.runner = { argv, input, cwd, t in
+            guard argv[0].hasSuffix("/claude") else { return real(argv, input, cwd, t) }
+            let answer = #"{\"overview\": \"o\", \"items\": [{\"project\": \"repo\", \"task\": \"PROJ-1\", \"title\": \"\", \"refs\": [1], \"was\": \"crash\", \"done\": [\"fixed\"]}, {\"project\": \"repo\", \"task\": \"PROJ-1\", \"title\": \"Tests\", \"refs\": [1], \"done\": [\"tested\"]}]}"#
+            return (0, Array(#"{"is_error":false,"result":"\#(answer)"}"#.utf8))
+        }
+        let r = try s.make("2026-10-30", now: day0 + 21 * 3600)
+        #expect(r.engine == "claude" && r.doc.items.first?.heading == "PROJ-1 Parser crash")
+        // The cards of the task are its "what was done" of the day, together.
+        #expect(try tasks.done(t.id).map(\.text) == ["fixed; tested"])  // what was done only: it goes to the worklog
     }
 
     @Test func captureAddsEnvironment() {
@@ -614,7 +650,7 @@ struct ChannelTests {
             printf '{"is_error":false,"result":"• repo — internal=%s pwd=%s args=%s"}' "$ZAGON_INTERNAL" "$(pwd)" "$*"
             """)
         s.searchPath = bin + ":/usr/bin:/bin"
-        let r = try #require(s.ai("выжимка"))
+        let r = try #require(s.complete("выжимка"))
         #expect(r.engine == "claude" && r.text.contains("internal=1 pwd=\(s.paths.dir)/run args=-p --safe-mode --model haiku"))
     }
 
@@ -629,16 +665,20 @@ struct ChannelTests {
             guard argv[0].hasSuffix("/claude") else { return real(argv, input, cwd, t) }
             calls.append(argv + [cwd ?? ""])
             #expect(String(decoding: input, as: UTF8.self).contains("Parser fixes"))
-            return (0, Array(#"{"type":"result","is_error":false,"result":"• repo — починен парсер, добавлены тесты"}"#.utf8))
+            let answer = #"```json\n{\"overview\": \"Чинили парсер.\", \"items\": [{\"project\": \"repo\", \"task\": \"\", \"title\": \"Парсер\", \"refs\": [1], \"was\": \"Парсер падал\", \"done\": [\"починен парсер\", \"добавлены тесты\"], \"left\": \"\"}]}\n```"#
+            return (0, Array(#"{"type":"result","is_error":false,"result":"\#(answer)"}"#.utf8))
         }
         let m = try s.message("2026-10-30", now: day0 + 21 * 3600)
         #expect(calls.first?.contains("--no-session-persistence") == true && calls.first?.last == s.paths.dir + "/run")
-        #expect(m.text.contains("\n\n• repo — починен парсер, добавлены тесты\n\nДольше всех ждала тебя repo"))
+        #expect(m.text.contains("\nДольше всех ждала тебя repo — 36 мин.\n\nЧинили парсер.\n\n▸ repo · Парсер — 15 мин")
+                && m.text.hasSuffix("\nЧто было: Парсер падал\nЧто сделано:\n• починен парсер\n• добавлены тесты"))
         #expect(m.photo.map { $0.count > 1000 && $0.count <= 200 * 1024 } == true)
         #expect(try s.store.db.one("SELECT engine FROM summary WHERE day = '2026-10-30'") { $0.text(0) } == "claude")
         s.runner = { argv, input, cwd, t in argv[0].hasSuffix("/claude") ? (124, []) : real(argv, input, cwd, t) }  // timed out
         let r = try s.make("2026-10-30", now: day0 + 21 * 3600)
-        #expect(r.engine == "none" && r.text.hasPrefix("• repo — 15 мин"))
+        #expect(r.engine == "none" && r.doc.items.first?.done.first == "«Parser fixes» — 15 мин")
+        // The AI's summary stays the one shown over the newer one made without AI.
+        #expect(try s.kept("2026-10-30")?.engine == "claude")
         // In English: the prompt asks for English, the fallback and the message are English.
         s.config.lang = .en
         var prompt = ""
@@ -648,10 +688,10 @@ struct ChannelTests {
             return (124, [])
         }
         let m2 = try s.message("2026-10-30", now: day0 + 21 * 3600)
-        #expect(prompt.hasPrefix("Below is a digest") && prompt.contains("Project repo (Claude), session “Parser fixes”"))
+        #expect(prompt.hasPrefix("Below is a digest") && prompt.contains("[1] Project repo (Claude), session “Parser fixes”"))
         #expect(m2.title == "Day summary" && m2.buttons == [[Message.Button("Details", "day:2026-10-30")]])
-        #expect(m2.text.hasPrefix("Fri, October 30. Sessions worked 15 min") && m2.text.contains("\n\n• repo — 15 min: Parser fixes")
-                && m2.text.hasSuffix("\n\nWaited for you longest: repo — 36 min."))
+        #expect(m2.text.hasPrefix("Fri, October 30. Sessions worked 15 min") && m2.text.contains("\n\n▸ repo · Parser fixes — 15 min")
+                && m2.text.contains(" tokens.\nWaited for you longest: repo — 36 min.\n\nProjects: 1, sessions: 1, commits: 1."))
     }
 }
 
@@ -704,6 +744,12 @@ struct ChannelTests {
         #expect(bot.reply("/sessions", [], now: now).text == "⏳ waits for you 10 min · api-server — fix login flow")
         #expect(bot.reply("/help", [], now: now).text.hasPrefix("/limits — limits\n/sessions — sessions\n/today — today"))
         #expect(bot.reply("/day", ["30-10"], now: now).text == "Format: /day 2026-10-29")
+        // A kept summary is shown as text, not as its JSON.
+        let doc = SummaryDoc(lang: "en", from: "2026-10-30", to: "2026-10-30", overview: "Login fixed.",
+                             items: [.init(project: "api-server", title: "Login", done: ["fixed the flow"], sec: 600)])
+        try store.db.run("INSERT INTO summary(day, engine, text, created) VALUES('2026-10-30', 'claude', ?, 1)", [.text(doc.json)])
+        let day = bot.reply("/day", ["2026-10-30"], now: now).text
+        #expect(day.hasSuffix("\nLogin fixed.\n\n▸ api-server · Login — 10 min\nWhat was done:\n• fixed the flow") && !day.contains("{"))
         #expect(bot.reply("/tz", [], now: now).text.hasPrefix("Time zone \(Settings.zoneName()) (system), now "))
         let today = bot.reply("/today", [], now: now)
         #expect(today.title == "Fri, October 30" && today.text.hasPrefix("Sessions 0 min · you 0 min\n0 tokens · 0 requests"))

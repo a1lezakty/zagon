@@ -186,8 +186,9 @@ public final class Bot {
             lines.append(w.t("Модели: ", "Models: ") + r.models.prefix(4).map { "\($0.model) \(w.pct(Double($0.tokens.total) / Double(total) * 100))" }
                 .joined(separator: ", "))
         }
-        if let s = try store.db.one("SELECT text FROM summary WHERE day = ? ORDER BY created DESC LIMIT 1", [.text(d)], { $0.text(0) }),
-           let s { lines.append("\n" + s) }
+        if let s = try store.db.one("SELECT text FROM summary WHERE day = ? ORDER BY engine = 'none', created DESC LIMIT 1",
+                                    [.text(d)], { $0.text(0) }),
+           let s { lines.append("\n" + (SummaryDoc.decode(s)?.text() ?? s)) }
         return Message(title: w.date(d), text: lines.joined(separator: "\n"))
     }
 

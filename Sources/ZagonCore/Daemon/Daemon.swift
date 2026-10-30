@@ -273,12 +273,33 @@ extension Daemon {
             } catch { log("notify: task suggestions off: \(error)") }
             log("notify: channels \(channels.map(\.name).joined(separator: ",")), bot \(bot == nil ? "off" : "on")")
             while true {
+                n.config.summaryAt = NotifyConfig.load(paths).summaryAt  // `zagon summary --at` changes it in place
                 do { try n.tick() } catch { log("notify: error: \(error)") }
                 store.db.releaseMemory(); z_release_memory()
                 if let bot { bot.pollOnce(timeout: 25) } else { sleep(30) }
             }
         }
         return true
+    }
+}
+
+extension Daemon {
+    /// The day summary at `[summary] time` when no notifier writes it (no channel, or `[notify] enabled = false`): a
+    /// check a minute on its own thread and connection, the time read from config.toml each time.
+    public static func startSummaryWriter(dbPath: String, paths: ZagonPaths, config: NotifyConfig, claudeRoot: String,
+                                          log: @escaping @Sendable (String) -> Void) {
+        startThread {
+            let store: Store
+            do { store = try Store(path: dbPath) } catch { log("summary: cannot open the database: \(error)"); return }
+            var s = DaySummary(store: store, config: config, paths: paths, claudeRoot: claudeRoot)
+            s.log = log
+            while true {
+                s.config.summaryAt = NotifyConfig.load(paths).summaryAt
+                do { if try s.autoTick() { log("summary: written") } } catch { log("summary: not written today: \(error)") }
+                store.db.releaseMemory(); z_release_memory()
+                sleep(60)
+            }
+        }
     }
 }
 

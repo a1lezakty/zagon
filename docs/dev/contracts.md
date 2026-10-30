@@ -199,6 +199,9 @@ NDJSON on stdout, keys in snake_case, one consistent read snapshot; the Mac app 
   - the day's totals by agent, tool, hour, session or model are sums over `usage` / `tools`; they equal `rows`;
 - `{"type":"dir", host, cwd, project, home, seq}` (v5) — `dir_project` rows with `seq > since`, before the `day` lines;
   the client stores them with `seq` 0 (it cannot resolve another machine's directories);
+- `{"type":"summary", day, engine, text, created, seq}` — a kept day or period summary (`summary` row) changed after
+  `since` (`meta` `summary_seq:<day>`; `since` 0 sends all): `day` = `YYYY-MM-DD` or `from..to`, `text` = the
+  `SummaryDoc` JSON (`Notify/SummaryDoc.swift`); the client stores it as its `summary` row of that day and engine;
 - `{"type":"limit", tool, window, used_pct, resets_at, window_minutes, ts}` — the latest reading per (tool, window),
   in every export;
 - unknown line types and keys must be ignored (the format only grows).

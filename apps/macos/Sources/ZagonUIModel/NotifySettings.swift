@@ -7,6 +7,8 @@ import ZagonCore
 ///     limit_reset = true
 ///     [notify.limits]
 ///     claude.five_hour = [80, 95]    # 50…100 in steps of 5, [] = off, missing = [80, 95]
+///     [summary]
+///     time = "20:00"                 # when the day summary is written ("" = off)
 ///
 /// Editing touches only these lines; everything else in the file stays as it is.
 public struct NotifySettings: Sendable, Equatable {
@@ -16,9 +18,11 @@ public struct NotifySettings: Sendable, Equatable {
 
     public var thresholds: [String: [Int]]
     public var limitReset: Bool
+    /// The day summary's time in minutes after midnight; nil = off.
+    public var summaryAt: Int?
 
-    public init(thresholds: [String: [Int]] = [:], limitReset: Bool = true) {
-        self.thresholds = thresholds; self.limitReset = limitReset
+    public init(thresholds: [String: [Int]] = [:], limitReset: Bool = true, summaryAt: Int? = 20 * 60) {
+        self.thresholds = thresholds; self.limitReset = limitReset; self.summaryAt = summaryAt
     }
 
     public func thresholds(_ category: String) -> [Int] { thresholds[category] ?? Self.defaults }
@@ -77,7 +81,7 @@ public struct NotifySettings: Sendable, Equatable {
     /// Read exactly as the notifier reads it (`NotifyConfig`).
     public static func parse(_ toml: String) -> NotifySettings {
         let c = NotifyConfig.parse(toml, home: "")
-        var s = NotifySettings(limitReset: c.limitReset)
+        var s = NotifySettings(limitReset: c.limitReset, summaryAt: c.summaryAt)
         for cat in categories {
             if let v = c.limits[cat] { s.thresholds[cat] = Set(v.map { Int($0) }.filter { steps.contains($0) }).sorted() }
         }
@@ -90,6 +94,7 @@ public struct NotifySettings: Sendable, Equatable {
         let was = Self.parse(toml)
         var out = toml
         if limitReset != was.limitReset { out = TOMLLines.set(out, "notify", "limit_reset", limitReset ? "true" : "false") }
+        if summaryAt != was.summaryAt { out = TOMLLines.set(out, "summary", "time", "\"" + (summaryAt.map(Self.clock) ?? "") + "\"") }
         for c in Self.categories where thresholds[c] != nil && thresholds(c) != was.thresholds(c) {
             out = TOMLLines.set(out, "notify.limits", c, "[" + thresholds(c).map(String.init).joined(separator: ", ") + "]")
         }

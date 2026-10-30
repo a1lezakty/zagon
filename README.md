@@ -63,8 +63,14 @@ The macOS app (sample data): the menu bar, then the Day, Week and Calendar windo
   outlives Claude Code's 30-day cleanup. Run the service with `zagon daemon --no-archive` to turn that off.
 - The daily summary written by an AI is one call a day on your own subscription: `claude -p --safe-mode` on a cheap
   model (no CLAUDE.md, hooks, plugins or MCP servers of yours), or `codex exec --ephemeral --ignore-user-config`.
-  It gets a compact digest: titles, projects, times, edited files, your commit subjects and the first words of the
-  day's first typed messages. With `[summary] engine = "none"` the summary is built without AI.
+  It gets a compact digest: titles, projects, branches, linked tasks (key and title), times, edited files, your
+  commit subjects and the first words (up to 120 characters, secrets redacted) of the day's first and last typed
+  messages. The summary is kept in the database and goes to the Mac app with the rest of the export; it may quote
+  those first words (the summary built without AI starts each card with them). The "what was done" points of a
+  linked task's card (not what it was or what is left) become that task's text for the day, which is also its
+  worklog text in Jira unless you set one by hand. A week,
+  a month or a range is one more call over the days' summaries. With `[summary] engine = "none"` the summary is
+  built without AI.
 - Your typed messages go into a contentless full-text index used for search: the words can be searched, the text
   itself is not kept. Pass `--no-index-prompts` to `zagon scan` / `zagon daemon` to turn that off.
 - Data lives in `~/.zagon` (or `$ZAGON_DIR`): `zagon.db`, `spool/`, `archive/`, `logs/`, `config.toml`, `backup/`.
@@ -146,7 +152,10 @@ zagon day 2026-10-29           # any day
 zagon week --end 2026-10-29    # seven days vs the seven before
 zagon sessions --limit 10      # recent sessions; --day YYYY-MM-DD for one day
 zagon scan                     # read new data once (reports do this anyway unless --no-scan)
-zagon summary 2026-10-29       # what was done that day; --engine claude|codex|none, --png ribbon.png, --send
+zagon summary 2026-10-29       # what was done that day: an overview and a card per task or theme (was / done / left,
+                               #   time, $); kept, --refresh writes it again; --engine claude|codex|none, --png, --send
+zagon summary --week 2026-10-29  # the week of that day; --month 2026-10, --from A --to B; --plan: AI calls it takes
+zagon summary --at 21:00       # when the service writes the day summary (off = never)
 zagon archive stats            # archived sessions, bytes before / after compression
 zagon archive cat <session>    # print an archived transcript (id or a unique prefix)
 zagon notify test              # a test message to every configured channel
@@ -228,7 +237,7 @@ The service sends alerts through your own Telegram bot or an [ntfy](https://ntfy
   session …" and sends no such alert; a leader killed without `SessionEnd` releases its workers after 12 hours;
 - a turn that worked longer than 15 minutes has finished, and its sub-agents and background commands too (not for
   a worker another session drives: that session watches it);
-- the day summary at 20:00, with a picture of the day.
+- the day summary at 20:00, with a picture of the day (written at that time even with no channel configured).
 
 Nothing is sent during quiet hours (23:00–08:00). Keep notifications on one host only. Every key in
 `~/.zagon/config.toml` is optional; the main ones with their defaults:
@@ -265,9 +274,11 @@ url = "https://ntfy.sh"
 engine = "claude"           # claude | codex | none
 model = "haiku"
 timeout = 120               # seconds; on failure the summary is built without AI
+time = "20:00"              # when the service writes the day summary ("" = off); also `zagon summary --at`
 ```
 
-Check with `zagon notify test`. The service reads the file when it starts, so restart it after a change.
+Check with `zagon notify test`. The service reads the file when it starts, so restart it after a change
+(`[summary] time` and the time zone are picked up without a restart).
 
 ## macOS app
 

@@ -36,9 +36,13 @@ final class StoreDataProviderTests: XCTestCase {
         XCTAssertEqual(day.usage(.model).map(\.name), ["Opus 5.5", "Sonnet 5.5", "Haiku 4.5"])
         XCTAssertEqual(day.usage(.agent).map(\.name), ["main thread", "agent-a7f3"])
         XCTAssertTrue(day.usage(.tool).allSatisfy { $0.tokens.hasSuffix(" calls") && $0.cost.isEmpty })
-        XCTAssertEqual(day.done(titles: true).first?.project, "tracker")
         XCTAssertFalse(day.hasSummary)
-        XCTAssertEqual(day.done(titles: false).first?.project, "tracker")
+        XCTAssertNil(day.summaryNote)
+        // Without a written summary: projects with their sessions' time and branch, most time first.
+        XCTAssertEqual(Set(day.projects.map(\.name)), ["api-server", "web-app", "ml-train", "docs-site", "cli-tool", "tracker"])
+        XCTAssertTrue(day.projects.allSatisfy { !$0.sessions.isEmpty && !$0.numbers.isEmpty })
+        XCTAssertTrue(day.projects.flatMap(\.sessions).contains { $0.hasSuffix(" · PROJ-12-check") })
+        XCTAssertTrue(day.markdown.contains("## What was done\n\n### "))
         XCTAssertEqual(day.usage(.project).count, 5)
         XCTAssertEqual(day.usage(.project).last?.name, "other")
         XCTAssertFalse(day.isEmpty)
@@ -155,7 +159,5 @@ final class StoreDataProviderTests: XCTestCase {
         XCTAssertEqual(StoreDataProvider.title("PROJ-12", "api-server", "claude:x"), "api-server — PROJ-12")
         XCTAssertEqual(StoreDataProvider.title("api-server fixes", "api-server", "claude:x"), "api-server fixes")
         XCTAssertEqual(StoreDataProvider.title(nil, nil, "claude:0123456789"), "01234567")
-        XCTAssertEqual(StoreDataProvider.doneItems("- zagon: mockups\nplain line\n\n").map { [$0.project, $0.text] },
-                       [["zagon", "mockups"], ["", "plain line"]])
     }
 }
