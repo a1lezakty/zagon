@@ -226,13 +226,40 @@ public struct Installer {
             log(rc == 0 ? "service: \(Sys.basename(systemUnit)) enabled" : "service: enabling the system unit failed (\(rc))")
         } else if forOther {
             log("service: as \(userName): systemctl --user enable --now zagon.service (or here: --system-service)")
+            lingerNote().map(log)
         } else {
             _ = runner([sc, "--user", "daemon-reload"])
             let rc = runner([sc, "--user", "enable", "--now", "zagon.service"])
             log(rc == 0 ? "service: zagon.service enabled (systemd --user)"
                 : "service: systemd --user is not available (\(rc)); sudo zagon install --system-service --enable-service")
+            if rc == 0 { lingerNote().map(log) }
         }
         #endif
+    }
+
+    /// Keeps `exe` as `<exe>.prev` (a hard link, else a copy) for `zagon update`. The old .prev is replaced only once the
+    /// copy is complete, so a failure keeps it. Returns the .prev path, nil when it could not be kept.
+    public static func keepPrevious(_ exe: String) -> String? {
+        let prev = exe + ".prev", tmp = prev + ".new"
+        _ = Sys.remove(tmp)
+        // Also after success: a rename between two links of one file (.prev already that binary) does nothing and
+        // leaves the source in place.
+        defer { _ = Sys.remove(tmp) }
+        guard link(exe, tmp) == 0 || Sys.readFile(exe).map({ Sys.writeFile(tmp, $0, mode: 0o755) }) == true,
+              rename(tmp, prev) == 0 else { return nil }
+        return prev
+    }
+
+    /// systemd stops an account's --user services when its last login ends (ssh logout) unless it lingers; turning
+    /// that on needs root, so it is only advised. loginctl knows nothing of an account with no login (root installing
+    /// for another one): then the flag file `enable-linger` writes decides.
+    func lingerNote() -> String? {
+        guard let lc = Sys.which("loginctl", path: o.searchPath) else { return nil }
+        let r = Sys.capture([lc, "show-user", userName, "-p", "Linger", "--value"], timeout: 10)
+        let no = r.status == 0 ? String(decoding: r.out, as: UTF8.self).split(whereSeparator: \.isWhitespace) == ["no"]
+            : !Sys.exists("/var/lib/systemd/linger/" + userName)
+        guard no else { return nil }
+        return "service: it stops when you log out of ssh; to keep it running: sudo loginctl enable-linger \(userName)"
     }
 
     func unitText(system: Bool) -> String {

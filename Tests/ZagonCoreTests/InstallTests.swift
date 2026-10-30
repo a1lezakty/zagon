@@ -197,6 +197,42 @@ import Testing
         #expect(offCalls.argv.isEmpty)
     }
 
+    /// `zagon update` keeps the old binary as .prev and leaves no .prev.new behind, also when .prev is already a link
+    /// to it (rename between two links of one file does nothing).
+    @Test func keepPreviousLeavesNoTemporaryFile() throws {
+        let dir = makeTempDir(), exe = dir + "/zagon"
+        Sys.writeFile(exe, Array("v1".utf8), mode: 0o755)
+        #expect(Installer.keepPrevious(exe) == exe + ".prev")
+        #expect(Sys.readFile(exe + ".prev") == Array("v1".utf8) && !Sys.exists(exe + ".prev.new"))
+        #expect(Installer.keepPrevious(exe) == exe + ".prev")  // .prev is now a link to exe
+        #expect(Sys.readFile(exe + ".prev") == Array("v1".utf8) && !Sys.exists(exe + ".prev.new"))
+        #expect(Installer.keepPrevious(dir + "/missing") == nil && !Sys.exists(dir + "/missing.prev.new"))
+    }
+
+    #if os(Linux)
+    /// A --user service stops at ssh logout unless the account lingers: install says how to turn it on, never runs sudo.
+    @Test func userServiceWithoutLingerIsAdvised() throws {
+        let (home, o0) = setUp()
+        var o = o0
+        o.searchPath = home + "/fake-bin"; o.enableService = true; o.mcp = false
+        Sys.mkdirs(o.searchPath!)
+        Sys.writeFile(o.searchPath! + "/systemctl", [0], mode: 0o755)
+        func run(linger: String) throws -> [String] {
+            Sys.writeFile(o.searchPath! + "/loginctl", Array("#!/bin/sh\necho \(linger)\n".utf8), mode: 0o755)
+            var lines: [String] = []
+            var i = installer(o)
+            i.log = { lines.append($0) }
+            try i.install()
+            return lines
+        }
+        let advice = "sudo loginctl enable-linger \(Installer(o).userName)"
+        #expect(try run(linger: "no").contains { $0.hasSuffix(advice) })
+        #expect(try !run(linger: "yes").contains { $0.contains("linger") })
+        // An account with no login: loginctl fails, and no flag file says it lingers.
+        #expect(try run(linger: "x; exit 1").contains { $0.hasSuffix(advice) } == !Sys.exists("/var/lib/systemd/linger/root"))
+    }
+    #endif
+
     @Test func refusesBrokenJSON() throws {
         let (home, o) = setUp()
         Sys.writeFile(home + "/.claude/settings.json", Array("{\"a\": 1,}".utf8))

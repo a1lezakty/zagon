@@ -64,13 +64,8 @@ struct UpdateCommand: ParsableCommand {
         guard probe.status == 0 else { throw InstallError("the downloaded binary does not run here (exit \(probe.status)): nothing replaced") }
         let new = String(decoding: probe.out, as: UTF8.self).split(separator: "\n").first.map(String.init) ?? "?"
 
-        // The old binary becomes .prev only once its copy is complete: a failure here keeps the previous .prev.
-        let prev = exe + ".prev", prevTmp = prev + ".new"
-        _ = Sys.remove(prevTmp)
-        guard link(exe, prevTmp) == 0 || Sys.readFile(exe).map({ Sys.writeFile(prevTmp, $0, mode: 0o755) }) == true,
-              rename(prevTmp, prev) == 0 else {
-            _ = Sys.remove(prevTmp)
-            throw InstallError("cannot keep the old binary as \(prev): nothing replaced")
+        guard let prev = Installer.keepPrevious(exe) else {
+            throw InstallError("cannot keep the old binary as \(exe).prev: nothing replaced")
         }
         guard rename(tmp, exe) == 0 else { throw InstallError("cannot replace \(exe) (errno \(errno))") }
         print("zagon \(zagonVersion) -> \(new) (\(exe); the old one is \(Sys.basename(prev)))")
