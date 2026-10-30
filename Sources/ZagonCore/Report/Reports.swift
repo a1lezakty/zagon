@@ -96,7 +96,7 @@ public struct WeekReport: Codable, Sendable {
     public var cost = 0.0, unpriced = 0
     public var sessionSec: Double, userSec: Double
     public var previous: TokenTotals
-    public var previousCost = 0.0
+    public var previousCost = 0.0, previousUnpriced = 0
     public var previousSessionSec: Double, previousUserSec: Double
     public var projects: [ProjectLine]
 }
@@ -215,13 +215,13 @@ public struct Reports {
                 } else { projects.append(p) }
             }
         }
-        var prev = TokenTotals(), pss = 0.0, pus = 0.0, pcost = 0.0
+        var prev = TokenTotals(), pss = 0.0, pus = 0.0, pcost = 0.0, punpriced = 0
         for k in 1...7 {
             let r = try self.day(Time.addDays(start, -k) ?? start, withSessions: false)
-            prev.add(r.tokens); pss += r.sessionSec; pus += r.userSec; pcost += r.cost
+            prev.add(r.tokens); pss += r.sessionSec; pus += r.userSec; pcost += r.cost; punpriced += r.unpriced
         }
         projects.sort { ($0.tokens.total, $0.sessionSec) > ($1.tokens.total, $1.sessionSec) }
         return WeekReport(from: start, to: end, days: days, tokens: tokens, cost: cost, unpriced: unpriced, sessionSec: ss, userSec: us,
-                          previous: prev, previousCost: pcost, previousSessionSec: pss, previousUserSec: pus, projects: projects)
+                          previous: prev, previousCost: pcost, previousUnpriced: punpriced, previousSessionSec: pss, previousUserSec: pus, projects: projects)
     }
 }

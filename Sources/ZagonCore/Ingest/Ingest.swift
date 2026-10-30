@@ -99,14 +99,15 @@ public final class Ingest {
 
     /// Bumped when the rules that build day rows change, so every day is rebuilt once as for a new zone. 2: a directory
     /// outside the session's start folder counts for its git checkout.
-    static let dayRules = "2"
+    static let dayRules = 2
 
     /// Days are cut in the zone of this process. When it differs from the one the day rows were built in (or that
     /// is unknown), or the rows were built by older `dayRules`, every day of this host is rebuilt by the next `finish()`.
+    /// Rules newer than this binary's (a newer Mac app beside an older CLI) are left alone, or the two would take turns.
     func checkTimezone(_ id: String = Settings.timezoneID()) throws {
         let stored = try db.one("SELECT value FROM meta WHERE key='tz'") { $0.text(0) } ?? nil
-        let rules = try db.one("SELECT value FROM meta WHERE key='day_rules'") { $0.text(0) } ?? nil
-        guard stored != id || rules != Self.dayRules else { return }
+        let rules = (try db.one("SELECT value FROM meta WHERE key='day_rules'") { $0.text(0) } ?? nil).flatMap { Int($0) } ?? 0
+        guard stored != id || rules < Self.dayRules else { return }
         try db.transaction {
             // Days this host has are rebuilt in the new zone, not deleted: one left empty keeps a zero totals row
             // (DayAggregator), so `export` tells clients to drop it.
@@ -117,11 +118,13 @@ public final class Ingest {
                         "SELECT \"end\" FROM activity", "SELECT ts FROM user_action"] {
                 try db.query(sql) { touchedHours.insert(Time.hour($0.real(0))) }
             }
-            try db.run("INSERT INTO meta(key, value) VALUES('tz', ?1) ON CONFLICT(key) DO UPDATE SET value = ?1", [.text(id)])
-            try db.run("INSERT INTO meta(key, value) VALUES('day_rules', ?1) ON CONFLICT(key) DO UPDATE SET value = ?1",
-                       [.text(Self.dayRules)])
         }
+        rebuiltZone = id
     }
+
+    /// The zone of the days `checkTimezone` asked for: `finish()` writes it to `meta.tz`, with `dayRules`, together with
+    /// the rebuilt days. A run stopped before that leaves the old values, so the next one rebuilds again.
+    var rebuiltZone: String?
 
     // MARK: one file
 
@@ -684,8 +687,16 @@ public final class Ingest {
                 let agg = DayAggregator(db: db, host: host, dirs: try Projects.load(db))  // all hosts: rows carry theirs
                 for d in days.sorted() { try agg.rebuild(day: d, seq: seq) }
             }
+            if let z = rebuiltZone {
+                try db.run("INSERT INTO meta(key, value) VALUES('tz', ?1) ON CONFLICT(key) DO UPDATE SET value = ?1", [.text(z)])
+                // never lowered: a newer zagon on the same database may have written its rules meanwhile
+                try db.run("""
+                    INSERT INTO meta(key, value) VALUES('day_rules', ?1)
+                    ON CONFLICT(key) DO UPDATE SET value = max(CAST(value AS INTEGER), ?1)
+                    """, [.int(Int64(Self.dayRules))])
+            }
         }
-        touchedHours.removeAll(); touchedSessions.removeAll(); userActionsChanged = false
+        touchedHours.removeAll(); touchedSessions.removeAll(); userActionsChanged = false; rebuiltZone = nil
     }
 
     // MARK: helpers
