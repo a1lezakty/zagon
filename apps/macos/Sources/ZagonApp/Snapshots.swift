@@ -72,26 +72,20 @@ enum Snapshots {
     }
 
     /// The app icon at 1024, and at 16…256 px as Finder shows it on a light and a dark window.
-    /// `-pair`: the rings side by side, for comparison.
     static func appIcon(_ dir: URL) -> Bool {
         let sizes: [CGFloat] = [16, 32, 64, 128, 256]
-        var ok = true
-        for pair in [false, true] {
-            let rows = VStack(spacing: 0) {
-                ForEach([0xF5F5F7, 0x1E1E22] as [UInt32], id: \.self) { bg in
-                    HStack(alignment: .bottom, spacing: 24) {
-                        ForEach(sizes, id: \.self) { AppIconView(px: $0, pair: pair) }
-                    }
-                    .padding(24)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(hex: bg))
+        let rows = VStack(spacing: 0) {
+            ForEach([0xF5F5F7, 0x1E1E22] as [UInt32], id: \.self) { bg in
+                HStack(alignment: .bottom, spacing: 24) {
+                    ForEach(sizes, id: \.self) { AppIconView(px: $0) }
                 }
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(hex: bg))
             }
-            let name = pair ? "app-icon-pair" : "app-icon"
-            ok = write(AppIconView(px: 1024, pair: pair), width: 1024, scale: 1, name, dir)
-                && write(rows, width: 640, scale: 1, name + "-sizes", dir) && ok
         }
-        return ok
+        return write(AppIconView(px: 1024), width: 1024, scale: 1, "app-icon", dir)
+            && write(rows, width: 640, scale: 1, "app-icon-sizes", dir)
     }
 
     static func screens(_ state: AppState, query: String, prefix: String, _ lang: Lang, _ dir: URL) -> Bool {
