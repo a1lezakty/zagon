@@ -97,11 +97,16 @@ public final class Ingest {
         return stats
     }
 
+    /// Bumped when the rules that build day rows change, so every day is rebuilt once as for a new zone. 2: a directory
+    /// outside the session's start folder counts for its git checkout.
+    static let dayRules = "2"
+
     /// Days are cut in the zone of this process. When it differs from the one the day rows were built in (or that
-    /// is unknown), every day of this host is rebuilt by the next `finish()`.
+    /// is unknown), or the rows were built by older `dayRules`, every day of this host is rebuilt by the next `finish()`.
     func checkTimezone(_ id: String = Settings.timezoneID()) throws {
         let stored = try db.one("SELECT value FROM meta WHERE key='tz'") { $0.text(0) } ?? nil
-        guard stored != id else { return }
+        let rules = try db.one("SELECT value FROM meta WHERE key='day_rules'") { $0.text(0) } ?? nil
+        guard stored != id || rules != Self.dayRules else { return }
         try db.transaction {
             // Days this host has are rebuilt in the new zone, not deleted: one left empty keeps a zero totals row
             // (DayAggregator), so `export` tells clients to drop it.
@@ -113,6 +118,8 @@ public final class Ingest {
                 try db.query(sql) { touchedHours.insert(Time.hour($0.real(0))) }
             }
             try db.run("INSERT INTO meta(key, value) VALUES('tz', ?1) ON CONFLICT(key) DO UPDATE SET value = ?1", [.text(id)])
+            try db.run("INSERT INTO meta(key, value) VALUES('day_rules', ?1) ON CONFLICT(key) DO UPDATE SET value = ?1",
+                       [.text(Self.dayRules)])
         }
     }
 

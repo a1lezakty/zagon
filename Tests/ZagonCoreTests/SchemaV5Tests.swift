@@ -26,9 +26,9 @@ func channelText(_ s: String) -> String {
         #expect(Array(odd.utf8).withUnsafeBytes { ClaudeParser.scan($0, wantText: false) } == nil)
         #expect(parse([odd]).usage.map(\.cacheWrite1h) == [20])
 
-        // Opus: 5-minute writes 1.25x input ($6.25 / M), 1-hour writes 2x ($10 / M).
+        // Opus 4.1: 5-minute writes 1.25x input ($18.75 / M), 1-hour writes 2x ($30 / M).
         #expect(Pricing.cost(model: "claude-opus-4-1", input: 0, output: 0, cacheRead: 0, cacheWrite: 3_000_000,
-                             cacheWrite1h: 1_000_000) == 2 * 6.25 + 10)
+                             cacheWrite1h: 1_000_000) == 2 * 18.75 + 30)
         #expect(Pricing.cost(model: "claude-sonnet-4-5", input: 0, output: 0, cacheRead: 0, cacheWrite: 1_000_000,
                              cacheWrite1h: 1_000_000) == 6)
     }
@@ -43,7 +43,7 @@ func channelText(_ s: String) -> String {
         env.scan()
         let r = try Reports(store: env.store).day("2026-10-20")
         #expect(r.tokens.cacheWrite == 1_000_000 && r.tokens.cacheWrite1h == 1_000_000 && r.tokens.requests == 1)
-        let want = 5.0 + 25 + 10  // input, output, 1-hour writes of Opus
+        let want = 15.0 + 75 + 30  // input, output, 1-hour writes of Opus 4.1
         #expect(abs(r.cost - want) < 1e-9 && abs((r.models.first?.cost ?? 0) - want) < 1e-9)
         #expect(abs((r.projects.first?.cost ?? 0) - want) < 1e-9)
         #expect(abs(try Query(store: env.store).day("2026-10-20").cost - want) < 1e-9)
@@ -51,6 +51,23 @@ func channelText(_ s: String) -> String {
         #expect(s.count == 1 && abs(s[0].cost - want) < 1e-9)
         let w = try Reports(store: env.store).week(ending: "2026-10-20")
         #expect(abs(w.cost - want) < 1e-9 && abs((w.days.last?.cost ?? 0) - want) < 1e-9)
+        #expect(r.unpriced == 0 && s[0].unpriced == 0 && w.unpriced == 0)
+    }
+
+    @Test func aModelWithNoPriceIsUnpricedNotFree() throws {
+        let env = ClaudeEnv()
+        env.write(mainFile, lines: [typed(T0),
+                                    assistantLine(T0 + minute, id: "m1", input: 1_000_000),
+                                    assistantLine(T0 + 2 * minute, id: "m2", model: "claude-future-9", input: 7, output: 3)])
+        env.scan()
+        let r = try Reports(store: env.store).day("2026-10-20")
+        #expect(abs(r.cost - 15) < 1e-9 && r.unpriced == 10)
+        #expect(r.models.first { $0.model == "claude-future-9" }.map { ($0.cost, $0.unpriced) } ?? (1, 0) == (0, 10))
+        #expect(r.models.first { $0.model == "claude-opus-4-1" }?.unpriced == 0)
+        #expect(r.projects.first?.unpriced == 10)
+        #expect(try Reports(store: env.store).sessions(from: T0 - hour, to: T0 + hour).first?.unpriced == 10)
+        let w = try Reports(store: env.store).week(ending: "2026-10-20")
+        #expect(w.unpriced == 10 && w.days.last?.unpriced == 10 && w.projects.first?.unpriced == 10)
     }
 
     // MARK: project by the directory of each segment
@@ -339,6 +356,28 @@ func channelText(_ s: String) -> String {
         #expect(!Projects.resolve(h + "/repo", home: h).home)
     }
 
+    @Test func foldersThatAskForAccessOnMacAreKnownByPath() {
+        let homes: Set<String> = ["/Users/u"]
+        for p in ["/Users/u/Documents", "/Users/u/Documents/proj/src", "/Users/u/Desktop/x", "/Users/u/Downloads/y",
+                  "/Users/u/Library/Mobile Documents/com~apple~CloudDocs/z", "/Users/u/Library/CloudStorage/Drive/w",
+                  "/Volumes/usb/proj", "/Network/share/proj"] {
+            #expect(Projects.guarded(p, homes: homes), "\(p)")
+        }
+        for p in ["/Users/u", "/Users/u/work/proj", "/Users/u/DocumentsOld/x", "/Users/u/Library/Caches", "/Users/v/Documents/x"] {
+            #expect(!Projects.guarded(p, homes: homes), "\(p)")
+        }
+    }
+
+    @Test func daysBuiltByOlderRulesAreRebuiltOnce() throws {
+        let env = ClaudeEnv()
+        env.write(mainFile, lines: [typed(T0), assistantLine(T0 + minute, id: "m1", output: 5)])
+        env.scan()
+        try env.store.db.exec("UPDATE day_agg SET project = 'stale' WHERE project != ''; UPDATE meta SET value = '1' WHERE key = 'day_rules'")
+        env.scan()
+        #expect(env.int("SELECT count(*) FROM day_agg WHERE project = 'stale'") == 0)
+        #expect(try env.store.db.one("SELECT value FROM meta WHERE key = 'day_rules'") { $0.text(0) } == Ingest.dayRules)
+    }
+
     @Test func aSessionStartedAtHomeCountsEachCheckout() throws {
         let h = homeTree()
         let env = ClaudeEnv { $0.home = h }
@@ -347,7 +386,7 @@ func channelText(_ s: String) -> String {
                                         assistantLine(T0 + 2 * minute, id: "h2", output: 10, session: "H", cwd: h + "/repo/src/deep"),
                                         assistantLine(T0 + 3 * minute, id: "h3", output: 100, session: "H", cwd: h + "/wt/x"),
                                         assistantLine(T0 + 4 * minute, id: "h4", output: 1000, session: "H", cwd: h + "/notes")])
-        // A session started in a project folder keeps the old rule: inside it, its project; outside, the last component.
+        // A session started in a project folder: inside it, its project; outside, the checkout of each directory.
         env.write("-r/R.jsonl", lines: [typed(T0, session: "R", cwd: h + "/repo"),
                                         // the call that runs `cd` is still in the start folder
                                         assistantLine(T0 + 30, id: "r0", session: "R", cwd: h + "/repo"),
@@ -355,7 +394,7 @@ func channelText(_ s: String) -> String {
                                         assistantLine(T0 + 2 * minute, id: "r2", output: 4, session: "R", cwd: h + "/wt/x")])
         env.scan()
         let home = Sys.basename(h)
-        let want = [home: 1, "repo": 13, "main": 100, "notes": 1000, "x": 4]
+        let want = [home: 1, "repo": 13, "main": 104, "notes": 1000]
         let r = try Reports(store: env.store).day("2026-10-20")
         #expect(Dictionary(uniqueKeysWithValues: r.projects.map { ($0.project, $0.tokens.output) }) == want)
         let q = try Query(store: env.store).day("2026-10-20")

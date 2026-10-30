@@ -88,7 +88,9 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
 - `dir_project(host, cwd, project, home, seq)` (v5, PK `(host, cwd)`) — every directory a record carried, resolved once
   by Ingest on the machine that recorded it, while it is on disk (`Projects.resolve`): `project` = the top of its git checkout (a
   `.git` directory; a worktree's `.git` file → `commondir` → its main checkout's name; a submodule: its own; a
-  checkout at the home directory itself is not used), else the directory's last component (also when it is gone);
+  checkout at the home directory itself is not used), else the directory's last component (also when it is gone; on
+  macOS also, without touching the disk, under the folders that ask for access: `~/Desktop`, `~/Documents`,
+  `~/Downloads`, `~/Library/Mobile Documents`, `~/Library/CloudStorage`, `/Volumes`, `/Network`);
   `home` = 1 for the home directory (`IngestOptions.home`, else `$HOME`, also as its real path) and `/`. Looked up by
   the session's host. Exported, so a client counts another machine's directories the same way.
   `activity.cwd` (v4): the directory the interval was worked in; a new directory inside a turn splits the interval
@@ -107,9 +109,9 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   each interval's `activity.cwd` (union per session and project, so parallel sub-agents in two directories count in
   both; the totals row stays the union per session), by `Projects.of`: an unknown directory counts for the session's
   project; for a session that started in a folder that is not `home` in `dir_project`, a directory inside that folder
-  (`cd src`) counts for the session's project and any other for its own last component; for a session started in the
-  home directory or `/` (one that works in many projects), each directory counts for its `dir_project.project`. Tool
-  calls go to the session's project. `cache_write_1h` (v5) as in `usage_hour`.
+  (`cd src`) counts for the session's project; any other directory, and every directory of a session started in the
+  home directory or `/` (one that works in many projects), counts for its `dir_project.project` (its last component
+  when not resolved). Tool calls go to the session's project. `cache_write_1h` (v5) as in `usage_hour`.
 - `limit_snapshot`, `task*`, `worklog_plan`, `summary`, `handoff`, `fts` (contentless FTS5) + `fts_doc`.
 
 ## Time rules
@@ -140,7 +142,8 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   Channel messages are always yours.
 - days are local days in the top-level `timezone` of config.toml (the older `[notify] timezone` is still read),
   else `TZ` / `/etc/localtime`; every command applies it at start (`Settings.applyTimezone`). The zone the day rows
-  were built in is kept in `meta.tz`; a scan in another zone rebuilds all days of the host
+  were built in is kept in `meta.tz`, the version of the rules that build them in `meta.day_rules`
+  (`Ingest.dayRules`); a scan in another zone or with newer rules rebuilds all days of the host
   (one left empty keeps a zero totals row, so `export` tells clients). The zone is set by
   `zagon tz`, the bot's `/tz` and MCP `settings_timezone` (`Settings.setTimezone`); `zagon daemon` sees the change
   within ~10 s and restarts itself in place (`execve`, same pid), `zagon notify` switches in its loop. Usage is bucketed by UTC
