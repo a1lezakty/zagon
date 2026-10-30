@@ -1,7 +1,7 @@
 /// Rebuilds `day_agg` rows of one local day and host from usage_hour, tool_use, activity and user_activity of the
 /// sessions of that host (rows imported from other machines carry their own host in `session.host`). Tokens and session
 /// time go to the project of the directory each request / interval was in (`usage_hour.cwd`, `activity.cwd`, see
-/// `Projects`); rows without one (before v5, imports) and tool calls go to the session's project.
+/// `Projects`); rows without one (before v5, imports) and tool calls go to the project of the session's start folder.
 struct DayAggregator {
     let db: SQLite
     let host: String
@@ -29,7 +29,8 @@ struct DayAggregator {
         }
         var total = Row()
         try db.query("""
-            SELECT coalesce(s.tool,''), coalesce(s.project,''), sum(t.n) FROM tool_use t LEFT JOIN session s ON s.id = t.session_id
+            SELECT coalesce(s.tool,''), coalesce(\(Projects.sessionSQL()),''), sum(t.n) FROM tool_use t
+            LEFT JOIN session s ON s.id = t.session_id
             WHERE t.hour >= ?1 AND t.hour < ?2 AND coalesce(s.host, ?3) = ?3 GROUP BY 1, 2
             """, [.real(s), .real(e), .text(host)]) { r in
             rows[Key(tool: r.text(0) ?? "", project: r.text(1) ?? "", model: ""), default: Row()].toolCalls += r.int(2)

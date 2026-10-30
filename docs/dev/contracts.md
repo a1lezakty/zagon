@@ -81,14 +81,19 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
 - `session` — rolled up from files; `status`/`status_at` belong to hooks and are never touched by ingest;
   `archived` (v2) NULL = unknown, 0/1 from `SessionMeta.archived`. `cwd`/`project` = the directory the session
   started in (its earliest `activity.cwd`; a later `cd` does not move it), else the last one a parser reported.
+  `project` stays the parser's name (the folder's last component); reports, the live list and MCP show the project
+  of `cwd` in `dir_project` instead, when there is one (`Projects.sessionSQL`).
   `user_msgs` = the human's messages (`msg` not relayed, plus `channel`).
 - `activity(kind = working | waiting)`, `user_action(kind = msg | channel | read)`, `user_activity` (derived: your
   time, see Time rules).
 - `relay(file_id, session_id, ts, target)` (v5) — one row per `Relay` target.
 - `dir_project(host, cwd, project, home, seq)` (v5, PK `(host, cwd)`) — every directory a record carried, resolved once
-  by Ingest on the machine that recorded it, while it is on disk (`Projects.resolve`): `project` = the top of its git checkout (a
-  `.git` directory; a worktree's `.git` file → `commondir` → its main checkout's name; a submodule: its own; a
-  checkout at the home directory itself is not used), else the directory's last component (also when it is gone; on
+  by Ingest on the machine that recorded it, while it is on disk (`Projects.resolve`): inside a git checkout (a
+  `.git` directory; a worktree's `.git` file → `commondir` → its main checkout; a submodule: its own; a checkout at
+  the home directory itself is not used) `project` = the repository's name, the last segment of `url` in
+  `[remote "origin"]` of its git config without `.git`, else the checkout's folder name (a worktree: its main
+  checkout's); outside one, `(temp)` under `/tmp`, `/var/tmp`, `$TMPDIR`, `/var/folders` (also under `/private`) and
+  `~/.claude` (a home directory inside them excepted), else the directory's last component (also when it is gone; on
   macOS also, without touching the disk, under the folders that ask for access: `~/Desktop`, `~/Documents`,
   `~/Downloads`, `~/Library/Mobile Documents`, `~/Library/CloudStorage`, `/Volumes`, `/Network`);
   `home` = 1 for the home directory (`IngestOptions.home`, else `$HOME`, also as its real path) and `/`. Looked up by
@@ -107,11 +112,12 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   (tool, project); the `tool = project = model = ''` row holds the day totals `session_sec` and `user_sec`. `seq`
   = change counter. The project of tokens is the one of each request's `usage_hour.cwd`, of session time the one of
   each interval's `activity.cwd` (union per session and project, so parallel sub-agents in two directories count in
-  both; the totals row stays the union per session), by `Projects.of`: an unknown directory counts for the session's
-  project; for a session that started in a folder that is not `home` in `dir_project`, a directory inside that folder
-  (`cd src`) counts for the session's project; any other directory, and every directory of a session started in the
-  home directory or `/` (one that works in many projects), counts for its `dir_project.project` (its last component
-  when not resolved). Tool calls go to the session's project. `cache_write_1h` (v5) as in `usage_hour`.
+  both; the totals row stays the union per session), by `Projects.of`. The session's own project is the
+  `dir_project.project` of the folder it started in (`session.cwd`), else `session.project`: an unknown directory
+  counts for it; for a session that started in a folder that is not `home` in `dir_project`, so does a directory
+  inside that folder (`cd src`); any other directory, and every directory of a session started in the home directory
+  or `/` (one that works in many projects), counts for its own `dir_project.project` (its last component when not
+  resolved). Tool calls go to the session's own project. `cache_write_1h` (v5) as in `usage_hour`.
 - `limit_snapshot`, `task*`, `worklog_plan`, `summary`, `handoff`, `fts` (contentless FTS5) + `fts_doc`.
 
 ## Time rules
@@ -144,7 +150,9 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   else `TZ` / `/etc/localtime`; every command applies it at start (`Settings.applyTimezone`). The zone the day rows
   were built in is kept in `meta.tz`, the version of the rules that build them in `meta.day_rules`
   (`Ingest.dayRules`, an integer; never lowered); a scan in another zone or with newer rules rebuilds all days of the
-  host and writes both values only together with the rebuilt days
+  host and writes both values only together with the rebuilt days. Rules 3 first resolve this host's `dir_project`
+  rows again (directories still on disk, and gone ones that had only their last component; changed rows get a new
+  `seq`)
   (one left empty keeps a zero totals row, so `export` tells clients). The zone is set by
   `zagon tz`, the bot's `/tz` and MCP `settings_timezone` (`Settings.setTimezone`); `zagon daemon` sees the change
   within ~10 s and restarts itself in place (`execve`, same pid), `zagon notify` switches in its loop. Usage is bucketed by UTC

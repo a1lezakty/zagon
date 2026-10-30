@@ -180,8 +180,8 @@ public struct Reports {
         var out: [SessionLine] = []
         for id in ids {
             try db.query("""
-                SELECT id, tool, title, project, git_branch, model, status, started_at, last_at, user_msgs, archived,
-                       status_detail FROM session WHERE id=?
+                SELECT id, tool, title, \(Projects.sessionSQL("session")), git_branch, model, status, started_at, last_at,
+                       user_msgs, archived, status_detail FROM session WHERE id=?
                 """, [.text(id)]) { r in
                 out.append(SessionLine(id: id, tool: r.text(1) ?? "", title: r.text(2), project: r.text(3), gitBranch: r.text(4),
                                        model: r.text(5), status: r.text(6), statusDetail: r.text(11),

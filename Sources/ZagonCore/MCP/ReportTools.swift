@@ -306,8 +306,9 @@ final class ReportTools {
         var out = ["\(hits.count) sessions match \"\(text)\"" + (hits.count > limit ? ", showing \(limit)" : "") + ":"]
         let t = now()
         for h in hits.prefix(limit) {
-            guard let s = try store.db.one("SELECT tool, title, project, git_branch, last_at, cwd FROM session WHERE id=?",
-                                           [.text(h.sessionId)], { r in
+            guard let s = try store.db.one("""
+                SELECT tool, title, \(Projects.sessionSQL("session")), git_branch, last_at, cwd FROM session WHERE id=?
+                """, [.text(h.sessionId)], { r in
                 (tool: r.text(0) ?? "", title: r.text(1), project: r.text(2), branch: r.text(3), last: r.optReal(4), cwd: r.text(5))
             }) else { continue }
             var parts = ["\(s.tool) \(Txt.shortId(h.sessionId))", s.title.map { "\"\(Txt.oneLine($0, 60))\"" } ?? "(untitled)",

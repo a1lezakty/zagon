@@ -98,8 +98,9 @@ public final class Ingest {
     }
 
     /// Bumped when the rules that build day rows change, so every day is rebuilt once as for a new zone. 2: a directory
-    /// outside the session's start folder counts for its git checkout.
-    static let dayRules = 2
+    /// outside the session's start folder counts for its git checkout. 3: projects by repository name, temporary folders
+    /// as one (`dir_project` resolved again).
+    static let dayRules = 3
 
     /// Days are cut in the zone of this process. When it differs from the one the day rows were built in (or that
     /// is unknown), or the rows were built by older `dayRules`, every day of this host is rebuilt by the next `finish()`.
@@ -109,6 +110,7 @@ public final class Ingest {
         let rules = (try db.one("SELECT value FROM meta WHERE key='day_rules'") { $0.text(0) } ?? nil).flatMap { Int($0) } ?? 0
         guard stored != id || rules < Self.dayRules else { return }
         try db.transaction {
+            if rules < 3 { try resolveDirsAgain() }
             // Days this host has are rebuilt in the new zone, not deleted: one left empty keeps a zero totals row
             // (DayAggregator), so `export` tells clients to drop it.
             try db.query("SELECT DISTINCT day FROM day_agg WHERE host=?", [.text(host)]) { r in
@@ -568,6 +570,28 @@ public final class Ingest {
             let d = Projects.resolve(c, home: home)
             try db.run("INSERT INTO dir_project(host, cwd, project, home, seq) VALUES(?, ?, ?, ?, ?)",
                        [.text(host), .text(c), .text(d.project), .int(d.home ? 1 : 0), .int(Int64(try store.nextSeq()))])
+        }
+    }
+
+    /// This machine's `dir_project` rows resolved by the current rules: those still on disk, and gone ones that counted
+    /// by their last component (a temporary folder becomes `Projects.temp`); a gone checkout keeps the name it had.
+    func resolveDirsAgain() throws {
+        let home = options.home ?? Sys.env("HOME") ?? ""
+        var changed: [(cwd: String, project: String)] = []
+        try db.query("SELECT cwd, project FROM dir_project WHERE host = ?", [.text(host)]) { r in
+            guard let c = r.text(0), let old = r.text(1) else { return }
+            #if os(macOS)
+            if Projects.guarded(Projects.trimmed(c), homes: Projects.homes(home)) { return }  // never looked into
+            #endif
+            guard old == ClaudeParser.project(c) || Sys.isDir(c) else { return }
+            let p = Projects.resolve(c, home: home).project
+            if p != old { changed.append((c, p)) }
+        }
+        guard !changed.isEmpty else { return }
+        let seq = try store.nextSeq()
+        for d in changed {
+            try db.run("UPDATE dir_project SET project = ?, seq = ? WHERE host = ? AND cwd = ?",
+                       [.text(d.project), .int(Int64(seq)), .text(host), .text(d.cwd)])
         }
     }
 

@@ -50,7 +50,8 @@ The macOS app (sample data): the menu bar, then the Day, Week and Calendar windo
 - It reads only local files: Claude Code transcripts (`~/.claude/projects`), Codex session files and its thread index
   (`~/.codex/sessions`, `~/.codex/archived_sessions`, `~/.codex/state_*.sqlite`), plus what its own hooks and status
   line wrapper record. To name the project of a working directory it also looks for a `.git` above it (and a
-  worktree's `commondir`); it stores the directory paths and project names, never file contents.
+  worktree's `commondir`) and reads the `origin` URL from its git config; it stores the directory paths and project
+  names, never file contents or URLs.
 - Limits come only from what Claude Code passes to its status line (`rate_limits`, Claude Code 2.1.80+ on Pro and
   Max) and from Codex's own session files. Zagon never reads or stores OAuth tokens, cookies or credential files,
   and it does not call any usage API. So it shows the 5-hour and weekly windows, and the last reading when no
@@ -162,11 +163,14 @@ zagon update                   # the latest release (see Update above)
   listed, free for most models), from the Anthropic and OpenAI pricing pages. In the CLI and MCP reports a model with
   no known price is shown as `$ ?` (`$12+?` when only part of the tokens has a price), not as $0. Prices that depend
   on a request's length (long prompts) or on fast mode are not applied.
-- Tokens and session time count for the project each request and stretch was in: inside the folder the session
-  started in, that folder's project; anywhere else, and for a session started in your home directory or `/`, the git
-  checkout of each directory (a worktree counts for its main checkout), else its last folder name. On macOS, folders
-  that ask for access (Desktop, Documents, Downloads, iCloud Drive, cloud drives, external and network volumes) count
-  by folder name, without looking inside. A session is listed under the folder it started in.
+- Tokens and session time count for the project each request and stretch was in. A folder inside a git repository
+  counts for the repository: the name in its `origin` URL (`…/zagon.git` → `zagon`), else the main checkout's folder
+  name, so worktrees count with their repository. Folders outside git under temporary places (`/tmp`, `$TMPDIR`,
+  `/var/folders`, `~/.claude`) count as one project, `(temp)`; any other by its last folder name. Inside the folder a
+  session started in (`cd src`), the project of that folder, unless it is your home directory or `/`. On macOS,
+  folders that ask for access (Desktop, Documents, Downloads, iCloud Drive, cloud drives, external and network
+  volumes) count by folder name, without looking inside. A session is listed under the project of the folder it
+  started in.
 - "You" is your own messages: one that another session types into a worker's terminal (`tmux send-keys`) is not yours.
 - Common options:
   - `--data-dir` (default `$ZAGON_DIR` or `~/.zagon`);

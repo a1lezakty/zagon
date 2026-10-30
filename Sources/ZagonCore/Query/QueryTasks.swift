@@ -55,7 +55,9 @@ extension Query {
             if let id = $0.text(0), !ids.contains(id) { ids.append(id) }
         }
         return try ids.prefix(limit).compactMap { id in
-            try db.one("SELECT tool, title, project, cwd, host, model, started_at, last_at FROM session WHERE id = ?", [.text(id)]) {
+            try db.one("""
+                SELECT tool, title, \(Projects.sessionSQL("session")), cwd, host, model, started_at, last_at FROM session WHERE id = ?
+                """, [.text(id)]) {
                 SessionHit(id: id, tool: $0.text(0) ?? "", title: $0.text(1), project: $0.text(2), cwd: $0.text(3),
                            host: $0.text(4), model: $0.text(5), startedAt: $0.optReal(6), lastAt: $0.optReal(7))
             }
@@ -70,7 +72,9 @@ extension Query {
         let tokens = try db.one("""
             SELECT coalesce(sum(input + output + cache_read + cache_write), 0) FROM usage_hour WHERE session_id = ?
             """, [.text(id)]) { $0.int(0) } ?? 0
-        return try db.one("SELECT tool, title, project, host, model, started_at, last_at FROM session WHERE id = ?", [.text(id)]) {
+        return try db.one("""
+            SELECT tool, title, \(Projects.sessionSQL("session")), host, model, started_at, last_at FROM session WHERE id = ?
+            """, [.text(id)]) {
             SessionWork(id: id, tool: $0.text(0) ?? "", title: $0.text(1), project: $0.text(2), host: $0.text(3), model: $0.text(4),
                         startedAt: $0.optReal(5), lastAt: $0.optReal(6),
                         workingSec: Intervals.merge(working).reduce(0) { $0 + $1.length }, tokens: tokens)

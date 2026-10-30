@@ -199,7 +199,7 @@ extension Query {
         var working: [String: [Interval]] = [:], waiting: [String: [Interval]] = [:]
         var meta: [String: (title: String?, project: String?, host: String?)] = [:]
         try db.query("""
-            SELECT a.session_id, a.start, a."end", a.kind, s.title, s.project, s.host FROM activity a
+            SELECT a.session_id, a.start, a."end", a.kind, s.title, \(Projects.sessionSQL()), s.host FROM activity a
             LEFT JOIN session s ON s.id = a.session_id
             WHERE a.start < ?1 AND a.start > ?2 - \(Self.longestStretch) AND a."end" > ?2 AND a.kind IN ('working', 'waiting')
             """, [.real(e), .real(s)]) { row in

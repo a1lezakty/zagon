@@ -358,6 +358,86 @@ func channelText(_ s: String) -> String {
         #expect(!Projects.resolve(h + "/repo", home: h).home)
     }
 
+    /// A checkout `pub` whose origin is `…/proj-one.git`, its worktree `pub-wt`, a checkout `ssh` with an scp-style origin
+    /// and no `.git`, one `plain` with only another remote; `scratch` outside git.
+    func repoTree() -> String {
+        let h = tempDir()
+        for d in ["pub/.git/worktrees/pub-wt", "pub/src", "pub-wt/x", "ssh/.git", "plain/.git", "scratch/out"] { Sys.mkdirs(h + "/" + d) }
+        Sys.writeFile(h + "/pub/.git/config", Array("""
+            [core]
+            \tbare = false
+            [remote "origin"]
+            \turl = https://example.com/me/proj-one.git
+            \tfetch = +refs/heads/*:refs/remotes/origin/*
+            """.utf8))
+        Sys.writeFile(h + "/pub/.git/worktrees/pub-wt/commondir", Array("../..\n".utf8))
+        Sys.writeFile(h + "/pub-wt/.git", Array("gitdir: ../pub/.git/worktrees/pub-wt\n".utf8))
+        Sys.writeFile(h + "/ssh/.git/config", Array("[remote \"origin\"]\n  url = git@example.com:me/proj-two\n".utf8))
+        Sys.writeFile(h + "/plain/.git/config", Array("[remote \"upstream\"]\n\turl = https://example.com/x/other.git\n".utf8))
+        return h
+    }
+
+    @Test func checkoutsCountForTheirRepositoryAndTemporaryFoldersForOne() {
+        let h = repoTree()
+        defer { try? FileManager.default.removeItem(atPath: h) }
+        let home = "/home/u"  // the tree lies in the temporary folder, outside this home
+        func p(_ c: String, tmp: String? = nil) -> String { Projects.resolve(c, home: home, tmp: tmp).project }
+        #expect(p(h + "/pub") == "proj-one" && p(h + "/pub/src") == "proj-one" && p(h + "/pub-wt/x") == "proj-one")
+        #expect(p(h + "/ssh") == "proj-two" && p(h + "/plain") == "plain")
+        #expect(p(h + "/scratch/out") == Projects.temp && p(h + "/gone/away") == Projects.temp)
+        #expect(p("/home/u/.claude/projects/-x") == Projects.temp && p("/var/folders/ab/T/x") == Projects.temp)
+        #expect(p("/scratch/t/x", tmp: "/scratch/t/") == Projects.temp && p("/scratch/x", tmp: "/scratch/t") == "x")
+        #expect(p("/home/u/notes") == "notes" && p("/tmpx/y") == "y" && Projects.resolve("/home/u", home: home).home)
+        // A home inside a temporary folder (containers, tests) keeps its folders by name.
+        #expect(Projects.resolve(h + "/scratch/out", home: h).project == "out")
+    }
+
+    @Test func aSessionInACheckoutIsListedAndCountedUnderItsRepository() throws {
+        let h = repoTree()
+        defer { try? FileManager.default.removeItem(atPath: h) }
+        let env = ClaudeEnv { $0.home = "/home/u" }
+        env.write("-w/W.jsonl", lines: [typed(T0, session: "W", cwd: h + "/pub-wt"),
+                                        assistantLine(T0 + minute, id: "w1", output: 3, session: "W", cwd: h + "/pub-wt"),
+                                        // inside the start folder, which is not a checkout of its own
+                                        assistantLine(T0 + 2 * minute, id: "w2", output: 4, session: "W", cwd: h + "/pub-wt/x"),
+                                        assistantLine(T0 + 3 * minute, id: "w3", output: 5, session: "W", cwd: h + "/scratch/out")])
+        env.scan()
+        let r = try Reports(store: env.store).day("2026-10-20")
+        #expect(Dictionary(uniqueKeysWithValues: r.projects.map { ($0.project, $0.tokens.output) }) == ["proj-one": 7, Projects.temp: 5])
+        #expect(try Reports(store: env.store).sessions(from: T0 - hour, to: T0 + hour).map(\.project) == ["proj-one"])
+        #expect(try Query(store: env.store).lanes(from: T0 - hour, to: T0 + hour).map(\.project) == ["proj-one"])
+        // Kept as the parser saw it: only what is shown follows the directory.
+        #expect(try env.store.db.one("SELECT project FROM session") { $0.text(0) } == "pub-wt")
+    }
+
+    @Test func directoriesResolvedByOlderRulesAreResolvedAgainOnce() throws {
+        let h = repoTree()
+        defer { try? FileManager.default.removeItem(atPath: h) }
+        let env = ClaudeEnv { $0.home = "/home/u" }
+        env.write("-w/W.jsonl", lines: [typed(T0, session: "W", cwd: h + "/pub-wt"),
+                                        assistantLine(T0 + minute, id: "w1", output: 3, session: "W", cwd: h + "/pub-wt")])
+        env.scan()
+        // As 0.1.0 left them: the worktree by its main checkout; a gone checkout and a gone temporary folder by name.
+        try env.store.db.exec("""
+            UPDATE dir_project SET project = 'pub';
+            INSERT INTO dir_project(host, cwd, project, home, seq) VALUES('test', '/srv/gone/app', 'app-repo', 0, 0),
+              ('test', '\(h)/gone/out', 'out', 0, 0), ('other', '\(h)/pub-wt', 'pub', 0, 0);
+            UPDATE day_agg SET project = 'pub' WHERE project != '';
+            UPDATE meta SET value = '2' WHERE key = 'day_rules'
+            """)
+        let seq = env.int("SELECT value FROM meta WHERE key = 'seq'")
+        env.scan()
+        func project(_ host: String, _ c: String) -> String? {
+            try! env.store.db.one("SELECT project FROM dir_project WHERE host = ? AND cwd = ?", [.text(host), .text(c)]) { $0.text(0) } ?? nil
+        }
+        #expect(project("test", h + "/pub-wt") == "proj-one" && project("test", "/srv/gone/app") == "app-repo")
+        #expect(project("test", h + "/gone/out") == Projects.temp && project("other", h + "/pub-wt") == "pub")
+        // Changed rows are exported again.
+        #expect(env.int("SELECT count(*) FROM dir_project WHERE seq > ? AND project = 'proj-one'", [.int(Int64(seq))]) == 1)
+        #expect(env.int("SELECT count(*) FROM day_agg WHERE project = 'pub'") == 0)
+        #expect(env.int("SELECT count(*) FROM day_agg WHERE project = 'proj-one'") > 0)
+    }
+
     @Test func foldersThatAskForAccessOnMacAreKnownByPath() {
         let homes: Set<String> = ["/Users/u"]
         for p in ["/Users/u/Documents", "/Users/u/Documents/proj/src", "/Users/u/Desktop/x", "/Users/u/Downloads/y",

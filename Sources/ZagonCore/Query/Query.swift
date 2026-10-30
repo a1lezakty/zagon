@@ -107,7 +107,7 @@ extension Query {
     public func liveSessions(now: Timestamp, window: Double = 6 * 3600) throws -> [LiveSessionInfo] {
         var out: [LiveSessionInfo] = []
         try db.query("""
-            SELECT id, tool, title, project, cwd, host, model, status, status_at, last_at,
+            SELECT id, tool, title, \(Projects.sessionSQL("session")), cwd, host, model, status, status_at, last_at,
                    (SELECT max(start) FROM activity a WHERE a.session_id = session.id AND a.kind = 'working')
             FROM session
             WHERE max(coalesce(last_at, 0), coalesce(status_at, 0)) >= ?1 AND coalesce(archived, 0) = 0
