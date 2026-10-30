@@ -18,7 +18,7 @@ extension AppState {
             runSummary(from) { b, _, _ in .kept(try b.summary(day: from, refresh: refresh)) }
             return
         }
-        runSummary(SummaryDoc.key(from, to)) { b, f, say in
+        runSummary(SummaryJob.key(from, to)) { b, f, say in
             let plan = try b.summaryPlan(from: from, to: to)
             if plan.needsConfirm { return .confirm(plan) }
             return .kept(try await b.writePeriod(plan) { await say(Self.progress($0, f)) })
@@ -103,7 +103,7 @@ struct SummaryButton: View {
     let has: Bool
 
     var body: some View {
-        let f = app.f, key = SummaryDoc.key(from, to), job = app.summaryJob(key)
+        let f = app.f, key = SummaryJob.key(from, to), job = app.summaryJob(key)
         VStack(alignment: .trailing, spacing: 4) {
             HStack(spacing: 10) {
                 if job.running, let p = job.progress {
@@ -211,7 +211,7 @@ struct PeriodSummaryCard<Extra: View>: View {
     @ViewBuilder var extra: () -> Extra
 
     var body: some View {
-        let f = app.f, key = SummaryDoc.key(from, to), kept = app.keptSummary(key)
+        let f = app.f, key = SummaryJob.key(from, to), kept = app.keptSummary(key)
         Card(spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
                 H2(text: title)

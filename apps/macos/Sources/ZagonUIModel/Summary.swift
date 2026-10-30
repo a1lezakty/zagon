@@ -110,6 +110,9 @@ public struct SummaryJob: Sendable {
     public var result: KeptSummary?
     public init() {}
 
+    /// The key of a day (`from == to`) or a period, as summaries are kept and jobs are named.
+    public static func key(_ from: String, _ to: String) -> String { SummaryDoc.key(from, to) }
+
     /// The newer of the store's and the last answer.
     public static func newest(_ a: KeptSummary?, _ b: KeptSummary?) -> KeptSummary? {
         guard let a, let b else { return a ?? b }
