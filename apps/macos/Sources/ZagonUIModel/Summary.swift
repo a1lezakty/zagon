@@ -115,6 +115,7 @@ public struct SummaryJob: Sendable {
 
     /// The newer of the store's and the last answer.
     public static func newest(_ a: KeptSummary?, _ b: KeptSummary?) -> KeptSummary? {
+        let b = b.flatMap { $0.doc.items.isEmpty ? nil : $0 }  // no cards: nothing to show (see `kept`)
         guard let a, let b else { return a ?? b }
         return b.at > a.at ? b : a
     }
@@ -154,7 +155,14 @@ extension TaskBackend {
             _ = try summary(day: d, refresh: true)
         }
         await progress(.period)
-        return try summaryAnswer(["summary", "--from", plan.from, "--to", plan.to, "--json", "--refresh", "--yes"], timeout: 300).kept
+        // Days the AI did not answer for stay without its summary: the period is written without writing them again
+        // (that could take several calls past the time limit); they are named instead.
+        let left = plan.missing.isEmpty ? [] : try summaryPlan(from: plan.from, to: plan.to).missing
+        guard left.isEmpty || plan.calls == 0 else {
+            throw Failure(description: "the AI did not answer for \(left.joined(separator: ", ")): try again later")
+        }
+        return try summaryAnswer(["summary", "--from", plan.from, "--to", plan.to, "--json", "--refresh"]
+                                 + (plan.calls == 0 ? ["--yes"] : []), timeout: 300).kept
     }
 
     /// `[summary] time` of the source's config.toml: "HH:MM", nil = off.

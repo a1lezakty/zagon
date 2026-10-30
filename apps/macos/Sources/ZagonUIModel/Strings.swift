@@ -160,6 +160,7 @@ enum Strings {
         "settings.summary.bad": "The time is HH:MM, 00:00 to 23:59.",
         "settings.summary.note": "The service on the server writes it at this time by the server's clock (its zone: zagon tz), one AI call a day; earlier days are written from the Day screen. Kept in ~/.zagon/config.toml here and sent to the checked servers.",
         "settings.summary.sent": "Sent to {0}.", "settings.summary.notSent": "Not sent to {0}: {1}",
+        "sum.noCards": "The server had no sessions this day: nothing to write. The sessions of this Mac are below.",
     ]
 
     static let ru: [String: String] = [
@@ -328,5 +329,6 @@ enum Strings {
         "settings.summary.bad": "Время — ЧЧ:ММ, от 00:00 до 23:59.",
         "settings.summary.note": "Сводку пишет служба сервера в это время по часам сервера (его пояс — zagon tz), один вызов ИИ в день; прошлые дни — кнопкой на экране «День». Сохраняется в ~/.zagon/config.toml здесь и отправляется на отмеченные серверы.",
         "settings.summary.sent": "Отправлено: {0}.", "settings.summary.notSent": "Не отправлено на {0}: {1}",
+        "sum.noCards": "На сервере в этот день сессий не было — писать нечего. Сессии этого Мака — ниже.",
     ]
 }

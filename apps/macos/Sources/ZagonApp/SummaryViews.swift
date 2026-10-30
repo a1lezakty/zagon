@@ -64,7 +64,9 @@ extension AppState {
                 var j = self.summaryJob(key)
                 j.running = false; j.progress = nil
                 switch outcome {
-                case .success(.kept(let k)): j.result = k
+                case .success(.kept(let k)):
+                    j.result = k
+                    if k.doc.items.isEmpty { j.error = f.t("sum.noCards") }
                 case .success(.confirm(let p)): j.confirm = p
                 case .failure(let e):
                     j.error = Remote.scrubHomes(String(describing: e))

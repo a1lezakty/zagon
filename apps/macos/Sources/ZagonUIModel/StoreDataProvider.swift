@@ -419,12 +419,15 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
     /// The kept summary of a day or a period: one written by an AI over one made without, the newest of each.
     public func summary(_ key: String) -> KeptSummary? { read(nil) { try kept(key) } }
 
-    /// Free text from before counts as none (read queue).
+    /// Free text from before counts as none, and so does a summary without cards: a server that had no sessions that
+    /// day says nothing about this Mac's (read queue).
     func kept(_ key: String) throws -> KeptSummary? {
         var out: KeptSummary?
         try query.db.query("SELECT engine, text, created FROM summary WHERE day = ? ORDER BY engine = 'none', created DESC",
                            [.text(key)]) { r in
-            if out == nil, let d = SummaryDoc.decode(r.text(1) ?? "") { out = KeptSummary(doc: d, engine: r.text(0) ?? "", at: Self.date(r.real(2))) }
+            if out == nil, let d = SummaryDoc.decode(r.text(1) ?? ""), !d.items.isEmpty {
+                out = KeptSummary(doc: d, engine: r.text(0) ?? "", at: Self.date(r.real(2)))
+            }
         }
         return out
     }
@@ -434,8 +437,11 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
         guard let writer else { return }
         writeQueue.sync {
             do {
-                try writer.db.run("INSERT OR REPLACE INTO summary(day, engine, text, created) VALUES(?, ?, ?, ?)",
-                                  [.text(s.doc.key), .text(s.engine), .text(s.doc.json), .real(s.at.timeIntervalSince1970)])
+                // As the import does: a newer row of the same day and engine stays.
+                try writer.db.run("""
+                    INSERT INTO summary(day, engine, text, created) VALUES(?1, ?2, ?3, ?4)
+                    ON CONFLICT(day, engine) DO UPDATE SET text = ?3, created = ?4 WHERE ?4 >= created
+                    """, [.text(s.doc.key), .text(s.engine), .text(s.doc.json), .real(s.at.timeIntervalSince1970)])
             } catch { Log.shared.write("summary not kept: " + Remote.brief(error)) }
         }
     }

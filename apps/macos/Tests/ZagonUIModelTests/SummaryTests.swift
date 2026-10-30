@@ -133,19 +133,30 @@ final class SummaryTests: XCTestCase {
         }
     }
 
+    static func planJSON(_ missing: String) -> String {
+        #"{"key":"2026-10-26..2026-11-01","from":"2026-10-26","to":"2026-11-01","worked":["2026-10-27","2026-10-28"],"missing":[\#(missing)],"calls":1}"#
+    }
+
     func testPeriodFlowWritesMissingDaysFirst() async throws {
         var period = doc
         period.from = "2026-10-26"; period.to = "2026-11-01"; period.main = ["The webhook"]
         let calls = Calls(), day = envelope(doc), whole = envelope(period)
-        let b = backend(calls) { args in Self.ok(args.contains("--from") ? whole : day) }
+        let b = backend(calls) { args in Self.ok(args.contains("--plan") ? Self.planJSON("") : args.contains("--from") ? whole : day) }
         let plan = SummaryPlan(key: period.key, from: "2026-10-26", to: "2026-11-01", worked: ["2026-10-27", "2026-10-28"],
                                missing: ["2026-10-27", "2026-10-28"], calls: 3)
         let k = try await b.writePeriod(plan) { calls.step($0) }
         XCTAssertEqual(k.doc.key, "2026-10-26..2026-11-01")
         XCTAssertEqual(k.doc.main, ["The webhook"])
         XCTAssertEqual(calls.steps, [.day(1, of: 2), .day(2, of: 2), .period])
+        // After the days the plan is asked again; the period itself is written without writing days again (no --yes).
         XCTAssertEqual(calls.args, [["summary", "2026-10-27", "--json", "--refresh", "@300"], ["summary", "2026-10-28", "--json", "--refresh", "@300"],
-                                    ["summary", "--from", "2026-10-26", "--to", "2026-11-01", "--json", "--refresh", "--yes", "@300"]])
+                                    ["summary", "--from", "2026-10-26", "--to", "2026-11-01", "--plan", "--json", "@120"],
+                                    ["summary", "--from", "2026-10-26", "--to", "2026-11-01", "--json", "--refresh", "@300"]])
+        // A day the AI did not answer for is named, and the period is not written.
+        let stuck = backend(Calls()) { args in Self.ok(args.contains("--plan") ? Self.planJSON(#""2026-10-28""#) : day) }
+        do { _ = try await stuck.writePeriod(plan); XCTFail("written") } catch {
+            XCTAssertEqual(String(describing: error), "the AI did not answer for 2026-10-28: try again later")
+        }
         _ = try backend(calls) { _ in Self.ok(#"{"at":"off"}"#) }.setSummaryTime(nil)
         XCTAssertEqual(calls.args.last, ["summary", "--at", "off", "--json", "@60"])
     }
@@ -156,6 +167,11 @@ final class SummaryTests: XCTestCase {
         XCTAssertEqual(SummaryJob.newest(new, old), new)
         XCTAssertEqual(SummaryJob.newest(nil, old), old)
         XCTAssertNil(SummaryJob.newest(nil, nil))
+        // An answer without cards (the server had no sessions that day) does not replace what this Mac shows.
+        var empty = doc
+        empty.items = []
+        XCTAssertNil(SummaryJob.newest(nil, KeptSummary(doc: empty, engine: "none", at: at.addingTimeInterval(120))))
+        XCTAssertEqual(SummaryJob.newest(old, KeptSummary(doc: empty, engine: "none", at: at.addingTimeInterval(120))), old)
     }
 
     /// A summary the CLI answered is kept in this Mac's store and shows on the day before any pull.
