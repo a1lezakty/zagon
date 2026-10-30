@@ -80,6 +80,7 @@ enum Strings {
         "settings.diag.collect": "Collect diagnostics", "settings.diag.saved": "Saved: {0}", "settings.diag.failed": "Could not collect: {0}",
         "main.quit": "Quit Zagon", "main.copyCommand": "Copy the connect command",
         "main.checkUpdates": "Check for Updates…", "settings.updates": "Updates", "settings.updates.version": "Version {0}",
+        "main.updateFound": "Zagon {0} is available: install",
         "settings.updates.auto": "Check for updates automatically (once a day, from GitHub)",
 
         "nav.day": "Day", "nav.week": "Week", "nav.calendar": "Calendar", "nav.tasks": "Tasks",
@@ -220,6 +221,7 @@ enum Strings {
         "settings.diag.collect": "Собрать диагностику", "settings.diag.saved": "Сохранено: {0}", "settings.diag.failed": "Не получилось собрать: {0}",
         "main.quit": "Выйти из Zagon", "main.copyCommand": "Скопировать команду подключения",
         "main.checkUpdates": "Проверить обновления…", "settings.updates": "Обновления", "settings.updates.version": "Версия {0}",
+        "main.updateFound": "Доступен Zagon {0}: установить",
         "settings.updates.auto": "Проверять обновления автоматически (раз в день, на GitHub)",
 
         "nav.day": "День", "nav.week": "Неделя", "nav.calendar": "Календарь", "nav.tasks": "Задачи",

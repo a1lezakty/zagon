@@ -1,11 +1,13 @@
 #!/bin/bash
 # Release files of Zagon.app in build/: Zagon.dmg (manual install), Zagon.zip (the Sparkle update, EdDSA-signed with
 # the private key in env SPARKLE_ED_PRIVATE_KEY) and appcast.xml with that one update. macOS only.
-# Usage: scripts/release-mac.sh <version> <build>   e.g. 0.1.0 and the CI run number (it must grow from release to release)
+# Usage: scripts/release-mac.sh <version> <build> [notes.md]
+#   version 0.1.0, build the CI run number (it must grow from release to release); notes (Markdown) are shown in the
+#   update alert, without them the alert is short and "Version History" opens the release page.
 set -euo pipefail
+version=${1:-}; build=${2:-}; notes=${3:+$(cd "$(dirname "$3")" && pwd)/$(basename "$3")}
 cd "$(dirname "$0")/.."
-version=${1:-}; build=${2:-}
-[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && $build =~ ^[0-9]+$ ]] || { echo "usage: $0 <x.y.z> <build number>" >&2; exit 2; }
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && $build =~ ^[0-9]+$ ]] || { echo "usage: $0 <x.y.z> <build number> [notes.md]" >&2; exit 2; }
 [ -n "${SPARKLE_ED_PRIVATE_KEY:-}" ] || { echo "SPARKLE_ED_PRIVATE_KEY is not set" >&2; exit 2; }
 key=${SPARKLE_ED_PRIVATE_KEY//[$'\r\n\t ']/}
 repo=https://github.com/a1lezakty/zagon
@@ -35,6 +37,8 @@ SWIFT
 swift "$check" "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' build/Zagon.app/Contents/Info.plist)" "$signature" build/Zagon.zip
 rm -rf "$(dirname "$check")"
 
+description=
+[ -z "$notes" ] || description="<description sparkle:format=\"markdown\"><![CDATA[$(sed 's/]]>/]]]]><![CDATA[>/g' "$notes")]]></description>"
 cat > build/appcast.xml <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
@@ -47,7 +51,8 @@ cat > build/appcast.xml <<XML
       <sparkle:version>$build</sparkle:version>
       <sparkle:shortVersionString>$version</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-      <sparkle:releaseNotesLink>$repo/releases/tag/v$version</sparkle:releaseNotesLink>
+      <sparkle:fullReleaseNotesLink>$repo/releases/tag/v$version</sparkle:fullReleaseNotesLink>
+      $description
       <enclosure url="$repo/releases/download/v$version/Zagon.zip" length="$length" type="application/octet-stream" sparkle:edSignature="$signature"/>
     </item>
   </channel>

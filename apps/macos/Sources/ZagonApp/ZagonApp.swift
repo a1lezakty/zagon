@@ -96,6 +96,9 @@ final class AppState: ObservableObject {
 
     /// Sparkle in the built Zagon.app (its Info.plist has the feed); nil under `swift run` and in the samples.
     var updater: SPUStandardUpdaterController?
+    private var reminders: UpdateReminders?
+    /// The version Sparkle's daily check found; the panel offers it until the alert gets attention.
+    @Published var updateFound: String?
     /// Look for an update once a day (Sparkle keeps the setting).
     var autoUpdate: Bool {
         get { updater?.updater.automaticallyChecksForUpdates ?? false }
@@ -150,7 +153,10 @@ final class AppState: ObservableObject {
             }
             state.launchAtLogin = SMAppService.mainApp.status == .enabled
             if Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil {
-                state.updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+                let reminders = UpdateReminders()
+                reminders.app = state
+                state.reminders = reminders
+                state.updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: reminders)
             }
             // The Mac moved to another zone while running: "System" follows it.
             NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak state] _ in
@@ -477,6 +483,22 @@ struct RingsIcon: View {
     }
 }
 
+/// Zagon has no Dock icon, so the alert of an update found by the daily check opens behind other apps' windows: the
+/// panel offers the update too (Sparkle's gentle reminders). Sparkle holds its delegate weakly; AppState keeps this.
+final class UpdateReminders: NSObject, SPUStandardUserDriverDelegate {
+    weak var app: AppState?
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem,
+                                                   state: SPUUserUpdateState) {
+        found(state.userInitiated ? nil : update.displayVersionString)
+    }
+    func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) { found(nil) }
+    func standardUserDriverWillFinishUpdateSession() { found(nil) }
+
+    private func found(_ version: String?) { Task { @MainActor in self.app?.updateFound = version } }
+}
+
 // MARK: - Menu bar panel
 
 struct MainPanel: View {
@@ -497,6 +519,9 @@ struct MainPanel: View {
             }
             if let problem = app.problem { Banner.amber(Emphasis(before: f.t("main.storeFailed", problem))) }
             if app.scanning { Text(f.t("main.scanning")).font(.system(size: 12)).foregroundColor(Z.muted) }
+            if let v = app.updateFound {
+                PillButton(title: f.t("main.updateFound", v), primary: true, expand: true) { app.checkForUpdates() }
+            }
             if app.localTools, let cli = app.cli, !cli.connected, !app.connectDismissed {
                 VStack(alignment: .leading, spacing: 8) {
                     Banner.blue(Emphasis(before: f.t("connect.banner")))

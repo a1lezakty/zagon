@@ -33,14 +33,10 @@ jobs:
         run: swift test
       - name: Snapshots
         run: swift run Zagon --snapshots build/snapshots --fixtures ../../Tests/ZagonCoreTests/Fixtures/scenario
-      # Runs started by hand get the Sparkle key and build the release set (DMG, signed update zip, appcast); the
-      # releases themselves come from release.yml.
-      - name: App, DMG, update zip and appcast
-        env:
-          SPARKLE_ED_PRIVATE_KEY: ${{ github.event_name == 'workflow_dispatch' && secrets.SPARKLE_ED_PRIVATE_KEY || '' }}
-        run: |
-          if [ -n "$SPARKLE_ED_PRIVATE_KEY" ]; then scripts/release-mac.sh "0.1.0" "${{ github.run_number }}"
-          else scripts/build-app.sh "0.1.0" "${{ github.run_number }}"; fi
+      # Build 1: below every release (release.yml numbers them by its own runs), so a CI DMG updates to the latest one.
+      # The signed update zip and the appcast come only from release.yml, the one workflow with the Sparkle key.
+      - name: App and DMG
+        run: scripts/build-app.sh "0.1.0" "1"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -50,8 +46,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Zagon-dmg
-          path: |
-            apps/macos/build/Zagon.dmg
-            apps/macos/build/Zagon.zip
-            apps/macos/build/appcast.xml
-          if-no-files-found: error
+          path: apps/macos/build/Zagon.dmg
