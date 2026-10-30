@@ -264,7 +264,7 @@ struct TaskCommand: ParsableCommand {
                     throw ValidationError(p.projects.isEmpty ? "no Jira project you may create issues in"
                                           : "choose --project: " + p.projects.map(\.key).joined(separator: ", "))
                 }
-                print("Create in Jira: a Task in \(proj), assigned to you\n  title: \(p.title)\n  description:\n"
+                print("Create in Jira: a \(p.type ?? "Task") in \(proj), assigned to you\n  title: \(p.title)\n  description:\n"
                       + p.description.split(separator: "\n", omittingEmptySubsequences: false).map { "    " + $0 }.joined(separator: "\n")
                       + "\n  then \(Fmt.dur(p.draft.workedSec)) of work is linked to it")
                 if !yes {
@@ -295,11 +295,14 @@ struct TaskCommand: ParsableCommand {
     struct JiraProjects: ParsableCommand {
         static let configuration = CommandConfiguration(commandName: "jira-projects",
                                                         abstract: "Jira projects you may create issues in, and the default one.")
+        @Option(help: "Print only the issue type a new task gets in this project.") var typeOf: String?
         @OptionGroup var common: Common
         @OptionGroup var report: ReportOptions
         struct Out: Encodable { var `default`: String?; var projects: [JiraProject] }
         func run() throws {
-            let (d, p) = try common.suggester(try common.open()).jiraProjects()
+            let s = try common.suggester(try common.open())
+            if let typeOf { print(try s.jiraTaskType(typeOf)); return }
+            let (d, p) = try s.jiraProjects()
             if report.json { try emit(Out(default: d, projects: p)); return }
             for x in p { print("\(x.key == d ? "*" : " ") \(x.key)  \(x.name)") }
         }
