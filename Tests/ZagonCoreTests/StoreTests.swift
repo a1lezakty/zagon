@@ -18,9 +18,9 @@ import Testing
         defer { try? FileManager.default.removeItem(atPath: dir) }
         let path = dir + "/z.db"
         _ = try Store(path: path)
-        try SQLite(path: path).exec("PRAGMA user_version=\(Store.schemaVersion + 1)")
+        // Without meta.host an open that went on would write it.
+        try SQLite(path: path).exec("DELETE FROM meta WHERE key='host'; PRAGMA user_version=\(Store.schemaVersion + 1)")
         #expect(throws: StoreError.self) { try Store(path: path) }
-        // Nothing was written: the version is left as the newer zagon set it.
-        #expect(try SQLite(path: path).one("PRAGMA user_version") { $0.int(0) } == Store.schemaVersion + 1)
+        #expect(try SQLite(path: path).one("SELECT count(*) FROM meta WHERE key='host'") { $0.int(0) } == 0)
     }
 }
