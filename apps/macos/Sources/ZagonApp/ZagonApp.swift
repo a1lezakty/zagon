@@ -47,6 +47,8 @@ final class AppState: ObservableObject {
         didSet { if persist { UserDefaults.standard.set(taskSource?.saved, forKey: "taskSource") } }
     }
     @Published var taskCache: [TaskBackend.Source: TaskCache] = [:]
+    /// Summaries being written through the same source, by key, and the last answers (`SummaryViews.swift`).
+    @Published var summaries = SummaryState()
     /// "This Mac" is a source: the CLI inside Zagon.app.
     var hasLocalCLI = AppState.cliPath != nil
     /// PATH the CLI runs with (the login shell's, found by `runCLI`).

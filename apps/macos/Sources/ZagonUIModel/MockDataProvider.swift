@@ -1,4 +1,5 @@
 import Foundation
+import ZagonCore
 
 /// The design sample: Friday, October 30 2026, 11:42 in `timeZone`. Day, week and worklog detail exist for
 /// October 29, the week of October 26 and October 30; other dates get totals only. Session titles and texts come in
@@ -120,26 +121,58 @@ public struct MockDataProvider: ZagonDataProvider {
             .tool: rows([("Bash", 412, 0), ("Edit", 236, 0), ("Read", 198, 0), ("Agent", 41, 0), ("", 120, 0)]),
             .host: rows([("build-box", 22_300_000, 249), ("gpu-box", 5_600_000, 63), ("laptop", 3_300_000, 36)]),
         ]
-        let summary = [
-            DoneItem("api-server", tr("PROJ-12 checked on dev: three defects found by live runs and fixed, final comment on the task.",
-                                          "Проверка PROJ-12 на деве: три дефекта найдены живыми прогонами и исправлены, итоговый комментарий к задаче.")),
-            DoneItem("web-app", tr("Settings page, dark theme, chart tooltips; the demo video rebuilt to be clearer.",
-                                      "Страница настроек, тёмная тема, подсказки на графиках; демо-видео пересобрано понятнее.")),
-            DoneItem("ml-train", tr("run 300 on the GPU box: training and a quality comparison with the previous version.",
-                                     "run 300 на gpu-box: обучение и сравнение качества с прошлой версией.")),
-            DoneItem("docs-site", tr("API reference pages, a search index and a getting-started guide.",
-                                       "Справка по API, поисковый индекс и руководство для начала работы.")),
-            DoneItem("cli-tool", tr("Config parser: the draft is ready, waiting for review.", "Разбор конфига: черновик готов, ждёт ревью.")),
+        let projects = [
+            DoneProject("api-server", sec: 6 * Self.h + 10 * 60, cost: 118, sessions: [
+                DoneSession("PROJ-12", branch: "PROJ-12-webhook-retries", sec: 6 * Self.h + 10 * 60)]),
+            DoneProject("web-app", sec: 14 * Self.h + 10 * 60, cost: 94, sessions: [
+                DoneSession(tr("worker", "воркер"), branch: "settings-page", sec: 9 * Self.h + 10 * 60),
+                DoneSession(tr("main", "основная"), branch: "main", sec: 5 * Self.h + 30 * 60)]),
+            DoneProject("ml-train", sec: 7.5 * Self.h, cost: 63, sessions: [DoneSession("run 300", sec: 7.5 * Self.h)]),
         ]
-        let titles = lanes.map { lane -> DoneItem in
-            let parts = lane.title.components(separatedBy: " — ")
-            return DoneItem(parts[0], parts.dropFirst().joined(separator: " — "))
-        }
         return DayData(day: d, totals: Totals(sessionSec: 9 * Self.h + 40 * 60, userSec: 2 * Self.h + 15 * 60,
                                               tokens: 31_200_000, cost: 348),
                        limitHits: [Interval(at(29, 13 + 40 / 60), at(29, 14 + 20 / 60))], weekPctStart: 24, weekPctEnd: 37,
-                       lanes: lanes, usage: usage, summary: summary, titles: titles,
+                       lanes: lanes, usage: usage, doc: dayDoc, projects: projects,
                        summaryInfo: SummaryInfo(engine: "Claude Haiku", at: at(29, 23 + 59 / 60), weekPct: 0.2))
+    }
+
+    /// The written summary of October 29.
+    var dayDoc: SummaryDoc {
+        SummaryDoc(lang: lang.rawValue, from: "2026-10-29", to: "2026-10-29", overview: tr(
+            "A long day on the payment webhook: the double charge is fixed and checked on dev. The settings page is ready, run 300 trained.",
+            "Длинный день вокруг вебхука оплаты: двойное списание исправлено и проверено на деве. Страница настроек готова, run 300 обучен."),
+            items: [
+                .init(project: "api-server", key: "PROJ-12", title: tr("Check the payment webhook retries", "Проверить повторы вебхука оплаты"),
+                      was: tr("A retry after a timeout charged twice.", "Повтор после таймаута списывал дважды."),
+                      done: [tr("Reproduced the double charge with live runs", "Двойное списание воспроизведено живыми прогонами"),
+                             tr("Idempotency key on retries", "Ключ идемпотентности на повторах"),
+                             tr("Three defects fixed, final comment on the task", "Три дефекта исправлены, итоговый комментарий к задаче")],
+                      left: tr("A load test with 3 retries.", "Нагрузочный тест с тремя повторами."), sec: 6 * Self.h + 10 * 60, cost: 118),
+                .init(project: "web-app", title: tr("Settings page and dark theme", "Страница настроек и тёмная тема"),
+                      was: tr("The settings were scattered over three dialogs.", "Настройки были разбросаны по трём диалогам."),
+                      done: [tr("One settings page", "Одна страница настроек"), tr("Dark theme, chart tooltips", "Тёмная тема, подсказки на графиках"),
+                             tr("The demo video rebuilt to be clearer", "Демо-видео пересобрано понятнее")],
+                      sec: 14 * Self.h + 10 * 60, cost: 94),
+                .init(project: "ml-train", title: "run 300",
+                      done: [tr("Training on the GPU box", "Обучение на gpu-box"),
+                             tr("Quality compared with the previous version", "Качество сравнено с прошлой версией")],
+                      sec: 7.5 * Self.h, cost: 63),
+            ])
+    }
+
+    public func summary(_ key: String) -> KeptSummary? {
+        switch key {
+        case "2026-10-29": return KeptSummary(doc: dayDoc, engine: "claude", at: at(29, 23 + 59 / 60))
+        case "2026-10-26..2026-11-01":
+            var doc = dayDoc
+            doc.from = "2026-10-26"; doc.to = "2026-11-01"
+            doc.overview = tr("The week went to the payment webhook and the new settings page; the model run 300 is trained.",
+                              "Неделя ушла на вебхук оплаты и новую страницу настроек; модель run 300 обучена.")
+            doc.main = [tr("PROJ-12: the double charge is fixed", "PROJ-12: двойное списание исправлено"),
+                        tr("Settings page released on dev", "Страница настроек выкачена на дев")]
+            return KeptSummary(doc: doc, engine: "claude", at: at(30, 9))
+        default: return nil
+        }
     }
 
     // MARK: week

@@ -5,6 +5,9 @@ import ZagonUIModel
 struct SettingsScreen: View {
     @EnvironmentObject private var app: AppState
     @State private var diagResult: String?
+    /// The summary time being typed; nil = the file's.
+    @State private var summaryTime: String?
+    @State private var summaryTimeBad = false
     var body: some View {
         let f = app.f
         Page {
@@ -95,6 +98,7 @@ struct SettingsScreen: View {
                 }
             }
             .frame(maxWidth: 640, alignment: .leading)
+            summary(f)
             Card(spacing: 12) {
                 Text(f.t("settings.servers")).font(.system(size: 15, weight: .semibold))
                 Text(f.t("settings.servers.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
@@ -145,6 +149,39 @@ struct SettingsScreen: View {
             }
             .frame(maxWidth: 640, alignment: .leading)
         }
+    }
+
+    /// When the service writes the day summary: here (config.toml) and on the checked servers.
+    func summary(_ f: Fmt) -> some View {
+        let at = app.notify.summaryAt
+        let text = Binding(get: { summaryTime ?? at.map(NotifySettings.clock) ?? "" }, set: { summaryTime = $0; summaryTimeBad = false })
+        return Card(spacing: 12) {
+            Text(f.t("settings.summary")).font(.system(size: 15, weight: .semibold))
+            Text(f.t("settings.summary.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            CheckRow(title: f.t("settings.summary.on"), on: at != nil) {
+                summaryTime = nil
+                app.setSummaryTime(at == nil ? 20 * 60 : nil)
+            }
+            if at != nil {
+                HStack(spacing: 12) {
+                    Text(f.t("settings.summary.time")).font(.system(size: 13)).foregroundColor(Z.body).frame(width: 90, alignment: .leading)
+                    Field(placeholder: "20:00", text: text, height: 30).frame(width: 80)
+                    PillButton(title: f.t("settings.summary.save"), height: 30, radius: 8, fontSize: 12) {
+                        guard let m = NotifySettings.minutes(text.wrappedValue) else { summaryTimeBad = true; return }
+                        summaryTime = nil
+                        app.setSummaryTime(m)
+                    }
+                }
+            }
+            if summaryTimeBad {
+                Text(f.t("settings.summary.bad")).font(.system(size: 12)).foregroundColor(Z.bad)
+            }
+            if let m = app.summaries.atMessage, !m.isEmpty {
+                Text(m).font(.system(size: 12)).foregroundColor(Z.muted).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: 640, alignment: .leading)
     }
 
     struct CheckRow: View {
