@@ -26,19 +26,13 @@ public struct LimitReading: Sendable, Equatable {
 }
 
 extension Query {
-    /// Latest reading per (tool, window), with its pace.
+    /// The current reading per (tool, window) (`Store.latestLimits`), with its pace.
     public func limits(now: Timestamp) throws -> [LimitReading] {
         var out: [LimitReading] = []
         for s in try Store.latestLimits(db) {
             var r = LimitReading(tool: s.tool, window: s.window, usedPct: s.usedPct, resetsAt: s.resetsAt,
                                  windowMinutes: s.windowMinutes, ts: s.ts)
-            // The earliest reading of the same window 15–60 minutes back. Codex readings with only `resets_in_seconds`
-            // get a reset time that drifts by seconds between readings, hence the 2-minute tolerance.
-            if now - s.ts <= 900, let (pct, ts) = try db.one("""
-                SELECT used_pct, ts FROM limit_snapshot WHERE tool = ?1 AND window = ?2 AND ts >= ?3 AND ts <= ?4
-                  AND abs(coalesce(resets_at, 0) - coalesce(?5, 0)) < 120 ORDER BY ts LIMIT 1
-                """, [.text(s.tool.rawValue), .text(s.window), .real(s.ts - 3600), .real(s.ts - 900), .of(s.resetsAt)],
-                { ($0.real(0), $0.real(1)) }), s.ts > ts {
+            if now - s.ts <= 900, let (pct, ts) = try Store.paceBase(db, s, from: s.ts - 3600, to: s.ts - 900), s.ts > ts {
                 r.pctPerHour = (s.usedPct - pct) / ((s.ts - ts) / 3600)
             }
             out.append(r)
@@ -58,18 +52,43 @@ extension Query {
 }
 
 extension Store {
-    /// `latestLimits()` on a bare connection (Query holds the connection, not the Store).
+    /// The current reading per (tool, window): of its newest window period (`resets_at` within 2 minutes of the latest:
+    /// Codex readings with only `resets_in_seconds` drift by seconds), the highest percent, the newest of equals.
+    /// Not simply the newest row: `ts` is when a reading was written, not when it was measured. A Claude Code status
+    /// line left open re-sends its last reading every minute with a fresh time (on a busy server one in five rows is
+    /// below the current usage), and a Codex rollout may still report a period that has already reset. Usage only grows
+    /// within a period, so its highest reading is the latest. A reading without `resets_at` counts as a period ending
+    /// `window_minutes` after it.
+    /// ponytail: one account assumed. Readings carry no account, so two accounts (e.g. one per machine) mix: the higher
+    /// usage wins; split by an account id once the status line or Codex reports one.
     static func latestLimits(_ db: SQLite) throws -> [LimitSnapshot] {
         var out: [LimitSnapshot] = []
         try db.query("""
-            SELECT tool, window, used_pct, resets_at, window_minutes, max(ts) FROM limit_snapshot GROUP BY tool, window
-            ORDER BY tool, window
+            WITH s AS (SELECT tool, window, used_pct, resets_at, window_minutes, ts,
+                              coalesce(resets_at, ts + coalesce(window_minutes, 0) * 60) AS period FROM limit_snapshot),
+                 p AS (SELECT tool, window, max(period) AS period FROM s GROUP BY tool, window)
+            SELECT tool, window, used_pct, resets_at, window_minutes, ts FROM (
+              SELECT s.*, row_number() OVER (PARTITION BY s.tool, s.window ORDER BY s.used_pct DESC, s.ts DESC) AS n
+              FROM s JOIN p ON s.tool = p.tool AND s.window = p.window AND s.period >= p.period - 120)
+            WHERE n = 1 ORDER BY tool, window
             """) { r in
             guard let tool = ToolKind(rawValue: r.text(0) ?? "") else { return }
             out.append(LimitSnapshot(tool: tool, window: r.text(1) ?? "", usedPct: r.real(2), resetsAt: r.optReal(3),
                                      windowMinutes: r.optInt(4), ts: r.real(5)))
         }
         return out
+    }
+
+    /// Where a pace up to reading `s` starts: the earliest reading of its window period between `from` and `to`, with
+    /// the usage at that moment, the highest percent of the period so far (that reading itself may be an older one
+    /// re-sent, see `latestLimits`).
+    static func paceBase(_ db: SQLite, _ s: LimitSnapshot, from: Timestamp, to: Timestamp) throws -> (pct: Double, ts: Timestamp)? {
+        try db.one("""
+            WITH w AS (SELECT used_pct, ts FROM limit_snapshot
+                       WHERE tool = ?1 AND window = ?2 AND abs(coalesce(resets_at, 0) - coalesce(?3, 0)) < 120)
+            SELECT (SELECT max(used_pct) FROM w WHERE ts <= f.ts), f.ts
+            FROM (SELECT min(ts) AS ts FROM w WHERE ts >= ?4 AND ts <= ?5) f WHERE f.ts IS NOT NULL
+            """, [.text(s.tool.rawValue), .text(s.window), .of(s.resetsAt), .real(from), .real(to)]) { ($0.real(0), $0.real(1)) }
     }
 }
 

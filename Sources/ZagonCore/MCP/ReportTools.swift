@@ -131,11 +131,7 @@ final class ReportTools {
     func forecast(_ s: LimitSnapshot) throws -> String? {
         guard let r = s.resetsAt else { return nil }
         guard s.usedPct < 100 else { return "limit reached" }
-        guard let first = try store.db.one("""
-            SELECT used_pct, ts FROM limit_snapshot WHERE tool=? AND window=? AND ts >= ? AND ts <= ? AND resets_at IS NOT NULL
-              AND abs(resets_at - ?) < 120 ORDER BY ts LIMIT 1
-            """, [.text(s.tool.rawValue), .text(s.window), .real(s.ts - 3600), .real(s.ts - 600), .real(r)],
-            { ($0.real(0), $0.real(1)) }) else { return nil }
+        guard let first = try Store.paceBase(store.db, s, from: s.ts - 3600, to: s.ts - 600) else { return nil }
         let (u0, t0) = first
         let rate = (s.usedPct - u0) / (s.ts - t0)
         let span = Txt.dur(s.ts - t0)

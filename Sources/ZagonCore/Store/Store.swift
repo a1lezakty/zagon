@@ -99,19 +99,8 @@ public final class Store {
                    [.text(s.tool.rawValue), .text(s.window), .real(s.usedPct), .of(s.resetsAt), .of(s.windowMinutes), .real(s.ts)])
     }
 
-    /// Latest snapshot per (tool, window).
-    public func latestLimits() throws -> [LimitSnapshot] {
-        var out: [LimitSnapshot] = []
-        try db.query("""
-            SELECT tool, window, used_pct, resets_at, window_minutes, max(ts) FROM limit_snapshot GROUP BY tool, window
-            ORDER BY tool, window
-            """) { r in
-            guard let tool = ToolKind(rawValue: r.text(0) ?? "") else { return }
-            out.append(LimitSnapshot(tool: tool, window: r.text(1) ?? "", usedPct: r.real(2), resetsAt: r.optReal(3),
-                                     windowMinutes: r.optInt(4), ts: r.real(5)))
-        }
-        return out
-    }
+    /// The current reading per (tool, window), see `Store.latestLimits(_:)`.
+    public func latestLimits() throws -> [LimitSnapshot] { try Store.latestLimits(db) }
 
     /// An interval known from hooks (not from transcripts), e.g. `waiting` for permission.
     public func addActivity(sessionId: String, start: Timestamp, end: Timestamp, kind: String, cwd: String? = nil) throws {

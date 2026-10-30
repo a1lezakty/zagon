@@ -126,10 +126,7 @@ public final class Notifier {
     /// When the window runs out at the pace of the last hour, if before its reset.
     public func forecast(_ s: LimitSnapshot) throws -> Double? {
         guard let resets = s.resetsAt else { return nil }
-        let first = try store.db.one("""
-            SELECT used_pct, ts FROM limit_snapshot WHERE tool = ? AND window = ? AND ts >= ? AND abs(coalesce(resets_at, 0) - ?) < 120
-            ORDER BY ts LIMIT 1
-            """, [.text(s.tool.rawValue), .text(s.window), .real(s.ts - 3600), .real(resets)]) { ($0.real(0), $0.real(1)) }
+        let first = try Store.paceBase(store.db, s, from: s.ts - 3600, to: s.ts)
         guard let (p0, t0) = first, s.ts - t0 >= 300, s.usedPct > p0 else { return nil }
         let eta = s.ts + (100 - s.usedPct) / ((s.usedPct - p0) / (s.ts - t0))
         return eta < resets ? eta : nil
