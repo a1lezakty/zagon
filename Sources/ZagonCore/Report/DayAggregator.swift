@@ -1,10 +1,12 @@
 /// Rebuilds `day_agg` rows of one local day and host from usage_hour, tool_use, activity and user_activity of the
 /// sessions of that host (rows imported from other machines carry their own host in `session.host`). Tokens and session
 /// time go to the project of the directory each request / interval was in (`usage_hour.cwd`, `activity.cwd`, see
-/// `SessionTime.project`); rows without one (before v5, imports) and tool calls go to the session's project.
+/// `Projects`); rows without one (before v5, imports) and tool calls go to the session's project.
 struct DayAggregator {
     let db: SQLite
     let host: String
+    /// `Projects.load`
+    var dirs: [String: Projects.Dir] = [:]
 
     struct Key: Hashable { var tool: String; var project: String; var model: String }
     struct Row { var input = 0, output = 0, cacheRead = 0, cacheWrite = 0, cacheWrite1h = 0, requests = 0, toolCalls = 0
@@ -19,7 +21,8 @@ struct DayAggregator {
             FROM usage_hour u LEFT JOIN session s ON s.id = u.session_id
             WHERE u.hour >= ?1 AND u.hour < ?2 AND coalesce(s.host, ?3) = ?3 GROUP BY 1, 2, 3, 4, 11
             """, [.real(s), .real(e), .text(host)]) { r in
-            let k = Key(tool: r.text(0) ?? "", project: SessionTime.project(r.text(1), session: r.text(2) ?? "", started: r.text(10)),
+            let k = Key(tool: r.text(0) ?? "",
+                        project: Projects.of(r.text(1), session: r.text(2) ?? "", started: r.text(10), dirs: dirs),
                         model: r.text(3) ?? "?")
             rows[k, default: Row()].input += r.int(4); rows[k]!.output += r.int(5); rows[k]!.cacheRead += r.int(6)
             rows[k]!.cacheWrite += r.int(7); rows[k]!.cacheWrite1h += r.int(8); rows[k]!.requests += r.int(9)
@@ -34,7 +37,7 @@ struct DayAggregator {
         }
         // Session time: union per session (parallel sub-agents are not double counted); per project, union per session
         // and project.
-        for ivs in try SessionTime.working(db, from: s, to: e, host: host).values {
+        for ivs in try SessionTime.working(db, from: s, to: e, host: host, dirs: dirs).values {
             total.sessionSec += Intervals.covered(ivs.intervals, from: s, to: e)
             for (project, p) in ivs.projects {
                 let sec = Intervals.covered(p, from: s, to: e)
@@ -73,8 +76,10 @@ enum SessionTime {
         var projects: [String: [Interval]] = [:]
     }
 
-    /// Working intervals overlapping [from, to), grouped by session; with `host`, only sessions of that host.
-    static func working(_ db: SQLite, from: Timestamp, to: Timestamp, host: String? = nil) throws -> [String: Entry] {
+    /// Working intervals overlapping [from, to), grouped by session; with `host`, only sessions of that host. `projects`
+    /// by `Projects.of` with `dirs`.
+    static func working(_ db: SQLite, from: Timestamp, to: Timestamp, host: String? = nil,
+                        dirs: [String: Projects.Dir] = [:]) throws -> [String: Entry] {
         var out: [String: Entry] = [:]
         try db.query("""
             SELECT a.session_id, coalesce(s.tool,''), coalesce(s.project,''), a.start, a."end", a.cwd, s.cwd
@@ -83,16 +88,9 @@ enum SessionTime {
             """, [.real(to), .real(from), .of(host)]) { r in
             let sid = r.text(0) ?? "", iv = Interval(r.real(3), r.real(4))
             out[sid, default: Entry(tool: r.text(1) ?? "", project: r.text(2) ?? "", intervals: [])].intervals.append(iv)
-            out[sid]!.projects[project(r.text(5), session: out[sid]!.project, started: r.text(6)), default: []].append(iv)
+            out[sid]!.projects[Projects.of(r.text(5), session: out[sid]!.project, started: r.text(6), dirs: dirs),
+                               default: []].append(iv)
         }
         return out
-    }
-
-    /// The project a directory counts for: the session's (`session`, of the folder it `started` in) when the directory
-    /// is not known or lies inside that folder (`cd src` stays in the project), else the directory's own name.
-    static func project(_ cwd: String?, session: String, started: String?) -> String {
-        guard let cwd, !cwd.isEmpty else { return session }
-        if let s = started, !s.isEmpty, cwd == s || cwd.hasPrefix(s.hasSuffix("/") ? s : s + "/") { return session }
-        return ClaudeParser.project(cwd)
     }
 }

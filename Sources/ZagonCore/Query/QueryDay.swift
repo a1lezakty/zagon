@@ -125,6 +125,7 @@ extension Query {
         let real = ranges.filter { $0.1 > $0.0 }
         guard let lo = real.map(\.0).min(), let hi = real.map(\.1).max() else { return out }
         func index(_ t: Timestamp) -> Int? { ranges.firstIndex { t >= $0.0 && t < $0.1 } }
+        let dirs = try Projects.load(db)
         func covered(_ merged: [Interval], _ r: (Timestamp, Timestamp)) -> Double {
             merged.reduce(0) { $0 + max(0, min($1.end, r.1) - max($1.start, r.0)) }
         }
@@ -142,7 +143,7 @@ extension Query {
             out[i].tokens.input += r.int(6); out[i].tokens.output += r.int(7); out[i].tokens.cacheRead += r.int(8)
             out[i].tokens.cacheWrite += r.int(9); out[i].tokens.cacheWrite1h += r.int(10); out[i].tokens.requests += r.int(11)
             out[i].cost += c
-            Self.add(&out[i].project, SessionTime.project(r.text(1), session: r.text(2) ?? "", started: r.text(12)), t, c)
+            Self.add(&out[i].project, Projects.of(r.text(1), session: r.text(2) ?? "", started: r.text(12), dirs: dirs), t, c)
             Self.add(&out[i].host, r.text(3) ?? "", t, c)
             Self.add(&out[i].agent, r.text(4) ?? "", t, c); Self.add(&out[i].model, m, t, c)
         }
@@ -158,8 +159,8 @@ extension Query {
             """, [.real(hi), .real(lo)]) { r in
             let sid = r.text(0) ?? "", iv = Interval(r.real(2), r.real(3))
             working[sid, default: ([], [:])].all.append(iv)
-            working[sid]!.projects[SessionTime.project(r.text(4), session: r.text(1) ?? "", started: r.text(5)), default: []]
-                .append(iv)
+            working[sid]!.projects[Projects.of(r.text(4), session: r.text(1) ?? "", started: r.text(5), dirs: dirs),
+                                   default: []].append(iv)
         }
         for e in working.values {
             let merged = Intervals.merge(e.all)

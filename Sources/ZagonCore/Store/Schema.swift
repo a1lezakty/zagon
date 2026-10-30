@@ -32,6 +32,11 @@ enum Schema {
     CREATE INDEX relay_ts ON relay(ts);
     CREATE INDEX relay_file ON relay(file_id);
 
+    -- The project of a directory as the machine that recorded it saw it the first time (`Projects.resolve`); home = 1
+    -- for the home directory or /. seq: change counter for export.
+    CREATE TABLE dir_project(cwd TEXT PRIMARY KEY, project TEXT NOT NULL, home INTEGER NOT NULL DEFAULT 0,
+      seq INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+
     ALTER TABLE source_file ADD COLUMN recount INTEGER NOT NULL DEFAULT 0;
     UPDATE source_file SET recount = 1 WHERE tool <> 'export';
     """

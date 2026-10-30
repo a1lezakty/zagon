@@ -309,6 +309,68 @@ func channelText(_ s: String) -> String {
         #expect(env.int("SELECT sum(output) FROM usage_hour") == 9 && env.int("SELECT sum(cache_write_1h) FROM usage_hour") == 5)
     }
 
+    // MARK: sessions started at home
+
+    /// A home directory with checkouts: `repo` (a subdir inside), `main` with a worktree `wt` (absolute gitdir) and `wt2`
+    /// (relative), `sup` with a submodule `mod`, notes outside any repo, and a git checkout at home itself (dotfiles).
+    func homeTree() -> String {
+        let h = tempDir()
+        for d in ["repo/.git", "repo/src/deep", "main/.git/worktrees/wt", "main/.git/worktrees/wt2", "wt/x", "wt2",
+                  "sup/.git/modules/mod", "sup/mod", "notes", ".git"] { Sys.mkdirs(h + "/" + d) }
+        Sys.writeFile(h + "/main/.git/worktrees/wt/commondir", Array("../..\n".utf8))
+        Sys.writeFile(h + "/main/.git/worktrees/wt2/commondir", Array("../..\n".utf8))
+        Sys.writeFile(h + "/wt/.git", Array("gitdir: \(h)/main/.git/worktrees/wt\n".utf8))
+        Sys.writeFile(h + "/wt2/.git", Array("gitdir: ../main/.git/worktrees/wt2\n".utf8))
+        Sys.writeFile(h + "/sup/mod/.git", Array("gitdir: ../.git/modules/mod\n".utf8))
+        return h
+    }
+
+    @Test func directoriesResolveToTheirGitCheckout() {
+        let h = homeTree()
+        func p(_ rel: String) -> String { Projects.resolve(h + rel, home: h).project }
+        #expect(p("/repo") == "repo" && p("/repo/src/deep") == "repo")
+        #expect(p("/wt") == "main" && p("/wt/x") == "main" && p("/wt2") == "main" && p("/main") == "main")
+        #expect(p("/sup/mod") == "mod" && p("/sup") == "sup")
+        #expect(p("/notes") == "notes")            // not the dotfiles checkout at home
+        #expect(p("/gone/away") == "away")         // no longer on disk: its last component
+        #expect(Projects.resolve(h, home: h).home && Projects.resolve(h + "/", home: h).home && Projects.resolve("/", home: h).home)
+        #expect(!Projects.resolve(h + "/repo", home: h).home)
+    }
+
+    @Test func aSessionStartedAtHomeCountsEachCheckout() throws {
+        let h = homeTree()
+        let env = ClaudeEnv { $0.home = h }
+        env.write("-h/H.jsonl", lines: [typed(T0, session: "H", cwd: h),
+                                        assistantLine(T0 + minute, id: "h1", output: 1, session: "H", cwd: h),
+                                        assistantLine(T0 + 2 * minute, id: "h2", output: 10, session: "H", cwd: h + "/repo/src/deep"),
+                                        assistantLine(T0 + 3 * minute, id: "h3", output: 100, session: "H", cwd: h + "/wt/x"),
+                                        assistantLine(T0 + 4 * minute, id: "h4", output: 1000, session: "H", cwd: h + "/notes")])
+        // A session started in a project folder keeps the old rule: inside it, its project; outside, the last component.
+        env.write("-r/R.jsonl", lines: [typed(T0, session: "R", cwd: h + "/repo"),
+                                        // the call that runs `cd` is still in the start folder
+                                        assistantLine(T0 + 30, id: "r0", session: "R", cwd: h + "/repo"),
+                                        assistantLine(T0 + minute, id: "r1", output: 3, session: "R", cwd: h + "/repo/src"),
+                                        assistantLine(T0 + 2 * minute, id: "r2", output: 4, session: "R", cwd: h + "/wt/x")])
+        env.scan()
+        let home = Sys.basename(h)
+        let want = [home: 1, "repo": 13, "main": 100, "notes": 1000, "x": 4]
+        let r = try Reports(store: env.store).day("2026-10-20")
+        #expect(Dictionary(uniqueKeysWithValues: r.projects.map { ($0.project, $0.tokens.output) }) == want)
+        let q = try Query(store: env.store).day("2026-10-20")
+        #expect(Dictionary(uniqueKeysWithValues: q.byProject.map { ($0.name, $0.tokens) }) == want)
+        #expect(env.int("SELECT count(*) FROM dir_project WHERE home = 1") == 1)
+
+        // Another machine gets the same projects from the exported directories, after they are gone here too.
+        var lines: [String] = []
+        try Export.run(store: env.store, since: 0) { lines.append($0) }
+        #expect(lines.contains { $0.contains(#""type":"dir""#) })
+        try FileManager.default.removeItem(atPath: h)
+        let dst = try Store(path: ":memory:")
+        try ExportImport(store: dst, source: "box").apply(lines)
+        #expect(Dictionary(uniqueKeysWithValues: try Query(store: dst).day("2026-10-20").byProject.map { ($0.name, $0.tokens) })
+                == want)
+    }
+
     @Test func exportKeepsTheOldUsageShapeAndAddsTheSplit() throws {
         let env = ClaudeEnv()
         env.write(mainFile, lines: [typed(T0), assistantLine(T0 + minute, id: "m1", output: 4, cacheWrite: 10, cacheWrite1h: 6),

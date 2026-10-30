@@ -48,6 +48,7 @@ public enum Export {
         var type = "day"; var day: String; var host: String; var seq: Int; var start: Double; var end: Double
         var rows: [DayRow]; var usage: [UsageRow]; var usageCwd: [UsageRow]; var tools: [ToolRow]; var user: [Span]
     }
+    struct DirLine: Encodable { var type = "dir"; var cwd: String, project: String, home: Bool, seq: Int }
     struct ActivityLine: Encodable {
         var type = "activity"; var sessionId: String, kind: String, start: Double, end: Double, cwd: String?
     }
@@ -100,6 +101,12 @@ public enum Export {
                 }
             }
         }
+
+        var dirs: [DirLine] = []
+        try db.query("SELECT cwd, project, home, seq FROM dir_project WHERE seq > ? ORDER BY seq", [.int(Int64(since))]) {
+            dirs.append(DirLine(cwd: $0.text(0) ?? "", project: $0.text(1) ?? "", home: $0.int(2) != 0, seq: $0.int(3)))
+        }
+        for d in dirs { try out(d) }
 
         var days: [(String, String, Int)] = []
         try db.query("SELECT day, host, max(seq) FROM day_agg GROUP BY day, host HAVING max(seq) > ? ORDER BY day, host",

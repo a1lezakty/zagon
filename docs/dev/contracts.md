@@ -84,6 +84,12 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
 - `activity(kind = working | waiting)`, `user_action(kind = msg | channel | read)`, `user_activity` (derived: your
   time, see Time rules).
 - `relay(file_id, session_id, ts, target)` (v5) — one row per `Relay` target.
+- `dir_project(cwd, project, home, seq)` (v5) — every directory a record carried, resolved once by Ingest on the
+  machine that recorded it, while it is on disk (`Projects.resolve`): `project` = the top of its git checkout (a
+  `.git` directory; a worktree's `.git` file → `commondir` → its main checkout's name; a submodule: its own; a
+  checkout at the home directory itself is not used), else the directory's last component (also when it is gone);
+  `home` = 1 for the home directory (`IngestOptions.home`, else `$HOME`) and `/`. Exported, so a client counts another
+  machine's directories the same way.
   `activity.cwd` (v4): the directory the interval was worked in; a new directory inside a turn splits the interval
   at the last event in the old one (no time lost); hook `waiting` intervals take the hook's cwd; NULL = unknown.
 - `task_session(task_id, session_id, how, start, end)` (v4): the linked period of a session, `[start, end)`;
@@ -98,9 +104,11 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   (tool, project); the `tool = project = model = ''` row holds the day totals `session_sec` and `user_sec`. `seq`
   = change counter. The project of tokens is the one of each request's `usage_hour.cwd`, of session time the one of
   each interval's `activity.cwd` (union per session and project, so parallel sub-agents in two directories count in
-  both; the totals row stays the union per session): a directory inside the folder the session started in (`cd src`)
-  and an unknown one count for the session's project, any other for its own last path component. Tool calls go to
-  the session's project. `cache_write_1h` (v5) as in `usage_hour`.
+  both; the totals row stays the union per session), by `Projects.of`: an unknown directory counts for the session's
+  project; for a session that started in a folder that is not `home` in `dir_project`, a directory inside that folder
+  (`cd src`) counts for the session's project and any other for its own last component; for a session started in the
+  home directory or `/` (one that works in many projects), each directory counts for its `dir_project.project`. Tool
+  calls go to the session's project. `cache_write_1h` (v5) as in `usage_hour`.
 - `limit_snapshot`, `task*`, `worklog_plan`, `summary`, `handoff`, `fts` (contentless FTS5) + `fts_doc`.
 
 ## Time rules
@@ -165,6 +173,8 @@ NDJSON on stdout, keys in snake_case, one consistent read snapshot; the Mac app 
   - `tools`: `tool_use` of the day, one row per `{session_id, hour, name}` with `n`;
   - `user`: your-time intervals `{start, end}` clipped to the day (a stretch over midnight comes in both days);
   - the day's totals by agent, tool, hour, session or model are sums over `usage` / `tools`; they equal `rows`;
+- `{"type":"dir", cwd, project, home, seq}` (v5) — `dir_project` rows with `seq > since`, before the `day` lines;
+  the client stores them as they are (it cannot resolve another machine's directories);
 - `{"type":"limit", tool, window, used_pct, resets_at, window_minutes, ts}` — the latest reading per (tool, window),
   in every export;
 - unknown line types and keys must be ignored (the format only grows).

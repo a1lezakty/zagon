@@ -29,6 +29,8 @@ public struct IngestOptions: Sendable {
     public static let defaultKeyPattern = #"[A-Z][A-Z0-9]+-\d+"#
     /// nil = the database's own host (`Store.host`); set only to import another machine's data.
     public var host: String?
+    /// The home directory of the transcripts' user (`Projects.resolve`); nil = `$HOME`.
+    public var home: String?
     /// Apply parsed records to the database after this many bytes (bounds memory on huge files).
     public var applyBytes = 16 << 20
     /// A full scan commits after this many bytes of new data (several files per transaction: far less WAL traffic).
@@ -58,6 +60,9 @@ public final class Ingest {
     let keys: Regex<AnyRegexOutput>?
     public private(set) var stats = IngestStats()
     var db: SQLite { store.db }
+
+    /// Directories already in `dir_project` (loaded on first use).
+    var knownDirs: Set<String>?
 
     // Pending derived work, done once in finish().
     var touchedHours = Set<Int>()
@@ -415,6 +420,7 @@ public final class Ingest {
         }
         touchedSessions.formUnion(sessions)
         for m in out.meta { try store.mergeSession(m, host: host) }
+        try noteDirs(out.usage.compactMap(\.cwd) + out.events.compactMap(\.cwd) + out.userMessages.compactMap(\.cwd))
         // Readings, not contributions: keyed by (tool, window, ts), so a recount writes the same rows again.
         for l in out.limits { try store.addLimitSnapshot(l) }
 
@@ -544,6 +550,21 @@ public final class Ingest {
         }
     }
 
+    /// Resolves each directory not seen before into `dir_project`, while it is still on disk.
+    func noteDirs(_ cwds: [String]) throws {
+        if knownDirs == nil {
+            knownDirs = []
+            try db.query("SELECT cwd FROM dir_project") { if let c = $0.text(0) { knownDirs!.insert(c) } }
+        }
+        let home = options.home ?? Sys.env("HOME") ?? ""
+        for c in Set(cwds) where !c.isEmpty && !knownDirs!.contains(c) {
+            let d = Projects.resolve(c, home: home)
+            try db.run("INSERT OR IGNORE INTO dir_project(cwd, project, home, seq) VALUES(?, ?, ?, ?)",
+                       [.text(c), .text(d.project), .int(d.home ? 1 : 0), .int(Int64(try store.nextSeq()))])
+            knownDirs!.insert(c)
+        }
+    }
+
     /// Writes an interval keyed by (file, session, start); rewriting it is idempotent (an open interval grows).
     func putWorking(file: Int64, session: String, _ iv: Interval, cwd: String?) throws {
         try db.run("DELETE FROM activity WHERE file_id=? AND session_id=? AND start=? AND kind='working'",
@@ -657,7 +678,8 @@ public final class Ingest {
             }
             if !days.isEmpty {
                 let seq = try store.nextSeq()
-                for d in days.sorted() { try DayAggregator(db: db, host: host).rebuild(day: d, seq: seq) }
+                let agg = DayAggregator(db: db, host: host, dirs: try Projects.load(db))
+                for d in days.sorted() { try agg.rebuild(day: d, seq: seq) }
             }
         }
         touchedHours.removeAll(); touchedSessions.removeAll(); userActionsChanged = false

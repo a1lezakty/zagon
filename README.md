@@ -153,8 +153,9 @@ zagon update                   # the latest release (see Update above)
 
 - Every report takes `--json`.
 - `$` is at API list prices, for comparison: a subscription is billed differently.
-- Tokens and session time count for the directory each request and stretch was in; a session is listed under the one
-  it started in.
+- Tokens and session time count for the project each request and stretch was in: inside the folder the session
+  started in, that folder's project; for a session started in your home directory, the git checkout of each directory
+  (a worktree counts for its main checkout). A session is listed under the folder it started in.
 - "You" is your own messages: one that another session types into a worker's terminal (`tmux send-keys`) is not yours.
 - Common options:
   - `--data-dir` (default `$ZAGON_DIR` or `~/.zagon`);
