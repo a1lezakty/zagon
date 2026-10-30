@@ -100,7 +100,7 @@ struct ToastView: View {
             HStack(spacing: 10) {
                 Image(systemName: t.error ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                     .font(.system(size: 13)).foregroundColor(t.error ? Z.bad : Z.good)
-                Text(t.text).font(.system(size: 13)).foregroundColor(Z.text).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                Text(t.text).font(.system(size: 13)).foregroundColor(Z.text).lineLimit(5).fixedSize(horizontal: false, vertical: true)
                     .help(t.text)
                 Spacer(minLength: 0)
                 if let url = t.reveal {
