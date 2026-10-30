@@ -29,6 +29,7 @@ let package = Package(
         .executableTarget(name: "zagon", dependencies: [
             "ZagonCore", .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ]),
-        .testTarget(name: "ZagonCoreTests", dependencies: ["ZagonCore", "CSQLite"], resources: [.copy("Fixtures")]),
+        .target(name: "CTestZone", path: "Tests/CTestZone"),
+        .testTarget(name: "ZagonCoreTests", dependencies: ["ZagonCore", "CSQLite", "CTestZone"], resources: [.copy("Fixtures")]),
     ]
 )

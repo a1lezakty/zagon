@@ -14,8 +14,6 @@ public final class Bot {
     /// Runs after `/tz <zone>` wrote config.toml: switch this process to the new zone (a service restarts itself).
     /// The reply "zone, local time" is sent once the zone is in effect, by this process or the restarted one.
     public var onTimezoneChange: () -> Void = {}
-    /// Whether this process already cuts time in the zone config.toml asks for (tests model it: `TZ` is process-wide).
-    public var zoneApplied: (ZagonPaths) -> Bool = Settings.timezoneApplied
     /// Language of the replies (`[notify] lang`).
     public var lang: NotifyLang
     var w: Words { lang.words() }
@@ -91,7 +89,7 @@ public final class Bot {
 
     /// The reply to `/tz <zone>`, once this process cuts time in that zone; then the note is dropped.
     func sendTimezoneReply(now: Double = Sys.now()) {
-        guard let paths, zoneApplied(paths),
+        guard let paths, Settings.timezoneApplied(paths),
               (try? store.db.one("SELECT 1 FROM meta WHERE key = 'telegram:tz_reply'") { $0.int(0) }) != nil else { return }
         _ = try? store.db.run("DELETE FROM meta WHERE key = 'telegram:tz_reply'")
         _ = telegram.send(Message(title: "", text: timezoneText(now: now)))

@@ -36,6 +36,9 @@ jobs:
       - name: Build
         run: swift build
       - name: Test
+        # any zone: Tests/CTestZone switches the test process to UTC when it loads (fails here if it stops doing so)
+        env:
+          TZ: America/New_York
         run: swift test --parallel
 
   static:
@@ -94,6 +97,9 @@ jobs:
       - uses: actions/checkout@v4
       - run: swift --version
       - name: Test
+        # any zone: Tests/CTestZone switches the test process to UTC when it loads (fails here if it stops doing so)
+        env:
+          TZ: America/New_York
         run: swift test --parallel
       - name: Build arm64 and x86_64, lipo
         run: |

@@ -675,8 +675,7 @@ struct ChannelTests {
         #expect(bot.reply("/sessions", [], now: now).text == "⏳ waits for you 10 min · api-server — fix login flow")
         #expect(bot.reply("/help", [], now: now).text.hasPrefix("/limits — limits\n/sessions — sessions\n/today — today"))
         #expect(bot.reply("/day", ["30-10"], now: now).text == "Format: /day 2026-10-29")
-        let tz = bot.reply("/tz", [], now: now).text  // the zone name is left out: other tests switch TZ meanwhile
-        #expect(tz.hasPrefix("Time zone ") && tz.contains(" (system), now "))
+        #expect(bot.reply("/tz", [], now: now).text.hasPrefix("Time zone \(Settings.zoneName()) (system), now "))
         let today = bot.reply("/today", [], now: now)
         #expect(today.title == "Fri, October 30" && today.text.hasPrefix("Sessions 0 min · you 0 min\n0 tokens · 0 requests"))
         #expect(bot.reply("/week", [], now: now).text.hasPrefix("Sessions 0 min · you 0 min · 0 tokens"))
