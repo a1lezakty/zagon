@@ -6,7 +6,7 @@ import Foundation
 
 /// `zagon export --since <seq>`: NDJSON of the totals changed after `seq`, for the Mac app over SSH.
 /// Lines (keys in snake_case):
-/// - `{"type":"export","schema","since","seq"}` first; pass `seq` as the next `--since`;
+/// - `{"type":"export","schema","since","seq","version"}` first; pass `seq` as the next `--since`;
 /// - `{"type":"session",…}` per session changed after `since` (all `session` columns), each followed by
 ///   `{"type":"activity","session_id","kind","start","end"}` lines: the session's complete working / waiting
 ///   intervals (merged per kind), which replace what the client had for that session;
@@ -16,7 +16,7 @@ import Foundation
 ///   that day (rows that vanished are gone). `ExportImport` is the reference client;
 /// - `{"type":"limit",…}` the latest reading per (tool, window), every time (a handful of rows).
 public enum Export {
-    struct Header: Encodable { var type = "export"; var schema: Int; var since: Int; var seq: Int }
+    struct Header: Encodable { var type = "export"; var schema: Int; var since: Int; var seq: Int; var version: String? }
     struct SessionLine: Encodable {
         var type = "session"
         var id: String, tool: String, host: String?, project: String?, cwd: String?, gitBranch: String?, title: String?
@@ -45,8 +45,9 @@ public enum Export {
         var tool: String, window: String, usedPct: Double, resetsAt: Double?, windowMinutes: Int?, ts: Double
     }
 
-    /// Writes the lines through `write`; reads one consistent snapshot of the database.
-    public static func run(store: Store, since: Int, write: (String) -> Void) throws {
+    /// Writes the lines through `write`; reads one consistent snapshot of the database. `version`: the CLI's
+    /// (`zagon --version`), for the header.
+    public static func run(store: Store, since: Int, version: String? = nil, write: (String) -> Void) throws {
         let db = store.db
         let e = JSONEncoder()
         e.keyEncodingStrategy = .convertToSnakeCase
@@ -56,7 +57,7 @@ public enum Export {
         try db.exec("BEGIN")  // deferred: a read snapshot, writers are not blocked
         defer { try? db.exec("COMMIT") }
         let seq = try db.one("SELECT value FROM meta WHERE key='seq'") { $0.int(0) } ?? 0
-        try out(Header(schema: Store.schemaVersion, since: since, seq: seq))
+        try out(Header(schema: Store.schemaVersion, since: since, seq: seq, version: version))
 
         var sessions: [SessionLine] = []
         try db.query("""

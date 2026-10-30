@@ -3,9 +3,9 @@ import Testing
 @testable import ZagonCore
 
 @Suite struct ExportTests {
-    func lines(_ s: Store, since: Int) throws -> [[String: Any]] {
+    func lines(_ s: Store, since: Int, version: String? = nil) throws -> [[String: Any]] {
         var out: [[String: Any]] = []
-        try Export.run(store: s, since: since) { out.append(try! JSONSerialization.jsonObject(with: Data($0.utf8)) as! [String: Any]) }
+        try Export.run(store: s, since: since, version: version) { out.append(try! JSONSerialization.jsonObject(with: Data($0.utf8)) as! [String: Any]) }
         return out
     }
 
@@ -22,6 +22,8 @@ import Testing
 
         let all = try lines(store, since: 0)
         #expect(all.first?["type"] as? String == "export")
+        #expect(all.first?["version"] == nil)
+        #expect(try lines(store, since: 0, version: "0.1.0").first?["version"] as? String == "0.1.0")
         let seq1 = all.first?["seq"] as? Int ?? -1
         #expect(seq1 > 0)
         #expect(all.filter { $0["type"] as? String == "session" }.map { $0["id"] as? String } == ["codex:s1"])

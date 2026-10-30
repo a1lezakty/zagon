@@ -101,7 +101,9 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
 
 NDJSON on stdout, keys in snake_case, one consistent read snapshot; the Mac app pulls it over SSH.
 
-- first line `{"type":"export","schema":<user_version>,"since":<n>,"seq":<m>}` — pass `m` as the next `--since`;
+- first line `{"type":"export","schema":<user_version>,"since":<n>,"seq":<m>,"version":"<v>"}` — pass `m` as the next
+  `--since`; `version` is what `zagon --version` prints (`0.1.0`, `dev` for a local build); a zagon without the key
+  predates the releases (it has no `zagon update`);
 - `{"type":"session", id, tool, host, project, cwd, git_branch, title, model, started_at, last_at, status, status_at,
   status_detail, user_msgs, archived, seq}` for every session with `seq > since` (missing keys = NULL), each followed
   by `{"type":"activity","session_id","kind","start","end"}` lines — the session's complete `working` / `waiting`
