@@ -8,6 +8,8 @@ struct TasksScreen: View {
     @State private var find = ""
     @State private var note = ""
     @State private var newTodo: String?
+    /// The suggestion being made in Jira, with the projects shown when its sheet opened.
+    @State private var jiraDraft: (draft: DraftVM, jira: TaskBackend.JiraProjects)?
     @Environment(\.isSnapshot) private var snapshot
 
     var body: some View {
@@ -30,8 +32,17 @@ struct TasksScreen: View {
         }
         // A draft belongs to the task it was typed for.
         .onChange(of: detail?.key) { _ in note = ""; newTodo = nil }
+        .sheet(isPresented: Binding { jiraDraft != nil } set: { if !$0 { jiraDraft = nil } }) {
+            if let x = jiraDraft {
+                let id = x.draft.id
+                JiraCreateSheet(f: f, draft: x.draft, jira: x.jira, create: { project, title, text, done in
+                    app.decideDraft(id, done: done) { try $0.createInJira(id, project: project, title: title, description: text) }
+                }, close: { jiraDraft = nil })
+            }
+        }
         .task(id: "\(String(describing: app.currentTaskSource))|\(detail?.key ?? "")") {
             await app.loadTasks(.list)
+            await app.loadTasks(.drafts)
             if let key = detail?.key { await app.loadTasks(.card(key)) }
         }
     }
@@ -42,6 +53,7 @@ struct TasksScreen: View {
             VStack(alignment: .leading, spacing: 10) {
                 SourceBar {
                     app.loadTasks(.list, force: true)
+                    app.loadTasks(.drafts, force: true)
                     if let key = vm.detail(selected)?.key { app.loadTasks(.card(key), force: true) }
                 }
                 HStack(spacing: 8) {
@@ -53,6 +65,16 @@ struct TasksScreen: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(f.t("tasks.new"))
+                }
+                let c = app.tasksNow
+                if app.taskBackend != nil, !(c.drafts ?? []).isEmpty || c.draftNote != nil {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Caps(text: f.t("draft.caps"))
+                        ForEach((c.drafts ?? []).map { TaskBackend.draft($0, f) }) { d in draft(d, jira: c.jira) }
+                        if let note = c.draftNote {
+                            Text(note).font(.system(size: 12)).foregroundColor(Z.muted).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
                 Flow(spacing: 6) {
                     ForEach(vm.filters.indices, id: \.self) { i in
@@ -66,6 +88,32 @@ struct TasksScreen: View {
             .padding(.vertical, 16).padding(.horizontal, 12)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+    }
+
+    /// A suggested new task: made here, in Jira (after its sheet), or dropped.
+    func draft(_ d: DraftVM, jira: TaskBackend.JiraProjects?) -> some View {
+        let f = app.f
+        // Not while an answer is on its way: a second click would answer the same suggestion again.
+        func decide(_ act: @escaping (TaskBackend) throws -> String) {
+            if app.tasksNow.loading == 0 { app.decideDraft(d.id, act) }
+        }
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(d.title).font(.system(size: 13, weight: .medium)).foregroundColor(Z.text).lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(d.meta).font(.system(size: 11)).foregroundColor(Z.muted).lineLimit(2)
+            Flow(spacing: 6, lineSpacing: 6) {
+                PillButton(title: f.t("draft.create"), primary: true, height: 28, radius: 8, fontSize: 12) { decide { try $0.accept(d.id) } }
+                if let jira, !jira.projects.isEmpty {
+                    PillButton(title: f.t("draft.createJira"), height: 28, radius: 8, fontSize: 12) {
+                        if app.tasksNow.loading == 0 { jiraDraft = (d, jira) }
+                    }
+                }
+                PillButton(title: f.t("draft.reject"), height: 28, radius: 8, fontSize: 12) { decide { try $0.reject(d.id) } }
+            }
+        }
+        .padding(.vertical, 10).padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Z.divider, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
     }
 
     func row(_ r: TaskRowVM, selected on: Bool) -> some View {
@@ -296,5 +344,78 @@ struct NoteEditor: View {
         .frame(height: 52)
         .background(RoundedRectangle(cornerRadius: 9).fill(Z.inset))
         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Z.control))
+    }
+}
+
+/// What will be made in Jira, editable; nothing is written before Create.
+struct JiraCreateSheet: View {
+    let f: Fmt
+    let draft: DraftVM
+    let jira: TaskBackend.JiraProjects
+    /// Makes it; `done` gets the failure (nil: made).
+    let create: (_ project: String, _ title: String, _ description: String, _ done: @escaping (String?) -> Void) -> Void
+    let close: () -> Void
+    @State private var project: String
+    @State private var title: String
+    @State private var text: String
+    @State private var running = false
+    @State private var error: String?
+
+    init(f: Fmt, draft: DraftVM, jira: TaskBackend.JiraProjects,
+         create: @escaping (String, String, String, @escaping (String?) -> Void) -> Void, close: @escaping () -> Void) {
+        self.f = f; self.draft = draft; self.jira = jira; self.create = create; self.close = close
+        _project = State(initialValue: jira.default.flatMap { d in jira.projects.contains { $0.key == d } ? d : nil }
+                         ?? jira.projects.first?.key ?? "")
+        _title = State(initialValue: draft.name)
+        _text = State(initialValue: draft.description)
+    }
+
+    var body: some View {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        VStack(alignment: .leading, spacing: 12) {
+            H2(text: f.t("draft.jiraTitle"), size: 17)
+            Picker(f.t("draft.project"), selection: $project) {
+                ForEach(jira.projects, id: \.key) { p in Text(p.key + " · " + p.name).tag(p.key) }
+            }
+            Text(f.t("draft.type")).font(.system(size: 13)).foregroundColor(Z.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(f.t("draft.name")).foregroundColor(Z.secondary)
+                    Spacer(minLength: 0)
+                    // Jira lists cut long titles.
+                    Text("\(name.count)/70").foregroundColor(name.count > 70 ? Z.bad : Z.muted)
+                }
+                .font(.system(size: 12))
+                Field(placeholder: draft.name, text: $title)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(f.t("draft.description")).font(.system(size: 12)).foregroundColor(Z.secondary)
+                TextEditor(text: $text).font(.system(size: 13)).scrollContentBackground(.hidden).padding(4)
+                    .frame(height: 160)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(Z.inset))
+                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Z.control))
+            }
+            Text(f.t("draft.links", draft.worked)).font(.system(size: 12)).foregroundColor(Z.muted)
+            if let error {
+                Text(error).font(.system(size: 12)).foregroundColor(Z.bad).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                Button(f.t("common.cancel"), action: close).keyboardShortcut(.cancelAction).disabled(running)
+                // No Return shortcut: a newline in the description must not write to Jira.
+                Button(running ? f.t("draft.creating") : f.t("draft.create")) {
+                    running = true
+                    error = nil
+                    create(project, name, text.trimmingCharacters(in: .whitespacesAndNewlines)) { why in
+                        running = false
+                        if let why { error = why } else { close() }
+                    }
+                }
+                .disabled(running || project.isEmpty || name.isEmpty)
+            }
+        }
+        .padding(20).frame(width: 520)
+        .background(Z.popover)
+        .interactiveDismissDisabled(running)
     }
 }

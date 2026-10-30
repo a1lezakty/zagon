@@ -32,10 +32,31 @@ public final class TaskTools: TaskService {
         return SuggestText.run(r, day: day, answer: "ask the user, then task_suggestions_answer with confirm: true")
     }
 
-    public func answerSuggestions(accept: [Int], reject: [Int]) throws -> String {
+    public func answerSuggestions(accept: [String], reject: [String]) throws -> String {
         let s = try suggester()
         // No outer transaction: accept refreshes the day's links (git) and must not hold the write lock meanwhile.
-        return try mapErrors { try s.accept(accept) + s.reject(reject) }.joined(separator: "\n")
+        return try mapErrors {
+            try s.accept(accept.compactMap(Int.init)) + accept.filter { Int($0) == nil }.map { try s.acceptNew($0) }
+                + s.reject(reject.compactMap(Int.init)) + reject.filter { Int($0) == nil }.map { try s.rejectNew($0) }
+        }.joined(separator: "\n")
+    }
+
+    public func createInJira(id: String, project: String?, title: String?, description: String?, confirm: Bool) throws -> String {
+        let s = try suggester()
+        return try mapErrors {
+            let p = try s.jiraPlan(id, project: project, title: title, description: description)
+            guard let proj = p.project else {
+                throw MCPToolError((project.map { "No Jira project \($0) you may create issues in. " } ?? "Choose a project. ")
+                                   + "Projects: " + p.projects.map { "\($0.key) (\($0.name))" }.joined(separator: ", ") + ". Nothing was created.")
+            }
+            guard confirm else {
+                return "Would create in Jira: a Task in \(proj), assigned to the user\ntitle: \(p.title)\ndescription:\n\(p.description)\n"
+                    + "then \(Txt.dur(p.draft.workedSec)) of work is linked to it.\nProjects: "
+                    + p.projects.map(\.key).joined(separator: ", ") + "\nNothing was created. Show this to the user; only after "
+                    + "they explicitly say to create it, call again with confirm: true (and their project, title, description)."
+            }
+            return try s.createInJira(id, project: proj, title: p.title, description: p.description)
+        }
     }
 
     func scan() { if let refresh { do { try refresh() } catch { log("mcp: scan failed: \(error)") } } }
@@ -101,6 +122,7 @@ public final class TaskTools: TaskService {
 
     func mapErrors<T>(_ body: () throws -> T) throws -> T {
         do { return try body() } catch let e as TaskError { throw MCPToolError(e.description) }
+        catch let e as JiraError { throw MCPToolError("\(e)") }
     }
 
     /// Applies the fields inside the caller's transaction (all or nothing); returns what changed as "; …" pieces.

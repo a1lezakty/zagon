@@ -30,6 +30,15 @@ final class TaskBackendTests: XCTestCase {
                 echo "  #3 PROJ-12 10:00–11:00 1h planned  text with logged in it"
                 if [ -e "$HOME/commit-fails" ]; then echo "Error: Jira: HTTP 500" >&2; exit 1; fi
                 echo "  not logged #4 PROJ-12 11:00–12:00: overlaps a worklog now in Jira"; echo "1 worklogs logged, 1 not logged" ;;
+            "task drafts") if [ -e "$HOME/old-drafts" ]; then echo "Error: Unexpected argument 'drafts'" >&2; exit 64; fi
+                cat "$HOME/drafts.json" ;;
+            "task jira-projects") if [ -e "$HOME/no-jira" ]; then echo "Error: Jira is not connected ([jira] in config.toml)" >&2; exit 1; fi
+                echo '{"default":"PROJ","projects":[{"key":"OPS","name":"Operations"},{"key":"PROJ","name":"Project"}]}' ;;
+            "task accept") case "$*" in
+                *--create-in-jira*) if [ -e "$HOME/jira-fails" ]; then echo "Error: Jira: HTTP 400 summary too long" >&2; exit 1; fi
+                    echo "Create in Jira: a Task in PROJ, assigned to you"; echo "N3 accepted: PROJ-99 Fix login · 2h 10m · created in Jira" ;;
+                *) echo "N3 accepted: ZAG-5 Fix login · 2h 10m" ;; esac ;;
+            "task reject") echo "N3 rejected" ;;
             esac
             """)
     }
@@ -180,5 +189,55 @@ final class TaskBackendTests: XCTestCase {
         XCTAssertThrowsError(try older.list()) {
             XCTAssertEqual("\($0)", "zagon there is older than this app, update it (Unknown option '--json')")
         }
+    }
+
+    func testSuggestedNewTasksOverSsh() throws {
+        try """
+            [{"confidence":0.8,"day":"2026-10-29","description":"It was: login failed.\\nDone: fixed the check.","done":"Fixed the login check",\
+            "id":"N3","stretches":[{"end":1793267800,"project":"example-project","session_id":"claude:s1","session_title":"login bug",\
+            "start":1793260000},{"end":1793270000,"session_id":"codex:s2","session_title":"login bug","start":1793269000},\
+            {"end":1793271000,"session_id":"codex:s3","start":1793270500}],"title":"Fix login","worked_sec":7800}]
+            """.write(toFile: home + "/drafts.json", atomically: true, encoding: .utf8)
+        let b = TaskBackend.server("build-box", controlDir: home, ssh: home + "/ssh")
+
+        let (drafts, jira) = try b.suggestions()
+        XCTAssertEqual(drafts.map(\.id), ["N3"])
+        XCTAssertEqual(drafts.first?.stretches.first?.sessionId, "claude:s1")
+        XCTAssertEqual(jira, TaskBackend.JiraProjects(default: "PROJ", projects: [.init(key: "OPS", name: "Operations"),
+                                                                                   .init(key: "PROJ", name: "Project")]))
+        XCTAssertEqual(calls, ["task|drafts|--json|", "task|jira-projects|--json|"])
+        let utc = TimeZone(identifier: "UTC")!
+        let card = TaskBackend.draft(try XCTUnwrap(drafts.first), Fmt(lang: .en, timeZone: utc, now: Date()))
+        XCTAssertEqual([card.title, card.meta, card.name, card.worked],
+                       ["New task: Fix login · 2h 10m", "Thu, October 29 · login bug", "Fix login", "2h 10m"])
+        XCTAssertEqual(card.description, "It was: login failed.\nDone: fixed the check.")
+        XCTAssertEqual(TaskBackend.draft(try XCTUnwrap(drafts.first), Fmt(lang: .ru, timeZone: utc, now: Date())).title,
+                       "Новая задача: Fix login · 2 ч 10 м")
+
+        // Texts with a leading dash stay values; only the Jira create says --yes.
+        XCTAssertEqual(try b.accept("N3"), "N3 accepted: ZAG-5 Fix login · 2h 10m")
+        XCTAssertEqual(try b.accept("N3", title: "-x \"q\" $HOME", description: "--what"), "N3 accepted: ZAG-5 Fix login · 2h 10m")
+        XCTAssertEqual(try b.reject("N3"), "N3 rejected")
+        XCTAssertEqual(try b.createInJira("N3", project: "PROJ", title: "-Fix login", description: "It was: a=b"),
+                       "N3 accepted: PROJ-99 Fix login · 2h 10m · created in Jira")
+        XCTAssertEqual(calls.suffix(4), ["task|accept|--|N3|", "task|accept|--title=-x \"q\" $HOME|--description=--what|--|N3|",
+                                         "task|reject|--|N3|",
+                                         "task|accept|--create-in-jira|--project=PROJ|--title=-Fix login|--description=It was: a=b|--yes|--|N3|"])
+        XCTAssertEqual(calls.filter { $0.contains("--yes") }.count, 1)
+        FileManager.default.createFile(atPath: home + "/jira-fails", contents: nil)
+        XCTAssertThrowsError(try b.createInJira("N3", project: "PROJ", title: "t", description: "d")) {
+            XCTAssertEqual("\($0)", "Jira: HTTP 400 summary too long")
+        }
+
+        // Jira not connected there: suggestions without the Jira button; none at all: Jira is not asked.
+        FileManager.default.createFile(atPath: home + "/no-jira", contents: nil)
+        XCTAssertNil(try b.suggestions().jira)
+        try "[]".write(toFile: home + "/drafts.json", atomically: true, encoding: .utf8)
+        let before = calls.count
+        XCTAssertTrue(try b.suggestions().drafts.isEmpty)
+        XCTAssertEqual(calls.count, before + 1)
+        // A zagon from before 0.1.1: no suggestions, no error.
+        FileManager.default.createFile(atPath: home + "/old-drafts", contents: nil)
+        XCTAssertTrue(try b.drafts().isEmpty)
     }
 }

@@ -207,6 +207,14 @@ extension Txt {
 }
 
 public enum SuggestText {
+    /// Suggested new tasks: id, time, title, the worklog text.
+    public static func drafts(_ d: [NewTaskDraft]) -> String {
+        d.map { x in
+            "#\(TaskText.pad(x.id, 5)) new        \(TaskText.pad(Txt.dur(x.workedSec), 7)) \(x.day)  \(Txt.oneLine(x.title, 70))"
+                + (x.done.isEmpty ? "" : "\n       \(Txt.oneLine(x.done, 200))")
+        }.joined(separator: "\n")
+    }
+
     public static func items(_ items: [Suggestion]) -> String {
         items.map { s in
             "#\(TaskText.pad("\(s.id)", 5)) \(TaskText.pad(s.key, 10)) \(TaskText.pad(Txt.dur(s.workedSec), 7)) "
@@ -225,12 +233,11 @@ public enum SuggestText {
                     + (r.inputTokens.map { " · \(Txt.tokens($0)) in" } ?? "") + (r.outputTokens.map { " / \(Txt.tokens($0)) out" } ?? "")
             }
         } else { head += " · suggested earlier by \(r.engine) (--again asks again)" }
-        var out = [head + " · \(r.items.count) suggestions"]
+        var out = [head + " · \(r.items.count) suggestions" + (r.drafts.isEmpty ? "" : ", \(r.drafts.count) new tasks")]
         if let n = r.note { out.append("note: \(n)") }
-        if !r.items.isEmpty {
-            out.append(items(r.items))
-            out.append("Not counted until accepted: \(answer)")
-        }
+        if !r.items.isEmpty { out.append(items(r.items)) }
+        if !r.drafts.isEmpty { out.append(drafts(r.drafts)) }
+        if !r.items.isEmpty || !r.drafts.isEmpty { out.append("Not counted until accepted: \(answer)") }
         return out.joined(separator: "\n")
     }
 }

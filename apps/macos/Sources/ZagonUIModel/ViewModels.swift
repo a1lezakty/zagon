@@ -581,6 +581,17 @@ public struct TasksVM: Sendable {
     }
 }
 
+/// A suggested new task's card: "New task: <title> · 2h 10m", then its day and sessions.
+public struct DraftVM: Sendable, Equatable, Identifiable {
+    public var id: String
+    public var title: String
+    public var meta: String
+    /// What the Jira sheet starts from.
+    public var name: String
+    public var description: String
+    public var worked: String
+}
+
 // MARK: - Worklog
 
 public struct WorklogSegmentVM: Sendable, Equatable {

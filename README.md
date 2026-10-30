@@ -166,6 +166,10 @@ zagon update                   # the latest release (see Update above)
   your other open issues only under "More in Jira" (`task list --all`). Jira statuses map by their category, and a
   name with review, QA, test, "ready for" or "ready to release" in it is "in review" (`[jira] review_statuses =
   ["review", "staging"]` to change the list).
+- Work no task fits gets a new task suggested once a day (`zagon task suggest`, MCP `task_suggestions`, the Mac app's
+  Tasks screen): a title, a description and the day's worklog text, written the way you write in Jira (your own issues,
+  worklogs and comments are the samples). Accepted, it is a task in Zagon; `zagon task accept N3 --create-in-jira`
+  (after you confirm) makes it a Jira issue assigned to you. Nothing is written to Jira without your confirmation.
 - `$` is at API list prices, for comparison: a subscription is billed differently. Each model has its own price
   for input, output, cache reads and cache writes (Anthropic: 1.25x input for 5 minutes, 2x for 1 hour; OpenAI: as
   listed, free for most models), from the Anthropic and OpenAI pricing pages. In the CLI and MCP reports a model with

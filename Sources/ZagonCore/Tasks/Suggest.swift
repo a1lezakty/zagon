@@ -8,12 +8,17 @@ public struct Suggestion: Codable, Sendable, Equatable {
     /// The session's working time in [start, end).
     public var workedSec: Double
     public var confidence: Double, reason: String
+    /// The day's worklog text the AI wrote for it; set as "what was done" when accepted (if none is there).
+    public var done: String = ""
 }
 
 /// Suggests tasks for the day's work that no key linked. One AI call per day (the summary's engine, read-only for
 /// everything) over a compact digest: the stretches (project, folder, title, first words of typed messages, edited
-/// files, commits) and the candidate tasks (title, status; from Jira, read-only: description, last comments, your
-/// earlier worklogs). Without an engine (or when it fails): shared words of titles, projects and task names.
+/// files, commits), the candidate tasks (title, status; from Jira, read-only: description, last comments, your
+/// earlier worklogs) and samples of how you write in Jira (`styleSamples`). Per stretch the AI names a task only when
+/// sure (`minConfidence`), else it suggests a new task (`NewTaskDraft`: title, description, worklog text in your
+/// style); stretches of one piece of work share one new task. Without an engine (or when it fails): shared words of
+/// titles, projects and task names, and no new tasks.
 /// Results are `suggested` links over the stretch; accept makes them `manual` for that period, reject unlinks the
 /// task from the session for good.
 public struct TaskSuggester {
@@ -32,7 +37,7 @@ public struct TaskSuggester {
     /// Stretches with less work than this are not worth a suggestion; longer work than `maxSegment` is cut into
     /// pieces (a long session often moves between tasks).
     static let minSegment: Double = 10 * 60, maxSegment: Double = 2 * 3600
-    static let maxPrompt = 10000, maxTaskBlock = 5000, maxTasks = 20
+    static let maxPrompt = 16000, maxTaskBlock = 5000, maxTasks = 20, maxStyle = 3000
     /// The digest's size limit (`maxPrompt`; smaller in tests).
     var promptLimit = TaskSuggester.maxPrompt
     /// How far back Jira worklogs and updates make a task a candidate.
@@ -65,6 +70,8 @@ public struct TaskSuggester {
 
     public struct Run: Sendable, Encodable {
         public var items: [Suggestion]
+        /// New tasks suggested for work no task fits.
+        public var drafts: [NewTaskDraft] = []
         /// False: nothing new to ask (every stretch of the day was asked about), these are the stored suggestions.
         public var made: Bool
         public var engine: String
@@ -84,6 +91,7 @@ public struct TaskSuggester {
             try store.db.run("DELETE FROM task_session WHERE how = 'suggested' AND start >= ? AND start < ?",
                              [.real(from - LinkHow.maxNudge), .real(to - LinkHow.maxNudge)])
             try store.db.run("DELETE FROM meta WHERE key = ?", [.text(metaKey)])
+            try dropDrafts(day: day)
         }
         try linker.linkSessions(store)
         try linker.linkDay(store, from: from, to: to)
@@ -91,7 +99,7 @@ public struct TaskSuggester {
         let prev = try meta(metaKey)
         let p = try prepare(day, from: from, to: to, now: now, skip: try skipPeriods(day, from: from, to: to), relink: false)
         guard !p.segs.isEmpty else {
-            return Run(items: try list(day), made: false, engine: prev?["engine"]?.string ?? "none", segments: 0)
+            return Run(items: try list(day), drafts: try drafts(day), made: false, engine: prev?["engine"]?.string ?? "none", segments: 0)
         }
         var run = Run(items: [], made: true, engine: "none", segments: p.segs.count, asked: p.asked.count)
         if p.missing > 0 { run.note = "\(p.missing) of your Jira issues of those days are not read yet (zagon task import reads them)" }
@@ -99,9 +107,10 @@ public struct TaskSuggester {
         let allowed = { (seg: Segment, task: Int) in !blocked.contains("\(task) \(seg.session)") }
         let byKey = Dictionary(p.cands.map { ($0.task.key, $0.task.id) }, uniquingKeysWith: { a, _ in a })
         let segById = Dictionary(uniqueKeysWithValues: p.segs.map { ($0.id, $0) })
-        var picks: [(seg: Segment, task: Int, confidence: Double, reason: String)] = []
+        var picks: [(seg: Segment, task: Int, confidence: Double, reason: String)] = [], done: [String: String] = [:]
+        var news: [(segs: [Segment], title: String, description: String, done: String, confidence: Double)] = []
         var askedNow: [Segment] = []
-        if ["claude", "codex"].contains(engine.config.summaryEngine), !p.cands.isEmpty {
+        if ["claude", "codex"].contains(engine.config.summaryEngine) {
             let t0 = Time.now()
             if let r = engine.complete(p.prompt, what: "suggest") {
                 run.engine = r.engine; run.seconds = Time.now() - t0
@@ -113,12 +122,18 @@ public struct TaskSuggester {
                     run.outputTokens = u["output_tokens"]?.double.map(Int.init)
                 }
                 askedNow = p.asked.compactMap { segById[$0] }
-                // Per stretch the most confident task not rejected for that session.
+                // Per stretch the most confident task not rejected for that session; else the new task it was given.
                 for a in Self.parse(r.text, segments: Set(p.asked), keys: Set(byKey.keys), min: minConfidence) {
                     let seg = segById[a.segment]!, task = byKey[a.key]!
-                    if !picks.contains(where: { $0.seg.id == seg.id }) && allowed(seg, task) { picks.append((seg, task, a.confidence, a.reason)) }
+                    if !picks.contains(where: { $0.seg.id == seg.id }) && allowed(seg, task) {
+                        picks.append((seg, task, a.confidence, a.reason)); done[seg.id] = a.done
+                    }
                 }
-                if picks.isEmpty && !r.text.isEmpty { log("suggest: the answer gave no usable suggestion") }
+                for n in Self.parseNew(r.text, segments: Set(p.asked)) {
+                    let segs = n.segments.filter { id in !picks.contains { $0.seg.id == id } }.compactMap { segById[$0] }
+                    if !segs.isEmpty { news.append((segs, n.title, n.description, n.done, n.confidence)) }
+                }
+                if picks.isEmpty && news.isEmpty && !r.text.isEmpty { log("suggest: the answer gave no usable suggestion") }
             } else {
                 run.note = "the \(engine.config.summaryEngine) call failed; suggested by shared words for now, the rest is asked next time"
             }
@@ -131,12 +146,17 @@ public struct TaskSuggester {
             let cur = try meta(metaKey)
             var items = cur?["items"]?.array ?? [], asked = cur?["asked"]?.array ?? []
             let taken = try openPeriods(from: from, to: to)
-            for x in picks where !(taken[x.seg.session] ?? []).contains(where: { $0.start < x.seg.end && $0.end > x.seg.start }) {
+            let free = { (g: Segment) in !(taken[g.session] ?? []).contains(where: { $0.start < g.end && $0.end > g.start }) }
+            for x in picks where free(x.seg) {
                 try Tasks(store: store).link(x.task, session: x.seg.session, how: .suggested, start: x.seg.start, end: x.seg.end)
                 items.append(.object([.init("t", .number("\(x.task)")), .init("s", .string(x.seg.session)),
                                       .init("a", .number("\(x.seg.start)")), .init("c", .number("\(x.confidence)")),
-                                      .init("r", .string(x.reason))]))
+                                      .init("r", .string(x.reason)), .init("w", .string(done[x.seg.id] ?? ""))]))
             }
+            try addDrafts(news.compactMap { n in
+                let segs = n.segs.filter(free)
+                return segs.isEmpty ? nil : (segs, n.title, n.description, n.done, n.confidence)
+            }, day: day, now: now)
             for g in askedNow {
                 asked.append(.object([.init("s", .string(g.session)), .init("a", .number("\(g.start)")), .init("b", .number("\(g.end)"))]))
             }
@@ -146,6 +166,7 @@ public struct TaskSuggester {
                                           .init("cost", .number("\(cost)")), .init("items", .array(items)), .init("asked", .array(asked))]))
         }
         run.items = try list(day)
+        run.drafts = try drafts(day)
         return run
     }
 
@@ -203,7 +224,7 @@ public struct TaskSuggester {
         guard !segs.isEmpty else { return Prepared(segs: [], facts: [:], cands: [], prompt: "", asked: [], missing: 0) }
         let (cands, missing) = try candidates(day, from: from, to: to, now: now)
         let facts = try self.facts(segs, from: from, to: to)
-        let (prompt, asked) = Self.prompt(segs, facts, cands, limit: promptLimit, words: words)
+        let (prompt, asked) = Self.prompt(segs, facts, cands, style: styleSamples(day, now: now), limit: promptLimit, words: words)
         return Prepared(segs: segs, facts: facts, cands: cands, prompt: prompt, asked: asked, missing: missing)
     }
 
@@ -228,10 +249,10 @@ public struct TaskSuggester {
     /// Open suggestions of the day (not accepted, rejected, or covered by a link since), longest first.
     public func list(_ day: String) throws -> [Suggestion] {
         guard let (from, to) = Time.dayBounds(day) else { throw TaskError("bad day \(day)") }
-        var why: [String: (Double, String)] = [:]
+        var why: [String: (Double, String, String)] = [:]
         for i in try meta("suggest:" + day)?["items"]?.array ?? [] {
             guard let t = i["t"]?.double, let s = i["s"]?.string, let a = i["a"]?.double else { continue }
-            why["\(Int(t)) \(s) \(a)"] = (i["c"]?.double ?? 0, i["r"]?.string ?? "")
+            why["\(Int(t)) \(s) \(a)"] = (i["c"]?.double ?? 0, i["r"]?.string ?? "", i["w"]?.string ?? "")
         }
         let map = try Tasks(store: store).linkMap()
         var out: [Suggestion] = []
@@ -245,7 +266,7 @@ public struct TaskSuggester {
             let w = why["\(r.int(1)) \(sid) \(start)"]
             out.append(Suggestion(id: r.int(0), taskId: r.int(1), key: r.text(5) ?? "", title: r.text(6) ?? "",
                                   sessionId: sid, sessionTitle: r.text(7), project: r.text(8),
-                                  start: start, end: r.real(4), workedSec: 0, confidence: w?.0 ?? 0, reason: w?.1 ?? ""))
+                                  start: start, end: r.real(4), workedSec: 0, confidence: w?.0 ?? 0, reason: w?.1 ?? "", done: w?.2 ?? ""))
         }
         for i in out.indices {
             out[i].workedSec = try TaskLinker.working(store.db, out[i].sessionId)
@@ -272,8 +293,12 @@ public struct TaskSuggester {
                 out.append("#\(id) not accepted: that time is linked to \(keys.joined(separator: ", ")) now; suggestion dropped")
                 continue
             }
+            let text = try list(day).first { $0.id == id }?.done ?? ""
             try store.db.run("UPDATE OR REPLACE task_session SET how = 'manual', start = ? WHERE rowid = ? AND how = 'suggested'",
                              [.real(s.start), .int(Int64(id))])
+            if !text.isEmpty, try Tasks(store: store).done(s.task).first(where: { $0.day == day }) == nil {
+                try Tasks(store: store).setDone(s.task, day: day, text: text, source: "auto")
+            }
             out.append("#\(id) accepted: \(s.key) \(Txt.clock(s.start))–\(Txt.clock(s.end))")
         }
         return out
@@ -423,9 +448,10 @@ public struct TaskSuggester {
         let since = from - Double(Self.lookback) * 86400
         let j = jiraFacts(day, since: since, from: from, to: to, now: now)
         let cache = JiraCache.current(store, jira, now: now, log: log)
-        for k in Set(Array(j.worklogs.keys) + j.updated + j.near) where cache.mine.contains(k) { _ = try tasks.findOrAdopt(k) }
+        // Made a task "before" the window: it is offered for its Jira signals, not as a task created then.
+        for k in Set(Array(j.worklogs.keys) + j.updated + j.near) where cache.mine.contains(k) { _ = try tasks.findOrAdopt(k, at: since - 1) }
         for t in try tasks.list() {
-            c[t.id] = Candidate(task: t, score: ([.inProgress, .review].contains(t.status) ? 1 : t.status == .planned ? 0.2 : 0)
+            c[t.id] = Candidate(task: t, score: (t.status == .inProgress ? 1 : t.status == .review ? 0.3 : t.status == .planned ? 0.2 : 0)
                                     + (t.created >= since ? 0.5 : 0))
         }
         let byKey = Dictionary(c.values.flatMap { v in [v.task.key, v.task.jiraKey].compactMap { $0 }.map { ($0, v.task.id) } },
@@ -522,6 +548,39 @@ public struct TaskSuggester {
 
     static func members(_ v: JValue?) -> [JValue.Member] { if case .object(let m)? = v { return m }; return [] }
 
+    /// Samples of how you write in Jira, for the AI to write new tasks and worklogs the same way: issues you created
+    /// (title and the start of the description), your worklog comments of the last `lookback` days, your comments; only
+    /// your own texts (Jira `myself`), clipped, at most `maxStyle` characters; read once per day (cached in `meta`).
+    /// Empty without Jira or when it fails.
+    func styleSamples(_ day: String, now: Timestamp) -> String {
+        guard let jira else { return "" }
+        let key = "suggest:style"
+        if let v = try? meta(key), v["at"]?.string == Time.dayString(now), let t = v["text"]?.string { return t }
+        do {
+            let t = try jira.myTexts(since: now - Double(Self.lookback) * 86400)
+            let text = Self.style(t, words: words)
+            try setMeta(key, .object([.init("at", .string(Time.dayString(now))), .init("text", .string(text)),
+                                      .init("n", .array([t.issues.count, t.worklogs.count, t.comments.count].map { .number("\($0)") }))]))
+            return text
+        } catch {
+            log("suggest: Jira texts failed, no style samples: \(error)")
+            return ""
+        }
+    }
+
+    static func style(_ t: JiraTexts, words w: Words) -> String {
+        var out: [String] = []
+        if !t.issues.isEmpty {
+            out.append(w.t("Задачи, которые он завёл (название — описание):", "Tasks they created (title — description):"))
+            out += t.issues.map { "- " + clip(100)($0.summary) + ($0.description.isEmpty ? "" : " — " + lines($0.description, 300)) }
+        }
+        if !t.worklogs.isEmpty { out.append(w.t("Его ворклоги:", "Their worklogs:")); out += t.worklogs.map { "- " + clip(150)($0) } }
+        if !t.comments.isEmpty { out.append(w.t("Его комментарии:", "Their comments:")); out += t.comments.map { "- " + lines($0, 250) } }
+        var text = ""
+        for l in out where text.count + l.count + 1 <= maxStyle { text += l + "\n" }
+        return text.trimmed("\n")
+    }
+
     /// One line, at most `n` characters.
     static func clip(_ n: Int) -> (String) -> String {
         { s in
@@ -536,36 +595,49 @@ public struct TaskSuggester {
     static func instruction(_ w: Words) -> String {
         w.t("""
             Ниже задачи разработчика и отрезки его рабочего дня (работа ИИ-агентов в сессиях), которые не привязаны ни к \
-            одной задаче. Для каждого отрезка выбери по смыслу задачу из списка, к которой он относится: смотри на проект, \
-            папку, название сессии, запросы, файлы, коммиты, описание задачи и прошлые ворклоги по ней. Не уверен — \
-            пропусти отрезок. Ответь только JSON-массивом, без текста вокруг: \
-            [{"segment": "S1", "key": "ABC-1", "confidence": 0.8, "reason": "почему, до 80 символов"}]. confidence — от 0 \
-            до 1. Ключи — только из списка задач. reason пиши по-русски.
+            одной задаче. Для каждого отрезка: если он по смыслу точно относится к задаче из списка (смотри на проект, \
+            папку, название сессии, запросы, файлы, коммиты, описание задачи и прошлые ворклоги по ней), дай её ключ. \
+            Не натягивай: если подходящей задачи нет или не уверен, предложи новую задачу — короткое название (до 70 \
+            символов), описание (что было и что сделано, 2–4 строки) и текст ворклога за этот день (1–2 строки). \
+            Отрезки одной работы — одна новая задача с одинаковым названием. Названия, описания и ворклоги пиши так, как \
+            пишет сам разработчик (образцы ниже: язык, длина, структура, тон; разделов, которых у него нет, не добавляй); \
+            нет образцов — коротко и нейтрально, по-русски. Ответь только JSON-массивом, без текста вокруг: \
+            [{"segment": "S1", "key": "ABC-1", "confidence": 0.8, "reason": "почему, до 80 символов", "done": "текст ворклога"}, \
+            {"segment": "S2", "new": "Название", "description": "Что было и что сделано", "done": "текст ворклога", \
+            "confidence": 0.7}]. confidence — от 0 до 1. Ключи — только из списка задач. reason пиши по-русски.
 
 
             """, """
             Below are a developer's tasks and stretches of their working day (AI agents working in sessions) that no task \
-            is linked to. For each stretch pick the task from the list it belongs to, by meaning: look at the project, \
-            folder, session title, prompts, files, commits, and the task's description and earlier worklogs. Not sure — \
-            skip the stretch. Answer with a JSON array only, no text around it: \
-            [{"segment": "S1", "key": "ABC-1", "confidence": 0.8, "reason": "why, up to 80 characters"}]. confidence is \
-            0 to 1. Keys only from the task list. Write reason in English.
+            is linked to. For each stretch: if it clearly belongs to a task from the list (look at the project, folder, \
+            session title, prompts, files, commits, and the task's description and earlier worklogs), give its key. Do \
+            not stretch it: if no task fits or you are not sure, suggest a new task — a short title (up to 70 \
+            characters), a description (what it was and what was done, 2–4 lines) and the day's worklog text (1–2 \
+            lines). Stretches of one piece of work get one new task with the same title. Write titles, descriptions and \
+            worklogs the way the developer writes them (samples below: language, length, structure, tone; add no \
+            sections they do not use); without samples — short and plain, in English. Answer with a JSON array only, no \
+            text around it: [{"segment": "S1", "key": "ABC-1", "confidence": 0.8, "reason": "why, up to 80 characters", \
+            "done": "worklog text"}, {"segment": "S2", "new": "Title", "description": "What it was and what was done", \
+            "done": "worklog text", "confidence": 0.7}]. confidence is 0 to 1. Keys only from the task list. Write reason \
+            in English.
 
 
             """)
     }
 
     /// The digest (at most `maxPrompt` characters, longest stretches first) and the segment ids in it.
-    static func prompt(_ segs: [Segment], _ facts: [String: Facts], _ cands: [Candidate], limit: Int = maxPrompt,
+    static func prompt(_ segs: [Segment], _ facts: [String: Facts], _ cands: [Candidate], style: String = "", limit: Int = maxPrompt,
                        words w: Words = .ru) -> (String, [String]) {
         let q = { (s: String) in w.t("«\(s)»", "\"\(s)\"") }
-        var tasks = w.t("Задачи:\n", "Tasks:\n")
+        var tasks = (style.isEmpty ? "" : w.t("Образцы стиля разработчика (его тексты в Jira):\n", "Samples of the developer's style (their texts in Jira):\n")
+                     + String(style.prefix(maxStyle)) + "\n\n") + w.t("Задачи:\n", "Tasks:\n")
+        if cands.isEmpty { tasks += w.t("(нет — только новые задачи)\n", "(none — new tasks only)\n") }
         for c in cands {
             var b = "\(c.task.key) — \(clip(90)(c.task.title)) [\(c.task.status.rawValue)]\n"
             if let d = c.description.map(clip(120)), !d.isEmpty { b += w.t("  описание: ", "  description: ") + d + "\n" }
             if !c.comments.isEmpty { b += w.t("  комментарии: ", "  comments: ") + c.comments.map(q).joined(separator: "; ") + "\n" }
             if !c.worklogs.isEmpty { b += w.t("  мои прошлые ворклоги: ", "  my earlier worklogs: ") + c.worklogs.map(q).joined(separator: "; ") + "\n" }
-            if tasks.count + b.count > maxTaskBlock { break }
+            if tasks.count + b.count > maxTaskBlock + (style.isEmpty ? 0 : maxStyle + 100) { break }
             tasks += b
         }
         var out = instruction(w) + tasks + w.t("\nОтрезки без задачи:\n", "\nStretches without a task:\n"), asked: [String] = []
@@ -594,22 +666,55 @@ public struct TaskSuggester {
     /// segment or key not offered, a confidence under `min` (0…1; 1…100 read as percent) are dropped; the rest per
     /// segment, most confident first (the caller takes the first one it may use).
     static func parse(_ text: String, segments: Set<String>, keys: Set<String>, min: Double)
-        -> [(segment: String, key: String, confidence: Double, reason: String)] {
-        guard let b = text.lastIndex(of: "]") else { return [] }
-        var arr: [JValue] = []
-        for a in text.indices where text[a] == "[" && a < b {   // text before the array may hold brackets too
-            if let v = JValue.parse(String(text[a...b]))?.array { arr = v; break }
-        }
-        var best: [String: (segment: String, key: String, confidence: Double, reason: String)] = [:]
-        for x in arr {
+        -> [(segment: String, key: String, confidence: Double, reason: String, done: String)] {
+        var best: [String: (segment: String, key: String, confidence: Double, reason: String, done: String)] = [:]
+        for x in answer(text) {
             guard let seg = x["segment"]?.string, segments.contains(seg),
                   let key = x["key"]?.string?.uppercased().split(separator: " ").joined(), keys.contains(key),
-                  var c = x["confidence"]?.double ?? x["confidence"]?.string.flatMap(Double.init), c >= 0, c <= 100 else { continue }
-            if c > 1 { c /= 100 }
+                  let c = confidence(x) else { continue }
             guard c >= min, (best[seg + " " + key]?.confidence ?? -1) < c else { continue }
-            best[seg + " " + key] = (seg, key, c, clip(80)(x["reason"]?.string ?? ""))
+            best[seg + " " + key] = (seg, key, c, clip(80)(x["reason"]?.string ?? ""), clip(300)(x["done"]?.string ?? ""))
         }
         return best.values.sorted { ($0.segment, -$0.confidence, $0.key) < ($1.segment, -$1.confidence, $1.key) }
+    }
+
+    /// The JSON array somewhere in the AI's answer (text before it may hold brackets too); empty when there is none.
+    static func answer(_ text: String) -> [JValue] {
+        guard let b = text.lastIndex(of: "]") else { return [] }
+        for a in text.indices where text[a] == "[" && a < b {
+            if let v = JValue.parse(String(text[a...b]))?.array { return v }
+        }
+        return []
+    }
+
+    /// 0…1 (1…100 read as percent); nil when missing or out of range.
+    static func confidence(_ x: JValue) -> Double? {
+        guard let c = x["confidence"]?.double ?? x["confidence"]?.string.flatMap(Double.init), c >= 0, c <= 100 else { return nil }
+        return c > 1 ? c / 100 : c
+    }
+
+    /// New tasks in the answer: items with a `new` title for an offered segment, one per title (case and spaces aside)
+    /// in the order first given, with all its segments; the title is cut to 70 characters, the description to 600, the
+    /// worklog text to 300. The caller drops segments a task was found for.
+    static func parseNew(_ text: String, segments: Set<String>)
+        -> [(segments: [String], title: String, description: String, done: String, confidence: Double)] {
+        var out: [(segments: [String], title: String, description: String, done: String, confidence: Double)] = [], seen = Set<String>()
+        for x in answer(text) {
+            guard let seg = x["segment"]?.string, segments.contains(seg), !seen.contains(seg),
+                  let title = x["new"]?.string.map(clip(70)), !title.isEmpty else { continue }
+            seen.insert(seg)
+            let norm = title.lowercased()
+            if let i = out.firstIndex(where: { $0.title.lowercased() == norm }) { out[i].segments.append(seg); continue }
+            out.append(([seg], title, Self.lines(x["description"]?.string ?? "", 600), clip(300)(x["done"]?.string ?? ""), confidence(x) ?? 0))
+        }
+        return out
+    }
+
+    /// Lines kept (a description has its structure), each line's spaces squeezed, at most `n` characters.
+    static func lines(_ s: String, _ n: Int) -> String {
+        let t = s.split(separator: "\n", omittingEmptySubsequences: false).map { clip(10_000)(String($0)) }
+            .joined(separator: "\n").trimmed("\n ")
+        return t.count > n ? String(t.prefix(n - 1)) + "…" : t
     }
 
     /// Without AI: the task whose name shares the most words (first 6 letters of words of 4+) with the session's
@@ -640,7 +745,7 @@ public struct TaskSuggester {
     public func message(_ day: String, buttons: Bool = true, now: Timestamp = Time.now()) throws -> Message? {
         guard evening else { return nil }
         let r = try suggest(day, now: now)
-        guard !r.items.isEmpty else { return nil }
+        guard !r.items.isEmpty || !r.drafts.isEmpty else { return nil }
         let w = words, q = { (s: String) in w.t("«\(s)»", "\"\(s)\"") }
         var lines = ["\(w.date(day)): " + w.t("работа без ключа задачи. Это она?", "work without a task key. Is it this task?")]
         for s in r.items {
@@ -648,17 +753,22 @@ public struct TaskSuggester {
                          + q(Self.clip(60)(s.sessionTitle ?? s.project ?? s.sessionId))
                          + (s.reason.isEmpty ? "" : ": \(s.reason)") + " (\(w.pct(s.confidence * 100)))")
         }
+        for d in r.drafts { lines.append("#\(d.id) " + w.t("новая задача", "new task") + ": \(q(d.title)) — \(w.dur(d.workedSec))") }
         if !buttons { lines.append(w.t("Ответ: ", "Answer: ") + "zagon task accept <id…> / zagon task reject <id…>") }
-        let yes = w.t("Да", "Yes"), no = w.t("Нет", "No")
+        let yes = w.t("Да", "Yes"), no = w.t("Нет", "No"), create = w.t("Создать", "Create"), skip = w.t("Не надо", "Skip")
         return Message(title: w.t("Подсказки задач", "Task suggestions"), text: lines.joined(separator: "\n"), buttons: buttons ? r.items.map {
             [.init("\(yes) #\($0.id) \($0.key)", "sg:y:\($0.id):\($0.taskId):\(Int($0.start))"),
              .init("\(no) #\($0.id)", "sg:n:\($0.id):\($0.taskId):\(Int($0.start))")]
-        } : [])
+        } + r.drafts.map { [.init("\(create) #\($0.id)", "sg:y:\($0.id)"), .init("\(skip) #\($0.id)", "sg:n:\($0.id)")] } : [])
     }
 
-    /// `sg:y|n:<id>:<task>:<start>` buttons (task and start guard against an id reused since); nil for other data.
+    /// `sg:y|n:<id>:<task>:<start>` buttons (task and start guard against an id reused since), `sg:y|n:N<n>` for a new
+    /// task (made in Zagon only); nil for other data.
     public func callback(_ data: String) throws -> Message? {
         let p = data.split(separator: ":")
+        if p.count == 3, p[0] == "sg", p[1] == "y" || p[1] == "n", p[2].hasPrefix("N"), Int(p[2].dropFirst()) != nil {
+            return Message(title: "", text: p[1] == "y" ? try acceptNew(String(p[2])) : try rejectNew(String(p[2])))
+        }
         guard p.count == 5, p[0] == "sg", p[1] == "y" || p[1] == "n", let id = Int(p[2]), let task = Int(p[3]), let start = Int(p[4]) else { return nil }
         let lines = p[1] == "y" ? try accept([id], task: task, start: start) : try reject([id], task: task, start: start)
         return Message(title: "", text: lines.joined(separator: "\n"))

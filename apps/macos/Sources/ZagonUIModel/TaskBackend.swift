@@ -92,6 +92,42 @@ public struct TaskBackend: Sendable {
         _ = try call(["task", "status", "--", key, s.rawValue])
     }
 
+    // MARK: suggested new tasks
+
+    /// Open suggested new tasks of all days, newest day first; a zagon from before 0.1.1 suggests none.
+    public func drafts() throws -> [NewTaskDraft] {
+        do { return try decode(["task", "drafts", "--json"]).0 } catch let e as Failure where e.older { return [] }
+    }
+    public struct JiraProjects: Decodable, Sendable, Equatable {
+        public struct Project: Decodable, Sendable, Equatable { public var key, name: String }
+        /// The last project used there (nil: none yet).
+        public var `default`: String?
+        public var projects: [Project]
+    }
+    /// Fails when Jira is not connected there.
+    public func jiraProjects() throws -> JiraProjects { try decode(["task", "jira-projects", "--json"]).0 }
+    /// The suggestions, and the Jira projects to make them in when there are any (nil: Jira does not answer there).
+    public func suggestions() throws -> (drafts: [NewTaskDraft], jira: JiraProjects?) {
+        let d = try drafts()
+        return (d, d.isEmpty ? nil : try? jiraProjects())
+    }
+    /// Makes the suggested task in Zagon only; the CLI's answer line. Texts go as `--opt=value`: one starting with "-"
+    /// stays a value.
+    public func accept(_ id: String, title: String? = nil, description: String? = nil) throws -> String {
+        try answer(["task", "accept"] + (title.map { ["--title=" + $0] } ?? []) + (description.map { ["--description=" + $0] } ?? []) + ["--", id])
+    }
+    /// Writes to Jira: only after the user pressed Create in the confirmation.
+    public func createInJira(_ id: String, project: String, title: String, description: String) throws -> String {
+        try answer(["task", "accept", "--create-in-jira", "--project=" + project, "--title=" + title, "--description=" + description,
+                    "--yes", "--", id], timeout: 300)
+    }
+    public func reject(_ id: String) throws -> String { try answer(["task", "reject", "--", id]) }
+
+    /// The last line printed (the outcome).
+    func answer(_ args: [String], timeout: Double = 120) throws -> String {
+        String(decoding: try call(args, timeout: timeout).out, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? ""
+    }
+
     public enum Commit: Sendable {
         /// What the CLI reported; `problems` are its "not logged …" lines.
         case written(logged: Int, failed: Int, problems: [String])
@@ -174,6 +210,11 @@ public struct TaskCache: Sendable {
     /// Full cards by key (time over the whole history), loaded when a task is opened.
     public var cards: [String: TaskItem] = [:]
     public var plans: [String: WorklogPlan] = [:]
+    /// Suggested new tasks; `jira`: where they may be made in Jira (nil: not connected there, or nothing to suggest).
+    public var drafts: [NewTaskDraft]?
+    public var jira: TaskBackend.JiraProjects?
+    /// What the last accept or reject answered.
+    public var draftNote: String?
     public var loading = 0
     public var error: String?
     /// The last commit's outcome.
@@ -213,6 +254,15 @@ extension TaskBackend {
             weekPct: c.time.weekPct.values.max() ?? 0,
             todo: c.todos.map { TodoItem($0.text, done: $0.done) }, doneByDay: done, sessions: sessions,
             sessionCount: c.sessions.count, notes: c.notes.map(\.text), jiraKey: t.jiraKey, jiraError: c.jiraError.map(Remote.scrubHomes))
+    }
+
+    public static func draft(_ d: NewTaskDraft, _ f: Fmt) -> DraftVM {
+        var sessions: [String] = []
+        for s in d.stretches { if let t = s.sessionTitle, !t.isEmpty, !sessions.contains(t) { sessions.append(t) } }
+        return DraftVM(id: d.id, title: f.t("draft.title", d.title, f.duration(d.workedSec)),
+                       meta: ([f.dayTitleShortWeekday(StoreDataProvider.start(d.day, f.calendar.timeZone))] + sessions)
+                           .joined(separator: " · "),
+                       name: d.title, description: d.description, worked: f.duration(d.workedSec))
     }
 
     /// The plan as the worklog screen shows it; skipped rows are left out, rows being written count as in Jira.
