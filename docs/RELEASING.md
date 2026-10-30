@@ -23,13 +23,17 @@ git push origin v0.2.0
 ```
 
 Without `-a` (a lightweight tag) the notes are the commit subjects since the previous tag. Versions are `x.y.z`
-only, and each must be higher than the last: Sparkle compares the build number (the workflow's run number) and
-`zagon update` takes whatever `latest` is.
+only, and each must be higher than the last (the workflow refuses one that is not above every `v*` tag): Sparkle
+compares the build number (the workflow's run number) and `zagon update` takes whatever `latest` is.
+
+If the run fails, fix the cause and use **Re-run failed jobs**, not "Re-run all jobs": the jobs that passed keep
+their files, and the publish step finds a release left by a failed upload (even a draft), uploads again and makes it
+the published `latest`.
 
 ## Try the workflow without releasing
 
-Actions → release → Run workflow, with a `version` such as `0.0.0`. It builds and checks every file and uploads them
-with `SHA256SUMS` to the run as the artifact `release-files`; nothing is published.
+Actions → release → Run workflow, with the next `version` (above the last tag). It builds and checks every file and
+uploads them with `SHA256SUMS` to the run as the artifact `release-files`; nothing is published.
 
 ## The Sparkle key
 

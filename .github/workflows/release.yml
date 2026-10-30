@@ -38,6 +38,12 @@ jobs:
         run: |
           case $GITHUB_REF in refs/tags/v*) v=${GITHUB_REF_NAME#v} ;; *) v=$INPUT ;; esac
           echo "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::version must be x.y.z, got '$v'"; exit 1; }
+          # above every other v* tag: zagon update takes whatever `latest` is, and Sparkle's build number only grows
+          last=$(git ls-remote --tags --refs "https://github.com/$GITHUB_REPOSITORY" 'v*' | sed 's#.*refs/tags/v##' |
+            grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | grep -vxF "$v" | sort -V | tail -1)
+          if [ -n "$last" ] && [ "$(printf '%s\n%s\n' "$last" "$v" | sort -V | tail -1)" != "$v" ]; then
+            echo "::error::version $v is not above the last tag v$last"; exit 1
+          fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
   # Release notes: the tag's annotation, else the commits since the previous tag (for a manual run: up to HEAD).
@@ -197,11 +203,12 @@ jobs:
         with:
           name: notes
       # gh creates it as a draft, uploads, then publishes; never --draft / --prerelease, those are not `latest`.
-      # A re-run after a failed check finds the release and only re-uploads.
+      # A re-run (Re-run failed jobs) finds the release, maybe a draft left by a failed upload: re-upload, publish.
       - name: Publish
         run: |
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" assets/* --clobber
+            gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease=false --latest
           else
             gh release create "$GITHUB_REF_NAME" assets/* --title "Zagon $VERSION" --notes-file notes.md --verify-tag --latest
           fi

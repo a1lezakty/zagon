@@ -15,11 +15,14 @@ struct UpdateCommand: ParsableCommand {
         commandName: "update", abstract: "Update this binary to the latest release and restart the service (Linux; on macOS Zagon.app updates itself).",
         discussion: "The previous binary stays next to it as <name>.prev: mv it back to roll back.")
     @Flag(help: "Only tell whether a newer release exists.") var check = false
-    @Option(help: "Where the release files are, e.g. https://github.com/a1lezakty/zagon/releases/download/v0.1.0 for a fixed version.")
+    @Option(help: "Where the release files are (https), e.g. https://github.com/a1lezakty/zagon/releases/download/v0.1.0 for a fixed version.")
     var from = "https://github.com/a1lezakty/zagon/releases/latest/download"
+    @Flag(name: .customLong("restart-services"), help: ArgumentHelp("Only restart the running services of this binary (install.sh).", visibility: .hidden))
+    var restartOnly = false
 
     func run() throws {
         #if os(Linux)
+        if restartOnly { Self.restartServices(Sys.executablePath()); return }
         #if arch(x86_64)
         let asset = "zagon-linux-x86_64"
         #elseif arch(arm64)
@@ -30,9 +33,12 @@ struct UpdateCommand: ParsableCommand {
         guard !asset.isEmpty else { throw InstallError("no release build for this CPU; build from source") }
         guard let curl = Sys.which("curl") else { throw InstallError("curl is needed for zagon update") }
         let exe = Sys.executablePath(), dir = Sys.dirname(exe), base = from.hasSuffix("/") ? String(from.dropLast()) : from
+        let get = [curl, "--proto", "=https", "--tlsv1.2", "-fsSL"]
+        // sudo drops proxy variables (https_proxy…), so a download that works for the user fails under it
+        let proxy = geteuid() == 0 && Sys.env("SUDO_USER") != nil ? "; behind a proxy: sudo -E zagon update" : ""
 
-        let sums = Sys.capture([curl, "-fsSL", "--max-time", "60", base + "/SHA256SUMS"])
-        guard sums.status == 0 else { throw InstallError("cannot download \(base)/SHA256SUMS (curl exit \(sums.status))") }
+        let sums = Sys.capture(get + ["--max-time", "60", base + "/SHA256SUMS"])
+        guard sums.status == 0 else { throw InstallError("cannot download \(base)/SHA256SUMS (curl exit \(sums.status))\(proxy)") }
         guard let want = Self.sum(of: asset, in: String(decoding: sums.out, as: UTF8.self)) else {
             throw InstallError("\(asset) is not listed in \(base)/SHA256SUMS")
         }
@@ -48,8 +54,8 @@ struct UpdateCommand: ParsableCommand {
         guard fd >= 0 else { throw InstallError("cannot create \(tmp)") }
         close(fd)
         defer { _ = Sys.remove(tmp) }
-        guard Sys.run([curl, "-fsSL", "--max-time", "600", "-o", tmp, base + "/" + asset]) == 0 else {
-            throw InstallError("cannot download \(base)/\(asset)")
+        guard Sys.run(get + ["--max-time", "600", "-o", tmp, base + "/" + asset]) == 0 else {
+            throw InstallError("cannot download \(base)/\(asset)\(proxy)")
         }
         guard try Self.sha256(tmp) == want else { throw InstallError("checksum mismatch for \(asset): nothing replaced") }
         chmod(tmp, 0o755)
@@ -93,25 +99,34 @@ struct UpdateCommand: ParsableCommand {
         return String(h).lowercased()
     }
 
-    /// Restarts the running zagon units whose ExecStart is this binary (try-restart leaves stopped ones alone): the
-    /// system units (`zagon-<user>.service`) as root, the user unit of this account, or of the sudo user via `--machine`.
+    /// Restarts the running zagon units whose ExecStart is this binary (try-restart leaves stopped ones alone), after a
+    /// daemon-reload (install.sh may have just rewritten them): the system units (`zagon-<user>.service`) as root, the
+    /// user unit of this account and, under sudo, the sudo user's too (`--machine`). Two of them on one database would
+    /// be two versions writing it.
     static func restartServices(_ exe: String) {
         guard let sc = Sys.which("systemctl") else { return }
         let sysDir = Installer.Options().systemUnitDir
-        for f in Sys.listDir(sysDir).sorted() where f.hasPrefix("zagon") && f.hasSuffix(".service") && runs(sysDir + "/" + f, exe) {
+        let system = Sys.listDir(sysDir).sorted().filter { $0.hasPrefix("zagon") && $0.hasSuffix(".service") && runs(sysDir + "/" + $0, exe) }
+        if geteuid() == 0 && !system.isEmpty { _ = Sys.run([sc, "daemon-reload"], quiet: true) }
+        for f in system {
             if geteuid() == 0 {
                 print(Sys.run([sc, "try-restart", f], quiet: true) == 0 ? "service: \(f) restarted" : "service: restarting \(f) failed")
             } else {
                 print("service: sudo systemctl restart \(f)")
             }
         }
-        let account = try? Account.target(explicit: nil)
-        guard runs(Installer.Options(user: account).userUnitDir + "/zagon.service", exe) else { return }
-        let machine = account.map { ["--machine=\($0.name)@"] } ?? []
-        if Sys.run([sc, "--user"] + machine + ["try-restart", "zagon.service"], quiet: true) == 0 {
-            print("service: zagon.service (systemd --user) restarted")
-        } else if let account {  // under sudo; for your own account a failure means no user manager, nothing to restart
-            print("service: as \(account.name): systemctl --user restart zagon.service")
+        // This account by its passwd entry (sudo may keep the caller's HOME), then the sudo user's.
+        let me = getpwuid(getuid()).flatMap { Account.named(String(cString: $0.pointee.pw_name)) }
+        for (account, other) in [(me, false), (try? Account.target(explicit: nil), true)] {
+            guard let account, runs(Installer.Options(user: account).userUnitDir + "/zagon.service", exe) else { continue }
+            // root reaches any user manager, its own too, through --machine (no XDG_RUNTIME_DIR needed, as in sudo or su)
+            let user = [sc, "--user"] + (other || geteuid() == 0 ? ["--machine=\(account.name)@"] : [])
+            _ = Sys.run(user + ["daemon-reload"], quiet: true)
+            if Sys.run(user + ["try-restart", "zagon.service"], quiet: true) == 0 {
+                print("service: zagon.service of \(account.name) (systemd --user) restarted")
+            } else if other {  // for this account a failure means no user manager, so nothing of it runs
+                print("service: as \(account.name): systemctl --user restart zagon.service")
+            }
         }
     }
 

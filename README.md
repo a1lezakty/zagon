@@ -128,8 +128,12 @@ zagon update            # replace the binary and restart the service
 
 `zagon update` downloads the latest release for your CPU, checks it against `SHA256SUMS`, and only then replaces
 its own binary (atomically, in the same directory). The old binary stays next to it as `zagon.prev`: move it back to
-roll back. Running services are restarted. If the binary is in `/usr/local/bin`, run `sudo zagon update`. On macOS
-the app updates itself, the `zagon` inside it included.
+roll back. Running services are restarted. If the binary is in `/usr/local/bin`, run `sudo zagon update` (behind a
+proxy: `sudo -E zagon update`, since sudo drops the proxy variables). On macOS the app updates itself, the `zagon`
+inside it included.
+
+The first start of 0.1.0 over an earlier build recounts the whole history once (database schema v5: usage by the
+folder of each request, the 1-hour cache split), which takes as long as the very first scan.
 
 ## Use
 
@@ -165,6 +169,20 @@ zagon update                   # the latest release (see Update above)
   - `--codex-dir` (default `$CODEX_HOME` or `~/.codex`);
   - `--idle-gap` minutes: your actions closer than this count as one stretch of work (default 20);
   - `--session-gap` minutes: agent silence that ends a working interval (default 30).
+
+### Your time
+
+"Your time" is built from the messages you type (and your replies to finished answers), chained while the gaps stay
+under `--idle-gap`. A message that one session types into another (an agent driving worker sessions with
+`tmux send-keys`) is not yours: Zagon sees the driver's `tmux send-keys` / `send` / `paste-buffer` call in its Claude
+Code transcript and takes a message typed in another session 30 s before to 5 s after it as relayed. Limits:
+
+- if you type into an unnamed session (or one named like the target) within those 35 s after another session sent
+  keys to a pane that names no other session, your message is taken for a relay;
+- a driver that types some other way (a script that hides `tmux` from the command, `screen`, `ssh` to another host)
+  or sleeps longer than 30 s before the message is not seen, so its messages count as yours.
+
+Name worker sessions like their tmux targets (`claude --name`): then only send-keys aimed at that name count for them.
 
 ## MCP
 
@@ -241,6 +259,10 @@ signature, because there is no paid Apple developer account, so macOS blocks it 
 2. Open it once. macOS says it cannot verify the developer.
 3. Go to System Settings → Privacy & Security and click **Open Anyway** next to the Zagon message. On macOS 15 and
    later, right-click → Open no longer bypasses this.
+
+On first launch macOS may ask whether Zagon can access your Documents or Desktop folder: it asks when your Claude
+Code or Codex projects live there (Zagon reads their `.git` to tell which checkout a session belongs to), and the
+Desktop also when you save diagnostics there.
 
 It needs macOS 13 or later. It offers servers from `~/.ssh/config`; each server needs the Linux version installed.
 After that the app updates itself: it checks GitHub for a new release once a day and asks before installing (the

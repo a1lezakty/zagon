@@ -3,7 +3,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/a1lezakty/zagon/main/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/a1lezakty/zagon/main/install.sh | sh -s -- --enable-service
 # Arguments go to `zagon install`. The binary goes to /usr/local/bin as root, else ~/.local/bin (ZAGON_BIN_DIR
-# overrides). ZAGON_RELEASE_URL picks another release, e.g. https://github.com/a1lezakty/zagon/releases/download/v0.1.0
+# overrides). ZAGON_RELEASE_URL (https) picks another release, e.g. https://github.com/a1lezakty/zagon/releases/download/v0.1.0
 set -eu
 # all in main(): a cut-off download runs nothing, and `zagon install` does not read the rest of the script
 main() {
@@ -32,10 +32,10 @@ main() {
   trap 'rm -f "$tmp"' EXIT
   trap 'exit 130' INT TERM
 
-  want=$(curl -fsSL "$url/SHA256SUMS" | awk -v a="$asset" '$2 == a || $2 == "*" a { print $1 }')
+  want=$(curl --proto '=https' --tlsv1.2 -fsSL "$url/SHA256SUMS" | awk -v a="$asset" '$2 == a || $2 == "*" a { print $1 }')
   [ -n "$want" ] || { echo "zagon: cannot read $url/SHA256SUMS, or $asset is not listed there" >&2; exit 1; }
   echo "Downloading $url/$asset"
-  curl -fsSL -o "$tmp" "$url/$asset"
+  curl --proto '=https' --tlsv1.2 -fsSL -o "$tmp" "$url/$asset"
   got=$(sha256sum "$tmp" | cut -d' ' -f1)
   [ "$got" = "$want" ] || { echo "zagon: checksum mismatch for $asset; nothing installed" >&2; exit 1; }
   chmod 755 "$tmp"
@@ -43,14 +43,9 @@ main() {
   echo "Installed $dir/zagon $("$dir/zagon" --version)"
 
   "$dir/zagon" install "$@"
-  # a service already running (an upgrade over an older install) picks up the new binary or unit file
-  if command -v systemctl >/dev/null 2>&1; then
-    if [ "$(id -u)" = 0 ]; then
-      systemctl daemon-reload 2>/dev/null && systemctl try-restart 'zagon-*.service' 2>/dev/null || true
-    else
-      systemctl --user daemon-reload 2>/dev/null && systemctl --user try-restart zagon.service 2>/dev/null || true
-    fi
-  fi
+  # services already running this binary (an upgrade over an older install) pick up the new binary or unit file:
+  # system units, this account's user unit and, under sudo, the sudo user's
+  "$dir/zagon" update --restart-services 2>/dev/null || true
   case :$PATH: in *":$dir:"*) ;; *) echo "Add $dir to PATH to run zagon by name." ;; esac
 }
 main "$@"
