@@ -97,14 +97,15 @@ extension Store {
 
 /// One limit's usage as its readings come in, oldest first. Usage only grows within a window period (`resets_at` within
 /// 2 minutes), so a lower reading is an older one re-sent and the period's highest so far stands (see
-/// `Store.latestLimits`); a reading of a period before the current one is a late report and is skipped. Readings without
-/// `resets_at` are taken as they come.
+/// `Store.latestLimits`); a reading of a period before the current one is a late report and is skipped. A reading without
+/// `resets_at` belongs to the current period while that has not reset, else it is taken as it comes.
 struct LimitUsage {
     let tool: String, window: String
     /// The usage now and its period's reset; nil before any reading.
     private(set) var pct: Double?, resets: Timestamp?
 
     /// The usage just before `t`: the highest reading of the newest period seen before it.
+    /// ponytail: scans the window's whole history before `t`; bound it once `limit_snapshot` holds years.
     init(_ db: SQLite, tool: String, window: String, before t: Timestamp) throws {
         self.tool = tool; self.window = window
         if let (p, r) = try db.one("""
@@ -116,12 +117,17 @@ struct LimitUsage {
         }
     }
 
-    /// Folds one reading in: nil = skipped, true = it opened a new period after a known one.
-    mutating func add(_ v: Double, resets r: Timestamp?) -> Bool? {
-        guard let p = pct, let r, let cur = resets else { pct = v; resets = r; return false }
-        if r < cur - 120 { return nil }
-        if r > cur + 120 { pct = v; resets = r; return true }
-        pct = max(p, v)
+    /// Folds one reading taken at `ts` in: nil = skipped, true = it opened a new period after a known one.
+    mutating func add(_ v: Double, resets r: Timestamp?, at ts: Timestamp) -> Bool? {
+        guard let p = pct else { pct = v; resets = r; return false }
+        switch (r, resets) {
+        case let (r?, cur?):
+            if r < cur - 120 { return nil }
+            if r > cur + 120 { pct = v; resets = r; return true }
+            pct = max(p, v)
+        case let (nil, cur?) where ts < cur + 120: pct = max(p, v)
+        default: pct = v; resets = r
+        }
         return false
     }
 
@@ -132,7 +138,7 @@ struct LimitUsage {
             SELECT ts, used_pct, resets_at FROM limit_snapshot WHERE tool = ? AND window = ? AND ts >= ? AND ts < ? ORDER BY ts
             """, [.text(tool), .text(window), .real(from), .real(to)]) { r in
             let before = pct
-            if let new = add(r.real(1), resets: r.optReal(2)) { each(r.real(0), before, self, new) }
+            if let new = add(r.real(1), resets: r.optReal(2), at: r.real(0)) { each(r.real(0), before, self, new) }
         }
     }
 }

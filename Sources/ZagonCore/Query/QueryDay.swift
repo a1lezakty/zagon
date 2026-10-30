@@ -234,7 +234,8 @@ extension Query {
         }
         try five.read(db, from: s, to: e) { ts, _, u, _ in
             let full = (u.pct ?? 0) >= 99.5
-            if full, open == nil { open = (ts, u.resets) } else if !full { close(ts) }
+            // A 100 % re-sent after its period reset (an idle status line past midnight) opens nothing.
+            if full, open == nil, (u.resets ?? .infinity) > ts { open = (ts, u.resets) } else if !full { close(ts) }
         }
         close(e)
         return out
@@ -261,8 +262,11 @@ extension Query {
         var limit: [Double?] = []
         for (s, e) in ranges.prefix(7) {
             // The usage after the day's last reading (`LimitUsage`); nil for a day without readings.
-            var u = try LimitUsage(db, tool: "claude", window: "seven_day", before: s), last: Double?
-            if e > s { try u.read(db, from: s, to: e) { _, _, x, _ in last = x.pct } }
+            var last: Double?
+            if e > s {
+                var u = try LimitUsage(db, tool: "claude", window: "seven_day", before: s)
+                try u.read(db, from: s, to: e) { _, _, x, _ in last = x.pct }
+            }
             limit.append(last)
         }
         return WeekDetail(days: days, projects: projects, totals: totals(x.prefix(7)), previous: totals(x.suffix(7)),

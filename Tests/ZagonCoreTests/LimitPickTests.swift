@@ -93,6 +93,10 @@ import Testing
                                         (60, 25, 1.5), (95, 3, 169.5), (100, 12, 1.5), (110, 5, 169.5)])
         let g = try TaskTime.limitGrowth(s.db, tool: "claude", window: "seven_day", from: at, to: at + 2 * hour)
         #expect(g == 10)  // the old sum of rises: 10 + 12 + 13 + 9 = 44
+        // A reading without a reset time inside a known period is part of it: 40, 30 (re-sent, no reset), 41 = +1.
+        let n = try store("seven_day", [(0, 40, 50), (20, 41, 50)])
+        try n.addLimitSnapshot(LimitSnapshot(tool: .claude, window: "seven_day", usedPct: 30, windowMinutes: 10080, ts: at + 10 * minute))
+        #expect(try TaskTime.limitGrowth(n.db, tool: "claude", window: "seven_day", from: at - hour, to: at + hour) == 1)
     }
 
     /// The Day screen: a re-sent lower reading neither ends a stretch at 100 % nor becomes the week's percent at the end of
@@ -107,5 +111,13 @@ import Testing
         let d = try week.day("2026-10-20")
         #expect(d.weekPctStart == 30 && d.weekPctEnd == 33)  // old: 30 and 28
         #expect(try week.week(from: "2026-10-19").limitByDay[1] == 33)
+        // The day starts with a re-sent reading below the day before's 35 %: it starts at 35.
+        let primed = try Query(store: store("seven_day", [(-900, 35, 50), (0, 30, 50), (10, 36, 50)])).day("2026-10-20")
+        #expect(primed.weekPctStart == 35 && primed.weekPctEnd == 36)
+
+        // The day before ended at 100 % with a reset at 23:00; at 00:01 an idle status line re-sends that 100 %.
+        let midnight = Time.localMidnight(2026, 10, 20)
+        let late = try store("five_hour", [(-690, 100, -11), (-599, 100, -11), (60, 3, 4)])  // 22:30, 00:01, 11:00
+        #expect(try Query(store: late).limitHits(from: midnight, to: midnight + 86400) == [])
     }
 }
