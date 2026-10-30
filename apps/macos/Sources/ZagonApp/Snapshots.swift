@@ -24,26 +24,9 @@ enum Snapshots {
                 }
             }
         }
-        failed = !icons(dir) || failed
         failed = !menubar(dir) || failed
         failed = !appIcon(dir) || failed
         if failed { exit(1) }
-    }
-
-    /// The status item icon ×4: coloured on a dark bar, monochrome as a light and a dark menu bar tint it.
-    static func icons(_ dir: URL) -> Bool {
-        let p = MockDataProvider(lang: .en)
-        let vm = MainVM(p, Fmt(lang: .en, now: p.now))
-        func cell<V: View>(_ v: V, _ bar: UInt32) -> some View {
-            v.scaleEffect(4).frame(width: 80, height: 80).background(Color(hex: bar))
-        }
-        let strip = HStack(spacing: 16) {
-            cell(RingsIcon(five: vm.five, week: vm.week), 0x1E1E22)
-            cell(RingsIcon(five: vm.five, week: vm.week, mono: true), 0xECECEC)
-            cell(RingsIcon(five: vm.five, week: vm.week, mono: true).colorInvert(), 0x1E1E22)
-        }
-        .padding(16)
-        return write(strip, width: 304, "icon", dir)
     }
 
     /// The status item on a light, a dark and a wallpaper-tinted menu bar, at the bar's own size and at 2x, monochrome
@@ -130,6 +113,20 @@ enum Snapshots {
             state.screen = screen
             let root = WindowRoot().environmentObject(state).fixedSize(horizontal: false, vertical: true)
             ok = write(root, width: 1280, "\(prefix)\(screen.rawValue)-\(lang.rawValue)", dir) && ok
+        }
+        if prefix.isEmpty {
+            // The first window (where Zagon lives, Connect) and a toast, in the window and in the panel.
+            let connected = state.cli
+            state.cli = Connect.Status(ok: ["hooks: ~/.claude/settings.json"], missing: ["MCP: claude"])
+            state.screen = .day
+            state.welcome = true
+            state.toast = Toast(text: state.f.t("connect.done"))
+            let root = WindowRoot().environmentObject(state).fixedSize(horizontal: false, vertical: true)
+            ok = write(root, width: 1280, "welcome-\(lang.rawValue)", dir) && ok
+            ok = write(MainPanel().environmentObject(state), width: 400, "main-toast-\(lang.rawValue)", dir) && ok
+            state.welcome = false
+            state.toast = nil
+            state.cli = connected
         }
         return ok
     }

@@ -77,6 +77,7 @@ final class AppState: ObservableObject {
             guard zoneID != oldValue else { return }
             if persist { UserDefaults.standard.set(zoneID, forKey: "timeZone") }
             rezone()
+            if persist { say(f.t("zone.changed", Zones.label(zone, at: provider.now))) }
         }
     }
     var zone: TimeZone { zoneID.flatMap(TimeZone.init(identifier:)) ?? .autoupdatingCurrent }
@@ -105,7 +106,42 @@ final class AppState: ObservableObject {
         set { objectWillChange.send(); updater?.updater.automaticallyChecksForUpdates = newValue }
     }
 
-    func checkForUpdates() { updater?.checkForUpdates(nil) }
+    /// A check the user asked for: its result comes back as a toast (`UpdateReminders`), and Sparkle's window opens in
+    /// front of the other apps.
+    private var checkingUpdates = false
+    func checkForUpdates() {
+        guard let updater else { return }
+        checkingUpdates = true
+        NSApp.activate(ignoringOtherApps: true)
+        updater.checkForUpdates(nil)
+    }
+
+    func updateChecked(found: String?, error: String?) {
+        guard checkingUpdates else { return }
+        checkingUpdates = false
+        if let error { say(f.t("update.failed", error), error: true) }
+        else if let found { say(f.t("update.found", found)) }
+        else { say(f.t("update.latest", Self.version)) }
+    }
+
+    @Published var toast: Toast?
+
+    func say(_ text: String, error: Bool = false, reveal: URL? = nil, seconds: Double = 4) {
+        let t = Toast(text: text, error: error, reveal: reveal)
+        toast = t
+        guard !error else { return }
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            if self?.toast?.id == t.id { self?.toast = nil }
+        }
+    }
+
+    /// Until "Got it": the window says where Zagon lives.
+    @Published var welcome = false
+    func welcomeDone() {
+        welcome = false
+        UserDefaults.standard.set(true, forKey: "welcomeDone")
+    }
 
     /// The last pull of a checked server worked (grey until the first one did); the samples have no store.
     func serverOnline(_ alias: String) -> Bool { store?.serverOnline(alias) ?? true }
@@ -156,7 +192,8 @@ final class AppState: ObservableObject {
                 let reminders = UpdateReminders()
                 reminders.app = state
                 state.reminders = reminders
-                state.updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: reminders)
+                state.updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: reminders,
+                                                             userDriverDelegate: reminders)
             }
             // The Mac moved to another zone while running: "System" follows it.
             NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak state] _ in
@@ -181,7 +218,8 @@ final class AppState: ObservableObject {
             }
             let home = NSHomeDirectory()
             state.localTools = [home + "/.claude", home + "/.codex"].contains { FileManager.default.fileExists(atPath: $0) }
-            state.runCLI(nil)
+            state.runCLI(nil, quiet: true)
+            state.welcome = !d.bool(forKey: "welcomeDone")
             do { state.notify = try NotifySettings.load(NotifySettings.configPath) } catch {
                 state.notifyError = Log.scrub(String(describing: error))
             }
@@ -243,15 +281,22 @@ final class AppState: ObservableObject {
             try next.save(path)
             notify = next
             notifyError = nil
+            say(f.t("settings.notify.saved"))
         } catch {
             notifyError = Log.scrub(String(describing: error))
             Log.shared.write("config.toml not saved: \(notifyError ?? "")")
+            say(f.t("settings.notify.failed", notifyError ?? ""), error: true)
         }
     }
+
+    /// A server just checked: the pull that includes it says whether it answered.
+    private var awaitingHost: String?
 
     func setRemote(_ host: String, on: Bool) {
         remoteHosts = on ? remoteHosts + [host] : remoteHosts.filter { $0 != host }
         UserDefaults.standard.set(remoteHosts, forKey: "remoteHosts")
+        awaitingHost = on ? host : nil
+        if !on { say(f.t("servers.off", host)) }
         guard let store else { return }
         // Unchecked: its sessions and days leave the numbers now, not only stop updating.
         if !on { store.dropServer(host) { [weak self] in self?.revision += 1 } }
@@ -337,10 +382,12 @@ final class AppState: ObservableObject {
     }
 
     /// `install` / `uninstall`, then `doctor`; nil = only `doctor`. Off the main thread (the login shell and the CLI).
-    func runCLI(_ command: String?) {
+    /// The result shows as a toast unless `quiet` (the check at launch).
+    func runCLI(_ command: String?, quiet: Bool = false) {
         guard let bin = Self.cliPath, !cliBusy else { return }
         if command == "install", Connect.temporaryLocation(Bundle.main.bundlePath) {
             cliError = f.t("connect.moveFirst")
+            say(f.t("connect.failed", f.t("connect.moveFirst")), error: true)
             return
         }
         if let command { connectDismissed = command == "uninstall" }
@@ -357,8 +404,17 @@ final class AppState: ObservableObject {
                 if command != nil { self.cliError = error }
                 if status == nil, self.cliError == nil { self.cliError = self.f.t("connect.noDoctor") }
                 self.cliBusy = false
+                if !quiet { self.reportCLI(command, status) }
             }
         }
+    }
+
+    private func reportCLI(_ command: String?, _ status: Connect.Status?) {
+        if let e = cliError { return say(f.t("connect.failed", e), error: true) }
+        guard let status else { return }
+        if command == "uninstall" { return say(f.t("connect.removed")) }
+        if !status.missing.isEmpty { return say(f.t("connect.missing", status.missing.joined(separator: ", ")), error: true) }
+        if command == "install" { say(f.t("connect.done"), seconds: 10) } else { say(f.t("connect.checked")) }
     }
 
     /// A server that fails only gets a grey dot; the next attempt comes on schedule.
@@ -370,10 +426,19 @@ final class AppState: ObservableObject {
         guard force || (!remoteHosts.isEmpty && Date().timeIntervalSince(lastPull) >= (windowOpen ? 30 : 180)) else { return }
         pulling = true
         lastPull = Date()
-        p.pull(remoteHosts) { [weak self] changed in
+        let hosts = remoteHosts
+        p.pull(hosts) { [weak self] changed in
             guard let self else { return }
             self.pulling = false
             if changed { self.revision += 1 }
+            if let h = self.awaitingHost, hosts.contains(h) {
+                self.awaitingHost = nil
+                if let e = self.hostErrors[h] {
+                    self.say(self.f.t("servers.failed", h, e == Remote.oldZagon ? self.f.t("servers.oldZagon") : e), error: true)
+                } else {
+                    self.say(self.f.t("servers.ok", h))
+                }
+            }
             if self.pullAgain {
                 self.pullAgain = false
                 self.pullServers(p, force: true)
@@ -413,35 +478,37 @@ enum Entry {
 }
 
 struct ZagonApp: App {
-    @StateObject private var state = AppState.local()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @StateObject private var state = AppDelegate.state
 
     var body: some Scene {
         MenuBarExtra {
             MainPanel().environmentObject(state).preferredColorScheme(.dark)
         } label: {
             // ponytail: rebuilt on every AppState change; give the status item its own observable if that shows in a profile
-            let vm = MainVM(state.provider, state.f)
-            Image(nsImage: statusIcon(vm, mono: state.monoIcon))
-            Text(vm.statusLabel)
+            Image(nsImage: statusIcon(state))
         }
         .menuBarExtraStyle(.window)
-
-        Window("Zagon", id: "main") {
-            WindowRoot().environmentObject(state).preferredColorScheme(.dark)
-                .frame(minWidth: 980, minHeight: 620)
-        }
-        .defaultSize(width: 1280, height: 860)
     }
 }
 
-/// Two rings for the status item, rasterised because a menu bar label shows only images and text. Monochrome is a
-/// template image (the menu bar tints it); the rings then differ by shape: a thin outer week, a thick inner 5 hours.
+/// The status item, rasterised because a menu bar label shows only images and text. Monochrome without a warning is
+/// a template image (the menu bar tints it); otherwise it is drawn in the bar's text colour. 1x screens get the numbers
+/// beside the rings.
 @MainActor
-func statusIcon(_ vm: MainVM, mono: Bool) -> NSImage {
-    let r = ImageRenderer(content: RingsIcon(five: vm.five, week: vm.week, mono: mono))
-    r.scale = NSScreen.main?.backingScaleFactor ?? 2
-    let image = r.nsImage ?? NSImage(size: NSSize(width: 16, height: 16))
-    image.isTemplate = mono
+func statusIcon(_ app: AppState) -> NSImage {
+    let vm = MainVM(app.provider, app.f)
+    let five = vm.five?.pct, week = vm.week?.pct
+    let scale = NSScreen.main?.backingScaleFactor ?? 2
+    let template = app.monoIcon && max(five ?? 0, week ?? 0) < 80
+    let tint: Color = template ? .black : StatusButton.dark ? .white : .black.opacity(0.85)
+    let r = ImageRenderer(content: MenuBarLabel(five: five, week: week, colored: !app.monoIcon, beside: scale < 2, tint: tint))
+    r.scale = scale
+    let image = r.nsImage ?? NSImage(size: NSSize(width: 40, height: 18))
+    image.isTemplate = template
+    let pct = { (p: Int?) in p.map { app.f.t("num.pct", "\($0)") } ?? "–" }
+    StatusButton.button?.toolTip = app.f.t("menubar.tip", pct(five), pct(week))
+    StatusButton.watch { [weak app] in app?.objectWillChange.send() }
     return image
 }
 
@@ -464,29 +531,9 @@ struct Ring: View {
     }
 }
 
-struct RingsIcon: View {
-    let five: RingVM?
-    let week: RingVM?
-    var mono = false
-    var body: some View {
-        ZStack {
-            if mono {
-                Ring(fraction: week?.fraction ?? 0, color: .black, size: 16, line: 1.2, inset: 0.9, track: .black.opacity(0.25))
-                Ring(fraction: five?.fraction ?? 0, color: .black, size: 16, line: 2.8, inset: 4.4, track: .black.opacity(0.25))
-            } else {
-                Ring(fraction: week?.fraction ?? 0, color: Color(hex: week?.color ?? Palette.week), size: 16, line: 2, inset: 1.5,
-                     track: Color(hex: 0x3A3A40))
-                Ring(fraction: five?.fraction ?? 0, color: Color(hex: five?.color ?? Palette.fiveHour), size: 16, line: 2,
-                     inset: 4.8, track: Color(hex: 0x3A3A40))
-            }
-        }
-        .frame(width: 16, height: 16)
-    }
-}
-
 /// Zagon has no Dock icon, so the alert of an update found by the daily check opens behind other apps' windows: the
 /// panel offers the update too (Sparkle's gentle reminders). Sparkle holds its delegate weakly; AppState keeps this.
-final class UpdateReminders: NSObject, SPUStandardUserDriverDelegate {
+final class UpdateReminders: NSObject, SPUStandardUserDriverDelegate, SPUUpdaterDelegate {
     weak var app: AppState?
     var supportsGentleScheduledUpdateReminders: Bool { true }
 
@@ -497,6 +544,19 @@ final class UpdateReminders: NSObject, SPUStandardUserDriverDelegate {
     func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) { found(nil) }
     func standardUserDriverWillFinishUpdateSession() { found(nil) }
 
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        let v = item.displayVersionString
+        MainActor.assumeIsolated { app?.updateChecked(found: v, error: nil) }
+    }
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
+        MainActor.assumeIsolated { app?.updateChecked(found: nil, error: nil) }
+    }
+    func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {
+        let e = error as NSError
+        guard e.code != 1001 else { return }  // SUNoUpdateError: updaterDidNotFindUpdate says it
+        MainActor.assumeIsolated { app?.updateChecked(found: nil, error: e.localizedDescription) }
+    }
+
     // Sparkle calls its user driver's delegate on the main thread.
     private func found(_ version: String?) { MainActor.assumeIsolated { app?.updateFound = version } }
 }
@@ -505,7 +565,6 @@ final class UpdateReminders: NSObject, SPUStandardUserDriverDelegate {
 
 struct MainPanel: View {
     @EnvironmentObject private var app: AppState
-    @Environment(\.openWindow) private var openWindow
     @Environment(\.isSnapshot) private var snapshot
     @State private var showIdle = false
 
@@ -519,6 +578,7 @@ struct MainPanel: View {
                 ZoneClock()
                 settings
             }
+            ToastView()
             if let problem = app.problem { Banner.amber(Emphasis(before: f.t("main.storeFailed", problem))) }
             if app.scanning { Text(f.t("main.scanning")).font(.system(size: 12)).foregroundColor(Z.muted) }
             if let v = app.updateFound {
@@ -528,14 +588,10 @@ struct MainPanel: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Banner.blue(Emphasis(before: f.t("connect.banner")))
                     HStack(spacing: 8) {
-                        PillButton(title: app.cliBusy ? f.t("connect.busy") : f.t("connect.button"), primary: true, expand: true) {
+                        PillButton(title: app.cliBusy ? f.t("connect.connecting") : f.t("connect.button"), primary: true, expand: true) {
                             app.runCLI("install")
                         }
                         PillButton(title: f.t("connect.notNow")) { app.connectDismissed = true }
-                    }
-                    if let e = app.cliError {
-                        Text(f.t("connect.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -575,8 +631,7 @@ struct MainPanel: View {
             app.screen = screen
             app.day = app.homeDay
         }
-        openWindow(id: "main")
-        NSApp.activate(ignoringOtherApps: true)
+        MainWindow.shared.show(app)
     }
 }
 

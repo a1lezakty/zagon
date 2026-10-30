@@ -7,23 +7,25 @@ struct WindowRoot: View {
         HStack(spacing: 0) {
             Sidebar()
             Rectangle().fill(Z.divider).frame(width: 1).frame(maxHeight: .infinity)
-            Group {
-                switch app.screen {
-                case .day: DayScreen()
-                case .week: WeekScreen()
-                case .calendar: CalendarScreen()
-                case .tasks: TasksScreen()
-                case .worklog: WorklogScreen()
-                case .sessions: SessionsScreen()
-                case .settings: SettingsScreen()
+            VStack(alignment: .leading, spacing: 0) {
+                if app.welcome { WelcomeBar().padding(.horizontal, 28).padding(.top, 20) }
+                Group {
+                    switch app.screen {
+                    case .day: DayScreen()
+                    case .week: WeekScreen()
+                    case .calendar: CalendarScreen()
+                    case .tasks: TasksScreen()
+                    case .worklog: WorklogScreen()
+                    case .sessions: SessionsScreen()
+                    case .settings: SettingsScreen()
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .foregroundColor(Z.text)
         .background(Z.ground)
-        .onAppear { app.windowOpen = true }
-        .onDisappear { app.windowOpen = false }
+        .overlay(alignment: .bottom) { ToastView().frame(maxWidth: 560).padding(20) }
     }
 }
 

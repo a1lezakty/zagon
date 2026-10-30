@@ -4,7 +4,6 @@ import ZagonUIModel
 
 struct SettingsScreen: View {
     @EnvironmentObject private var app: AppState
-    @State private var diagResult: String?
     var body: some View {
         let f = app.f
         Page {
@@ -136,12 +135,7 @@ struct SettingsScreen: View {
                 Text(f.t("settings.diag")).font(.system(size: 15, weight: .semibold))
                 Text(f.t("settings.diag.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 12) {
-                    PillButton(title: f.t("settings.diag.collect")) { collect(f) }
-                    if let diagResult {
-                        Text(diagResult).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1).truncationMode(.middle)
-                    }
-                }
+                PillButton(title: f.t("settings.diag.collect")) { collect(f) }
             }
             .frame(maxWidth: 640, alignment: .leading)
         }
@@ -168,10 +162,9 @@ struct SettingsScreen: View {
     func collect(_ f: Fmt) {
         do {
             let zip = try app.collectDiagnostics()
-            diagResult = f.t("settings.diag.saved", Log.scrub(zip.path))
-            NSWorkspace.shared.activateFileViewerSelecting([zip])
+            app.say(f.t("settings.diag.saved", Log.scrub(zip.path)), reveal: zip, seconds: 10)
         } catch {
-            diagResult = f.t("settings.diag.failed", Log.scrub(String(describing: error)))
+            app.say(f.t("settings.diag.failed", Log.scrub(String(describing: error))), error: true)
         }
     }
 }
