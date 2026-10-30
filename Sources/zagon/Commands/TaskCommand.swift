@@ -102,8 +102,9 @@ struct TaskCommand: ParsableCommand {
             try common.linker().linkSessions(store)
             let base = common.timeBase(time)
             let lines = try Tasks(store: store).overview(status: status, all: true, limit: .max, base: base, idleGap: common.idleGap * 60)
-            if report.json { try emit(all ? lines : lines.filter { $0.worked != false }) }
-            else { print(TaskText.list(lines, base: base, all: all)) }
+            if report.json { try emit(all ? lines : lines.filter { $0.worked != false }); return }
+            let drafts = (try? common.suggester(store).drafts().count) ?? 0
+            print(TaskText.list(lines, base: base, all: all, drafts: (drafts, "zagon task drafts")))
         }
     }
 
@@ -247,7 +248,13 @@ struct TaskCommand: ParsableCommand {
                 guard ids.count == 1, new.count == 1 else { throw ValidationError("--title, --description, --create-in-jira: one N… id") }
             }
             if createInJira {
-                let p = try s.jiraPlan(new[0], project: project, title: title, description: description)
+                let p: JiraCreatePlan
+                do { p = try s.jiraPlan(new[0], project: project, title: title, description: description) } catch {
+                    // The suggestion is gone, but an earlier try may have made the issue: that one is taken, none is made.
+                    guard try s.jiraClaim(new[0]) else { throw error }
+                    print(try s.createInJira(new[0], project: project ?? "", title: title, description: description))
+                    return
+                }
                 guard let proj = p.project else {
                     throw ValidationError(p.projects.isEmpty ? "no Jira project you may create issues in"
                                           : "choose --project: " + p.projects.map(\.key).joined(separator: ", "))

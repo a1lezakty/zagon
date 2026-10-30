@@ -364,8 +364,8 @@ struct JiraCreateSheet: View {
     init(f: Fmt, draft: DraftVM, jira: TaskBackend.JiraProjects,
          create: @escaping (String, String, String, @escaping (String?) -> Void) -> Void, close: @escaping () -> Void) {
         self.f = f; self.draft = draft; self.jira = jira; self.create = create; self.close = close
-        _project = State(initialValue: jira.default.flatMap { d in jira.projects.contains { $0.key == d } ? d : nil }
-                         ?? jira.projects.first?.key ?? "")
+        // No guess: without a last-used (or most-used) project the user picks one.
+        _project = State(initialValue: jira.default.flatMap { d in jira.projects.contains { $0.key == d } ? d : nil } ?? "")
         _title = State(initialValue: draft.name)
         _text = State(initialValue: draft.description)
     }
@@ -375,6 +375,7 @@ struct JiraCreateSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             H2(text: f.t("draft.jiraTitle"), size: 17)
             Picker(f.t("draft.project"), selection: $project) {
+                if project.isEmpty { Text("—").tag("") }
                 ForEach(jira.projects, id: \.key) { p in Text(p.key + " · " + p.name).tag(p.key) }
             }
             Text(f.t("draft.type")).font(.system(size: 13)).foregroundColor(Z.secondary)

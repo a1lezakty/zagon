@@ -29,7 +29,8 @@ public final class TaskTools: TaskService {
     public func suggestions(day: String, again: Bool) throws -> String {
         scan()
         let r = try mapErrors { try suggester().suggest(day, again: again, now: now()) }
-        return SuggestText.run(r, day: day, answer: "ask the user, then task_suggestions_answer with confirm: true")
+        return SuggestText.run(r, day: day, answer: "ask the user, then task_suggestions_answer with confirm: true; a new task (N…) "
+                               + "can be made in Jira instead with task_create_in_jira (preview first)")
     }
 
     public func answerSuggestions(accept: [String], reject: [String]) throws -> String {
@@ -41,19 +42,28 @@ public final class TaskTools: TaskService {
         }.joined(separator: "\n")
     }
 
-    public func createInJira(id: String, project: String?, title: String?, description: String?, confirm: Bool) throws -> String {
+    public func createInJira(id: String, project: String?, title: String?, description: String?, confirm: Bool, token: String?) throws -> String {
         let s = try suggester()
         return try mapErrors {
-            let p = try s.jiraPlan(id, project: project, title: title, description: description)
+            let p: JiraCreatePlan
+            do { p = try s.jiraPlan(id, project: project, title: title, description: description) } catch {
+                // The suggestion is gone, but an earlier try may have made the issue: that one is taken, none is made.
+                guard try s.jiraClaim(id) else { throw error }
+                return try s.createInJira(id, project: project ?? "", title: title, description: description)
+            }
             guard let proj = p.project else {
                 throw MCPToolError((project.map { "No Jira project \($0) you may create issues in. " } ?? "Choose a project. ")
                                    + "Projects: " + p.projects.map { "\($0.key) (\($0.name))" }.joined(separator: ", ") + ". Nothing was created.")
             }
-            guard confirm else {
-                return "Would create in Jira: a Task in \(proj), assigned to the user\ntitle: \(p.title)\ndescription:\n\(p.description)\n"
-                    + "then \(Txt.dur(p.draft.workedSec)) of work is linked to it.\nProjects: "
-                    + p.projects.map(\.key).joined(separator: ", ") + "\nNothing was created. Show this to the user; only after "
-                    + "they explicitly say to create it, call again with confirm: true (and their project, title, description)."
+            // The token ties the confirmation to the values shown: no create without a preview of exactly these.
+            let want = String(UInt64(bitPattern: fnv1a64([id.uppercased(), proj, p.title, p.description].joined(separator: "\u{1}"))), radix: 36)
+            let preview = "Would create in Jira: a \(p.type ?? "Task") in \(proj), assigned to the user\ntitle: \(p.title)\ndescription:\n"
+                + "\(p.description)\nthen \(Txt.dur(p.draft.workedSec)) of work is linked to it.\nProjects: "
+                + p.projects.map(\.key).joined(separator: ", ") + "\ntoken: \(want)\nNothing was created. Show this to the user; only "
+                + "after they explicitly say to create it, call again with these values, confirm: true and token \(want)."
+            guard confirm, token == want else {
+                if confirm { throw MCPToolError("The token is not the one of these values; nothing was created. " + preview) }
+                return preview
             }
             return try s.createInJira(id, project: proj, title: p.title, description: p.description)
         }
@@ -88,7 +98,9 @@ public final class TaskTools: TaskService {
     public func list(status: String?, all: Bool, limit: Int) throws -> String {
         let w = try fresh()
         let lines = try tasks.overview(status: try check(status), all: true, limit: .max, base: w.base, idleGap: w.idleGap, now: now())
-        return TaskText.list(lines, base: w.base, all: all, limit: limit, more: "task_list with all: true")
+        let drafts = (try? makeSuggester?().drafts(now: now()).count) ?? 0
+        return TaskText.list(lines, base: w.base, all: all, limit: limit, more: "task_list with all: true",
+                             drafts: (drafts, "task_suggestions"))
     }
 
     public func get(_ ref: String) throws -> String {

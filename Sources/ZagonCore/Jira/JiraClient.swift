@@ -327,14 +327,14 @@ public final class JiraClient {
 
     /// The project's issue type for a plain task: "Task" (also when Jira shows it translated), else the first type
     /// that is neither a sub-task nor an epic.
-    func taskType(_ project: String) throws -> String {
+    func taskType(_ project: String) throws -> (id: String, name: String) {
         let types = try get("/rest/api/3/issue/createmeta/\(Self.escape(project))/issuetypes", IssueTypes.self).issueTypes ?? []
         let plain = types.filter { $0.subtask != true }
         guard let t = plain.first(where: { ($0.untranslatedName ?? $0.name) == "Task" })
                 ?? plain.first(where: { ($0.untranslatedName ?? $0.name) != "Epic" }) else {
             throw JiraError.http(400, "project \(project) has no issue type for a task")
         }
-        return t.id
+        return (t.id, t.name ?? t.untranslatedName ?? "Task")
     }
 
     /// Your texts as samples of your style, newest first, at most `limit` of each: issues you created (summary and
@@ -359,9 +359,9 @@ public final class JiraClient {
 
     // MARK: writing — only on an explicit command (CLI with confirmation, MCP with confirm: true, bot button)
 
-    /// Creates a task in `project`, assigned to you; returns its key.
-    public func createIssue(project: String, summary: String, description: String) throws -> String {
-        let type = try taskType(project), me = try accountId()
+    /// Creates a task in `project` (of `type`, by default the project's task type), assigned to you; returns its key.
+    public func createIssue(project: String, summary: String, description: String, type: String? = nil) throws -> String {
+        let type = try type ?? taskType(project).id, me = try accountId()
         let fields: [String: JSONValue] = ["project": .o(["key": .s(project)]), "issuetype": .o(["id": .s(type)]),
                                            "summary": .s(summary), "description": .s(description), "assignee": .o(["id": .s(me)])]
         let data = try request("POST", "/rest/api/2/issue", json: Array(try JSONEncoder().encode(["fields": JSONValue.o(fields)])))

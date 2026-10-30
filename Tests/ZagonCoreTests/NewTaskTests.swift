@@ -64,12 +64,28 @@ private func h(_ x: Double) -> Double { D0 + x * H }
         let plan = try DayWorklog(store: x.f.store, linker: try TaskLinker(), jira: nil).plan(day).plan
         #expect(plan.rows.filter { $0.taskId == t.id }.allSatisfy { $0.text == "Retries with backoff" } && !plan.rows.isEmpty)
         #expect(try x.s.acceptNew("N1") == "N1: no such suggested task")
-        #expect(try x.s.rejectNew("N2") == "N2 rejected" && x.s.drafts().isEmpty && x.s.rejectNew("N2") == "N2: no such suggested task")
+        // The bot's buttons make it here only; a stale one says so.
+        #expect(try x.s.callback("sg:n:N2")?.text == "N2 rejected" && x.s.callback("sg:y:N2")?.text == "N2: no such suggested task")
+        #expect(try x.s.callback("sg:y:NX") == nil)
+        try x.s.store.db.transaction {   // put N2 back for the checks below
+            try x.s.addDrafts([([.init(id: "S1", session: "claude:s3", start: h(13), end: h(13.5), worked: 0.5 * H)], "Demo slides", "", "Slides", 0.5)],
+                              day: day, now: h(20))
+        }
+        let n4 = try #require(try x.s.drafts().first)
+        #expect(n4.id == "N3" && n4.title == "Demo slides")
+        // A second suggestion of the same title that day joins it; drafts older than 14 days are not shown.
+        try x.s.store.db.transaction {
+            try x.s.addDrafts([([.init(id: "S2", session: "claude:s3", start: h(13.6), end: h(13.9), worked: 0.3 * H)], "demo  SLIDES".lowercased()
+                                .replacingOccurrences(of: "  ", with: " "), "", "", 0.5)], day: day, now: h(20))
+        }
+        #expect(try x.s.drafts().map(\.id) == ["N3"] && x.s.drafts()[0].stretches.count == 2)
+        #expect(try x.s.drafts(now: D0 + 15 * 86400).isEmpty && x.s.drafts(day, now: D0 + 15 * 86400).count == 1)
+        try x.s.dropDrafts(ids: ["N3"])
         // Rejected work is not asked again; `again` asks anew and ids go on.
         #expect(try !x.s.suggest(day, now: h(22)).made)
         x.calls.answer = #"[{"segment": "S1", "new": "Demo slides"}]"#
         let r2 = try x.s.suggest(day, again: true, now: h(23))
-        #expect(r2.made && r2.drafts.map(\.id) == ["N3"])
+        #expect(r2.made && r2.drafts.map(\.id) == ["N4"])
     }
 
     /// A key only when sure; otherwise the new task the AI gave; a stretch linked meanwhile is not taken.
@@ -152,7 +168,8 @@ struct NewTaskJiraTests {
         let (d, ps) = try x.s.jiraProjects()
         #expect(ps.map(\.key) == ["OPS", "PROJ"] && d == "PROJ")                  // most of your issues are there
         let plan = try x.s.jiraPlan("N1", title: "Retries for dialogs")
-        #expect(plan.project == "PROJ" && plan.title == "Retries for dialogs" && plan.description == "Was: lost.\nDone: retries.")
+        #expect(plan.project == "PROJ" && plan.type == "Задача" && plan.title == "Retries for dialogs" && plan.description == "Was: lost.\nDone: retries.")
+        #expect(try x.s.jiraPlan("N1", description: "").description == "")      // cleared on purpose: stays empty
         #expect(try issues(m).count == 2)                                        // planning writes nothing
         #expect(try x.s.jiraPlan("N1", project: "nope").project == nil)
         #expect(throws: TaskError.self) { try x.s.createInJira("N1", project: "NOPE") }
@@ -175,13 +192,38 @@ struct NewTaskJiraTests {
         _ = try x.s.suggest(day, now: h(20))
         #expect(throws: TaskError.self) { try x.s.createInJira("N1", project: "PROJ") }
         #expect(try issues(m).keys.sorted() == ["PROJ-1", "PROJ-103", "PROJ-2"] && x.tasks.find("PROJ-103") == nil && x.s.drafts().count == 1)
-        #expect(try x.s.createInJira("N1", project: "PROJ").hasPrefix("N1 accepted: PROJ-103 Dialog retries"))
-        #expect(try issues(m).count == 3 && x.s.meta("jira:create:N1") == nil)
+        #expect(try x.s.jiraClaim("n1"))
+        // The title was edited before trying again: the issue of the first try is still found, none is made.
+        #expect(try x.s.createInJira("N1", project: "PROJ", title: "Edited title").hasPrefix("N1 accepted: PROJ-103 Edited title"))
+        #expect(try issues(m).count == 3 && x.s.meta("jira:create:N1") == nil && !x.s.jiraClaim("N1"))
 
         let r = try JiraMock(state: Self.state(#""post_status": [400], "#)), y = try fixture(r)
         _ = try y.s.suggest(day, now: h(20))
-        #expect(throws: JiraError.self) { try y.s.createInJira("N1", project: "PROJ") }
+        let refused = #expect(throws: TaskError.self) { try y.s.createInJira("N1", project: "PROJ") }
+        #expect(refused?.description.contains("fields Zagon does not fill") == true)
         #expect(try issues(r).count == 2 && y.s.meta("jira:create:N1") == nil && y.s.drafts().count == 1)
+    }
+
+    /// A try that ended unclear and found nothing blocks another one for a while; one that Jira answered with a key is
+    /// taken by that key, also when the suggestion is gone meanwhile.
+    @Test func unclearTryBlocksThenKeyIsTaken() throws {
+        let m = try JiraMock(state: Self.state()), x = try fixture(m)
+        _ = try x.s.suggest(day, now: h(20))
+        let at = h(20)
+        try x.s.setMeta("jira:create:N1", .object([.init("at", .number("\(at)")), .init("titles", .array([.string("Never made")])),
+                                                    .init("projects", .array([.string("PROJ")]))]))
+        let busy = #expect(throws: TaskError.self) { try x.s.createInJira("N1", project: "PROJ", now: at + 60) }
+        #expect(try busy?.description.contains("has not ended clearly") == true && issues(m).count == 2)
+        #expect(try x.s.createInJira("N1", project: "PROJ", now: at + 400).hasPrefix("N1 accepted: PROJ-103"))
+        #expect(try issues(m).count == 3)
+
+        let y = try fixture(m)
+        _ = try y.s.suggest(day, now: h(20))
+        try y.s.setMeta("jira:create:N1", .object([.init("at", .number("\(at)")), .init("key", .string("PROJ-103"))]))
+        try y.s.dropDrafts(ids: ["N1"])                                          // answered elsewhere meanwhile
+        #expect(try y.s.createInJira("N1", project: "PROJ", title: "Kept") == "N1: PROJ-103 is a task here; the suggestion was "
+                + "answered meanwhile, so no work was linked to it · created in Jira")
+        #expect(try y.tasks.find("PROJ-103") != nil && issues(m).count == 3 && !y.s.jiraClaim("N1"))
     }
 
     /// MCP: without confirm only what would be made; with it the issue is created. Answers take N… ids.
@@ -201,9 +243,13 @@ struct NewTaskJiraTests {
         let l = try call("task_suggestions", #"{"date":"2026-10-29"}"#)
         #expect(l.text.contains("#N1") && l.text.contains("Demo slides"), "\(l.text)")
         let preview = try call("task_create_in_jira", #"{"id":"N1","project":"PROJ"}"#)
-        #expect(!preview.isError && preview.text.contains("Would create in Jira: a Task in PROJ") && preview.text.contains("Nothing was created"))
+        #expect(!preview.isError && preview.text.contains("Would create in Jira: a Задача in PROJ") && preview.text.contains("Nothing was created"))
+        let token = try #require(preview.text.split(separator: "\n").first { $0.hasPrefix("token: ") }?.dropFirst(7))
+        // confirm without the preview's token, or with the token of other values: nothing is made.
+        #expect(try call("task_create_in_jira", #"{"id":"N1","project":"PROJ","confirm":true}"#).isError)
+        #expect(try call("task_create_in_jira", #"{"id":"N1","project":"PROJ","title":"Other","confirm":true,"token":"\#(token)"}"#).isError)
         #expect(try issues(m).count == 2)
-        let made = try call("task_create_in_jira", #"{"id":"N1","project":"PROJ","confirm":true}"#)
+        let made = try call("task_create_in_jira", #"{"id":"N1","project":"PROJ","confirm":true,"token":"\#(token)"}"#)
         #expect(try !made.isError && made.text.hasPrefix("N1 accepted: PROJ-103") && issues(m).count == 3, "\(made.text)")
         #expect(try call("task_suggestions_answer", #"{"accept":["n9", 1.5],"confirm":true}"#).isError)
         let ok = try call("task_suggestions_answer", #"{"reject":["N2"],"confirm":true}"#)

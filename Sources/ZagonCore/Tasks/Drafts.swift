@@ -27,6 +27,8 @@ public struct JiraCreatePlan: Codable, Sendable {
     public var draft: NewTaskDraft
     /// The project it goes to (`--project`, else the last one used, else the one most of your issues are in).
     public var project: String?
+    /// The project's issue type for a task (`Task` where the project has one).
+    public var type: String?
     public var projects: [JiraProject]
     public var title: String, description: String
 }
@@ -46,18 +48,29 @@ extension TaskSuggester {
                             confidence: v["c"]?.double ?? 0, stretches: st)
     }
 
-    /// Adds drafts for the day (inside the caller's transaction); ids continue one counter (`suggest:new-seq`).
+    /// Drafts of the last `showDays` days are shown; older ones are dropped when drafts are next stored.
+    static let showDays = 14
+    /// How long a create in Jira that ended unclear blocks another try of the same draft (it may still be under way).
+    static let createWait: Double = 300
+
+    /// Adds drafts for the day (inside the caller's transaction): a draft of that day with the same title (case and
+    /// spaces aside) takes the stretches instead of a second one; ids continue one counter (`suggest:new-seq`).
     func addDrafts(_ items: [(segs: [Segment], title: String, description: String, done: String, confidence: Double)], day: String,
                    now: Timestamp) throws {
         guard !items.isEmpty else { return }
-        var all = try storedDrafts(), n = Int(try meta("suggest:new-seq")?.double ?? 0)
+        let oldest = Time.addDays(Time.dayString(now), -Self.showDays) ?? ""
+        var all = try storedDrafts().filter { ($0["day"]?.string ?? "") >= oldest }, n = Int(try meta("suggest:new-seq")?.double ?? 0)
         for x in items {
+            let segs = x.segs.map { JValue.object([.init("s", .string($0.session)), .init("a", .number("\($0.start)")), .init("b", .number("\($0.end)"))]) }
+            if let i = all.firstIndex(where: { $0["day"]?.string == day && $0["t"]?.string?.lowercased() == x.title.lowercased() }),
+               case .object(let m) = all[i] {
+                all[i] = .object(m.map { $0.key == "segs" ? .init("segs", .array(($0.value.array ?? []) + segs)) : $0 })
+                continue
+            }
             n += 1
             all.append(.object([
                 .init("id", .string("N\(n)")), .init("day", .string(day)), .init("t", .string(x.title)), .init("d", .string(x.description)),
-                .init("w", .string(x.done)), .init("c", .number("\(x.confidence)")), .init("at", .number("\(now)")),
-                .init("segs", .array(x.segs.map { .object([.init("s", .string($0.session)), .init("a", .number("\($0.start)")),
-                                                           .init("b", .number("\($0.end)"))]) })),
+                .init("w", .string(x.done)), .init("c", .number("\(x.confidence)")), .init("at", .number("\(now)")), .init("segs", .array(segs)),
             ]))
         }
         try setMeta(Self.draftsKey, .array(all))
@@ -66,20 +79,22 @@ extension TaskSuggester {
 
     /// Drops drafts (`day` nil: those with `ids`).
     func dropDrafts(day: String? = nil, ids: Set<String> = []) throws {
-        let keep = try storedDrafts().filter { v in
-            guard let d = Self.draft(v) else { return false }
-            return !(ids.contains(d.id) || d.day == day)
+        try store.db.transaction {
+            let keep = try storedDrafts().filter { v in
+                guard let d = Self.draft(v) else { return false }
+                return !(ids.contains(d.id) || d.day == day)
+            }
+            try setMeta(Self.draftsKey, .array(keep))
         }
-        try setMeta(Self.draftsKey, .array(keep))
     }
 
-    /// Open drafts (of `day`, or all, newest day first), their stretches as they are now: a stretch any link covers
-    /// since is left out, a draft with none left is not shown.
-    public func drafts(_ day: String? = nil) throws -> [NewTaskDraft] {
-        let map = try Tasks(store: store).linkMap()
+    /// Open drafts (of `day`, or all of the last `showDays` days, newest day first), their stretches as they are now:
+    /// a stretch any link covers since is left out, a draft with none left is not shown.
+    public func drafts(_ day: String? = nil, now: Timestamp = Time.now()) throws -> [NewTaskDraft] {
+        let map = try Tasks(store: store).linkMap(), oldest = Time.addDays(Time.dayString(now), -Self.showDays) ?? ""
         var out: [NewTaskDraft] = []
         for v in try storedDrafts() {
-            guard var d = Self.draft(v), day == nil || d.day == day else { continue }
+            guard var d = Self.draft(v), day.map({ d.day == $0 }) ?? (d.day >= oldest) else { continue }
             d.stretches = d.stretches.filter { Self.covered(map, $0.sessionId, $0.start, $0.end).isEmpty }
             guard !d.stretches.isEmpty else { continue }
             for i in d.stretches.indices {
@@ -94,6 +109,15 @@ extension TaskSuggester {
         return out.sorted { ($0.day, $0.workedSec) > ($1.day, $1.workedSec) }
     }
 
+    /// Stretches of the day's stored drafts, per session: work a new task is suggested for already.
+    func draftPeriods(_ day: String) throws -> [String: [Interval]] {
+        var out: [String: [Interval]] = [:]
+        for d in try storedDrafts().compactMap(Self.draft) where d.day == day {
+            for s in d.stretches { out[s.sessionId, default: []].append(Interval(s.start, s.end)) }
+        }
+        return out
+    }
+
     /// The draft as it is now after the day's links are refreshed; nil when it is not open (accepted, rejected, or
     /// all its time got a link since: then it is dropped and `taken` names those tasks).
     func openDraft(_ id: String) throws -> (draft: NewTaskDraft?, taken: [String]) {
@@ -106,30 +130,48 @@ extension TaskSuggester {
         return (nil, try ids.sorted().map { try Tasks(store: store).get($0)?.key ?? "#\($0)" })
     }
 
-    /// Accept: a task with the draft's title and description (yours to change) is made here, its stretches are
-    /// linked to it by hand and the draft's text becomes the day's "what was done". `jiraKey`: the issue just made
-    /// for it in Jira (`createInJira`), which then is its key.
+    /// Accept: a task with the draft's title and description (yours to change; an empty description stays empty) is
+    /// made here, its stretches are linked to it by hand and the draft's text becomes the day's "what was done".
+    /// `jiraKey`: the issue made for it in Jira (`createInJira`), which then is its key (a task that has that key
+    /// already takes the work); that task is kept whatever happened to the suggestion meanwhile.
     public func acceptNew(_ id: String, title: String? = nil, description: String? = nil, jiraKey: String? = nil) throws -> String {
+        let id = id.uppercased(), claimKey = "jira:create:" + id
         let (open, taken) = try openDraft(id), tasks = Tasks(store: store)
+        func keepJiraTask(_ key: String, _ why: String) throws -> String {
+            try store.db.transaction {
+                if try tasks.find(key) == nil {
+                    try tasks.add(title: Self.given(title) ?? key, key: key, description: description, status: .inProgress)
+                }
+                try store.db.run("DELETE FROM meta WHERE key = ?", [.text(claimKey)])
+            }
+            return "\(id): \(key) is a task here; \(why), so no work was linked to it"
+        }
         guard let d = open else {
-            // The issue is in Jira already: keep it as a task even when its time went to another task meanwhile.
-            if let jiraKey, let title = Self.given(title) {
-                try tasks.add(title: title, key: jiraKey, description: Self.given(description), status: .inProgress)
-                return "\(id): \(jiraKey) is a task here, but its time is linked to \(taken.joined(separator: ", ")) now"
+            if let jiraKey {
+                return try keepJiraTask(jiraKey, taken.isEmpty ? "the suggestion was answered meanwhile"
+                                                               : "its time is linked to \(taken.joined(separator: ", ")) now")
             }
             return taken.isEmpty ? "\(id): no such suggested task"
                 : "\(id) not accepted: that time is linked to \(taken.joined(separator: ", ")) now; suggestion dropped"
         }
-        let t = try store.db.transaction {
-            let t = try tasks.add(title: Self.given(title) ?? d.title, key: jiraKey, description: Self.given(description) ?? d.description,
-                                  status: .inProgress)
+        let made: TaskItem? = try store.db.transaction {
+            // Answered by another run meanwhile (the app, MCP, the bot): not a second task for the same work.
+            guard try storedDrafts().compactMap(Self.draft).contains(where: { $0.id == d.id }) else { return nil }
+            let t = try jiraKey.flatMap { try tasks.find($0) }
+                ?? tasks.add(title: Self.given(title) ?? d.title, key: jiraKey, description: description ?? d.description, status: .inProgress)
             for s in d.stretches {
                 try store.db.run("INSERT OR REPLACE INTO task_session(task_id, session_id, how, start, \"end\") VALUES(?, ?, 'manual', ?, ?)",
                                  [.int(Int64(t.id)), .text(s.sessionId), .real(s.start), .real(s.end)])
             }
-            if !d.done.isEmpty { try tasks.setDone(t.id, day: d.day, text: d.done, source: "auto") }
+            if !d.done.isEmpty, try tasks.done(t.id).first(where: { $0.day == d.day }) == nil {
+                try tasks.setDone(t.id, day: d.day, text: d.done, source: "auto")
+            }
             try dropDrafts(ids: [d.id])
+            try store.db.run("DELETE FROM meta WHERE key = ?", [.text(claimKey)])
             return t
+        }
+        guard let t = made else {
+            return try jiraKey.map { try keepJiraTask($0, "the suggestion was answered meanwhile") } ?? "\(id): already answered"
         }
         return "\(d.id) accepted: \(t.key) \(Txt.oneLine(t.title, 70)) · \(Txt.dur(d.workedSec))"
     }
@@ -152,54 +194,97 @@ extension TaskSuggester {
         return counts.max { ($0.value.count, $1.key) < ($1.value.count, $0.key) }?.key
     }
 
+    /// Projects you may create issues in, read once per day (`meta` `jira:projects`).
+    func projects(_ jira: JiraClient, now: Timestamp = Time.now()) throws -> [JiraProject] {
+        let today = Time.dayString(now)
+        if let v = try meta("jira:projects"), v["at"]?.string == today {
+            return (v["list"]?.array ?? []).compactMap { x in x["k"]?.string.map { JiraProject(key: $0, name: x["n"]?.string ?? "") } }
+        }
+        let p = try jira.projects()
+        try setMeta("jira:projects", .object([.init("at", .string(today)), .init("list", .array(p.map {
+            .object([.init("k", .string($0.key)), .init("n", .string($0.name))])
+        }))]))
+        return p
+    }
+
     /// Projects you may create Jira issues in, and the one to suggest.
     public func jiraProjects() throws -> (default: String?, projects: [JiraProject]) {
         guard let jira else { throw TaskError("Jira is not connected ([jira] in config.toml)") }
-        let p = try jira.projects(), d = try defaultProject()
+        let p = try projects(jira), d = try defaultProject()
         return (p.contains { $0.key == d } ? d : nil, p)
     }
 
-    /// What `createInJira` would do; Jira is only read (its projects).
+    /// What `createInJira` would do; Jira is only read (its projects, the issue type).
     public func jiraPlan(_ id: String, project: String? = nil, title: String? = nil, description: String? = nil) throws -> JiraCreatePlan {
         guard let jira else { throw TaskError("Jira is not connected ([jira] in config.toml)") }
         let (open, taken) = try openDraft(id)
         guard let d = open else {
             throw TaskError(taken.isEmpty ? "\(id): no such suggested task" : "\(id): that time is linked to \(taken.joined(separator: ", ")) now")
         }
-        let projects = try jira.projects()
+        let projects = try projects(jira)
         let fallback = try defaultProject(), want = Self.given(project)?.uppercased() ?? fallback
-        return JiraCreatePlan(draft: d, project: projects.contains { $0.key == want } ? want : nil, projects: projects,
-                              title: Self.given(title) ?? d.title, description: Self.given(description) ?? d.description)
+        let proj = projects.contains { $0.key == want } ? want : nil
+        return JiraCreatePlan(draft: d, project: proj, type: try proj.map { try jira.taskType($0).name }, projects: projects,
+                              title: Self.given(title) ?? d.title, description: description ?? d.description)
     }
 
+    /// An earlier create of the draft in Jira is not settled yet: `createInJira` then takes the issue it made (no
+    /// second one is made without a new plan), even when the draft itself is gone.
+    public func jiraClaim(_ id: String) throws -> Bool { try meta("jira:create:" + id.uppercased()) != nil }
+
     /// Creates the draft's task in Jira (a Task in `project`, assigned to you) and accepts it under the new key. Only
-    /// on the user's explicit confirmation (CLI `--yes` or y, MCP `confirm: true`, the app's Create button). A create
-    /// that failed after it may have reached Jira is remembered: the next try first looks for an issue you made with
-    /// that title in the project in the last two days and takes it instead of making a second one.
+    /// on the user's explicit confirmation (CLI `--yes` or y, MCP `confirm: true` with the preview's token, the app's
+    /// Create button). Every try is remembered in `jira:create:N…` (when, titles, projects; the key once Jira gave
+    /// it) until the draft is accepted: an issue made by an earlier try is taken (by its key, else by a search of your
+    /// issues of those projects made in the last 7 days with one of those titles) instead of making a second one, and
+    /// while a try that ended unclear is younger than `createWait` (it may still be under way) no other one starts.
     public func createInJira(_ id: String, project: String, title: String? = nil, description: String? = nil,
                              now: Timestamp = Time.now()) throws -> String {
         guard let jira else { throw TaskError("Jira is not connected ([jira] in config.toml)") }
-        let p = try jiraPlan(id, project: project, title: title, description: description)
-        guard let proj = p.project else { throw TaskError("no Jira project \(project) you may create issues in") }
-        let claimKey = "jira:create:" + p.draft.id
-        var key: String?
-        if try meta(claimKey) != nil {
-            key = try jira.search("creator = currentUser() AND project = \"\(proj)\" AND created >= -2d ORDER BY created DESC", limit: 100)
-                .first { $0.summary == p.title }?.key
+        let id = id.uppercased(), claimKey = "jira:create:" + id, claim = try meta(claimKey)
+        let titles = (claim?["titles"]?.array ?? []).compactMap(\.string), tried = (claim?["projects"]?.array ?? []).compactMap(\.string)
+        func accept(_ key: String) throws -> String {
+            try setMeta("jira:last-project", .string(String(key.prefix { $0 != "-" })))
+            return try acceptNew(id, title: Self.given(title) ?? titles.last, description: description, jiraKey: key) + " · created in Jira"
         }
-        if key == nil {
-            try setMeta(claimKey, .object([.init("at", .number("\(now)")), .init("title", .string(p.title))]))
-            do { key = try jira.createIssue(project: proj, summary: p.title, description: p.description) }
-            catch let e as JiraError where !e.mayHaveArrived {
-                try store.db.run("DELETE FROM meta WHERE key = ?", [.text(claimKey)])
-                throw e
-            } catch {
-                throw TaskError("Jira may have made the issue but did not say so (\(error)); nothing changed here. Run it again: "
-                                + "it looks for that issue first")
+        if let key = claim?["key"]?.string { return try accept(key) }
+        if let claim {
+            let want = Set(titles + [Self.given(title)].compactMap { $0 })
+            for p in Array(Set(tried + [project.uppercased()].filter { !$0.isEmpty })).sorted() {
+                let found = try jira.search("creator = currentUser() AND project = \"\(p)\" AND created >= -7d ORDER BY created DESC", limit: 100)
+                if let k = found.first(where: { want.contains($0.summary) })?.key { return try accept(k) }
+            }
+            let at = claim["at"]?.double ?? 0
+            if now - at < Self.createWait {
+                throw TaskError("a create of \(id) in Jira started at \(Txt.clock(at)) and has not ended clearly: check Jira; if the "
+                                + "issue is not there, try again after \(Txt.clock(at + Self.createWait))")
             }
         }
-        try setMeta("jira:last-project", .string(proj))
-        try store.db.run("DELETE FROM meta WHERE key = ?", [.text(claimKey)])
-        return try acceptNew(p.draft.id, title: p.title, description: p.description, jiraKey: key!) + " · created in Jira"
+        let p = try jiraPlan(id, project: project, title: title, description: description)
+        guard let proj = p.project else { throw TaskError("no Jira project \(project) you may create issues in") }
+        // Reads first: their failures did not reach the create.
+        let type = try jira.taskType(proj)
+        _ = try jira.accountId()
+        try store.db.transaction {
+            guard try meta(claimKey) == claim else { throw TaskError("a create of \(id) in Jira is under way elsewhere: check Jira") }
+            try setMeta(claimKey, .object([.init("at", .number("\(now)")), .init("titles", .array((titles + [p.title]).map(JValue.string))),
+                                           .init("projects", .array((tried + [proj]).map(JValue.string)))]))
+        }
+        let key: String
+        do { key = try jira.createIssue(project: proj, summary: p.title, description: p.description, type: type.id) }
+        catch let e as JiraError where !e.mayHaveArrived {
+            // Not made: the claim is as before this try.
+            if let claim { try setMeta(claimKey, claim) } else { try store.db.run("DELETE FROM meta WHERE key = ?", [.text(claimKey)]) }
+            if case .http(400, let body) = e {
+                throw TaskError("Jira refused the issue (HTTP 400: \(body)). The project may need fields Zagon does not fill: make it "
+                                + "in Jira by hand, then `zagon task add --key <KEY> <title>` and link the work")
+            }
+            throw e
+        } catch {
+            throw TaskError("Jira may have made the issue but did not say so (\(error)); nothing changed here. Check Jira: trying "
+                            + "again takes that issue if it is there")
+        }
+        if case .object(let m)? = try meta(claimKey) { try setMeta(claimKey, .object(m + [.init("key", .string(key))])) }
+        return try accept(key)
     }
 }

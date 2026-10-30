@@ -47,9 +47,10 @@ public protocol TaskService: AnyObject {
     /// Accept (link the task for that time; a suggested new task `N…` is made in Zagon) or reject (never suggest it for
     /// that session). Ids are numbers or `N…`. Reached only with `confirm: true`.
     func answerSuggestions(accept: [String], reject: [String]) throws -> String
-    /// A suggested new task `N…` made in Jira: without `confirm` only what would be created (and the projects); with it
-    /// the issue is created and the work linked to it. Writes to Jira only with `confirm: true`.
-    func createInJira(id: String, project: String?, title: String?, description: String?, confirm: Bool) throws -> String
+    /// A suggested new task `N…` made in Jira: without `confirm` only what would be created (and the projects) and a
+    /// token for exactly that; with `confirm` and the token of the same values the issue is created and the work linked
+    /// to it. Writes to Jira only then.
+    func createInJira(id: String, project: String?, title: String?, description: String?, confirm: Bool, token: String?) throws -> String
 }
 
 extension TaskService {
@@ -57,7 +58,7 @@ extension TaskService {
     public func answerSuggestions(accept: [String], reject: [String]) throws -> String {
         throw ServiceTools.unavailable("task_suggestions_answer", "suggestions")
     }
-    public func createInJira(id: String, project: String?, title: String?, description: String?, confirm: Bool) throws -> String {
+    public func createInJira(id: String, project: String?, title: String?, description: String?, confirm: Bool, token: String?) throws -> String {
         throw ServiceTools.unavailable("task_create_in_jira", "suggestions")
     }
 }
@@ -216,10 +217,10 @@ enum ServiceTools {
                         + "made in Zagon, not in Jira) or reject them (that task is never suggested for that session again). Only "
                         + "with the user's answer; requires confirm: true.",
                     inputSchema: MCPSchema.object([
-                        "accept": ["type": "array", "items": ["type": ["integer", "string"]],
-                                   "description": "Suggestion ids the user accepted: numbers, N… for new tasks"],
-                        "reject": ["type": "array", "items": ["type": ["integer", "string"]],
-                                   "description": "Suggestion ids the user rejected: numbers, N… for new tasks"],
+                        "accept": ["type": "array", "items": ["type": "string"],
+                                   "description": "Suggestion ids the user accepted: \"12\", or \"N3\" for a new task"],
+                        "reject": ["type": "array", "items": ["type": "string"],
+                                   "description": "Suggestion ids the user rejected: \"12\", or \"N3\" for a new task"],
                         "confirm": ["type": "boolean", "const": true, "description": "Must be true: this is the user's answer"],
                     ], required: ["confirm"]), readOnly: false) { a in
                 guard try a.bool("confirm") == true else {
@@ -232,18 +233,20 @@ enum ServiceTools {
             MCPTool(name: "task_create_in_jira", title: "Create a suggested new task in Jira",
                     description: "A suggested new task (N… from task_suggestions) made in Jira as a Task assigned to the user, "
                         + "its work then linked to the new issue. Without confirm it only shows what would be created and the "
-                        + "projects: show that to the user, let them choose the project and edit the title and description, "
-                        + "and call again with confirm: true only after they explicitly said to create it.",
+                        + "projects and a token: show that to the user, let them choose the project and edit the title and "
+                        + "description, and only after they explicitly said to create it call again with the same values, "
+                        + "confirm: true and the token of the preview of those values.",
                     inputSchema: MCPSchema.object([
                         "id": MCPSchema.string("Suggested new task id, e.g. N3"),
                         "project": MCPSchema.string("Jira project key (default: the last one used)"),
                         "title": MCPSchema.string("Title (default: the suggested one)"),
                         "description": MCPSchema.string("Description (default: the suggested one)"),
                         "confirm": ["type": "boolean", "description": "true only after the user explicitly said to create it"],
+                        "token": MCPSchema.string("The token of the preview of exactly these values (with confirm)"),
                     ], required: ["id"]), readOnly: false) { a in
                 try t("task_create_in_jira").createInJira(id: try a.required("id"), project: try a.string("project"),
                                                           title: try a.string("title"), description: try a.string("description"),
-                                                          confirm: try a.bool("confirm") == true)
+                                                          confirm: try a.bool("confirm") == true, token: try a.string("token"))
             },
         ]
     }

@@ -30,6 +30,8 @@ public struct TaskSuggester {
     public var minConfidence = 0.7
     /// The evening message (`[tasks] evening_suggestions = false` turns it off; commands keep working).
     public var evening = true
+    /// Samples of your Jira texts in the ask (`[tasks] style_samples = false` leaves them out).
+    public var styleSamplesOn = true
     /// The language of the message, the prompt and the AI's reasons: `[notify] lang`, as other notifications.
     var words: Words { engine.config.lang.words() }
     public var idleGap: Double = 20 * 60
@@ -62,6 +64,7 @@ public struct TaskSuggester {
         if let v = TOMLLite.raw(in: text, section: "tasks", key: "suggest_min_confidence").flatMap({ Double(String($0.prefix { $0 != " " && $0 != "#" })) }),
            v > 0 { s.minConfidence = v }
         s.evening = TOMLLite.raw(in: text, section: "tasks", key: "evening_suggestions").map { !$0.hasPrefix("false") } ?? true
+        s.styleSamplesOn = TOMLLite.raw(in: text, section: "tasks", key: "style_samples").map { !$0.hasPrefix("false") } ?? true
         s.log = log
         return s
     }
@@ -88,10 +91,12 @@ public struct TaskSuggester {
         guard let (from, to) = Time.dayBounds(day) else { throw TaskError("bad day \(day)") }
         let metaKey = "suggest:" + day
         if again {
-            try store.db.run("DELETE FROM task_session WHERE how = 'suggested' AND start >= ? AND start < ?",
-                             [.real(from - LinkHow.maxNudge), .real(to - LinkHow.maxNudge)])
-            try store.db.run("DELETE FROM meta WHERE key = ?", [.text(metaKey)])
-            try dropDrafts(day: day)
+            try store.db.transaction {
+                try store.db.run("DELETE FROM task_session WHERE how = 'suggested' AND start >= ? AND start < ?",
+                                 [.real(from - LinkHow.maxNudge), .real(to - LinkHow.maxNudge)])
+                try store.db.run("DELETE FROM meta WHERE key = ?", [.text(metaKey)])
+                try dropDrafts(day: day)
+            }
         }
         try linker.linkSessions(store)
         try linker.linkDay(store, from: from, to: to)
@@ -146,7 +151,11 @@ public struct TaskSuggester {
             let cur = try meta(metaKey)
             var items = cur?["items"]?.array ?? [], asked = cur?["asked"]?.array ?? []
             let taken = try openPeriods(from: from, to: to)
-            let free = { (g: Segment) in !(taken[g.session] ?? []).contains(where: { $0.start < g.end && $0.end > g.start }) }
+            // Another run (daemon, CLI, MCP) may have suggested a task or a new one for this work meanwhile.
+            let drafted = try draftPeriods(day)
+            let free = { (g: Segment) in
+                !((taken[g.session] ?? []) + (drafted[g.session] ?? [])).contains(where: { $0.start < g.end && $0.end > g.start })
+            }
             for x in picks where free(x.seg) {
                 try Tasks(store: store).link(x.task, session: x.seg.session, how: .suggested, start: x.seg.start, end: x.seg.end)
                 items.append(.object([.init("t", .number("\(x.task)")), .init("s", .string(x.seg.session)),
@@ -296,7 +305,11 @@ public struct TaskSuggester {
             let text = try list(day).first { $0.id == id }?.done ?? ""
             try store.db.run("UPDATE OR REPLACE task_session SET how = 'manual', start = ? WHERE rowid = ? AND how = 'suggested'",
                              [.real(s.start), .int(Int64(id))])
-            if !text.isEmpty, try Tasks(store: store).done(s.task).first(where: { $0.day == day }) == nil {
+            // The stretch's text stands for the day only when it is all the task's work that day.
+            if !text.isEmpty, try Tasks(store: store).done(s.task).first(where: { $0.day == day }) == nil, let (from, to) = Time.dayBounds(day),
+               try store.db.one("""
+                   SELECT count(*) FROM task_session WHERE task_id = ? AND how NOT IN ('unlinked', 'suggested') AND start < ? AND "end" > ?
+                   """, [.int(Int64(s.task)), .real(to), .real(from)], { $0.int(0) }) == 1 {
                 try Tasks(store: store).setDone(s.task, day: day, text: text, source: "auto")
             }
             out.append("#\(id) accepted: \(s.key) \(Txt.clock(s.start))–\(Txt.clock(s.end))")
@@ -553,7 +566,7 @@ public struct TaskSuggester {
     /// your own texts (Jira `myself`), clipped, at most `maxStyle` characters; read once per day (cached in `meta`).
     /// Empty without Jira or when it fails.
     func styleSamples(_ day: String, now: Timestamp) -> String {
-        guard let jira else { return "" }
+        guard let jira, styleSamplesOn else { return "" }
         let key = "suggest:style"
         if let v = try? meta(key), v["at"]?.string == Time.dayString(now), let t = v["text"]?.string { return t }
         do {
@@ -747,7 +760,8 @@ public struct TaskSuggester {
         let r = try suggest(day, now: now)
         guard !r.items.isEmpty || !r.drafts.isEmpty else { return nil }
         let w = words, q = { (s: String) in w.t("«\(s)»", "\"\(s)\"") }
-        var lines = ["\(w.date(day)): " + w.t("работа без ключа задачи. Это она?", "work without a task key. Is it this task?")]
+        var lines = ["\(w.date(day)): " + (r.items.isEmpty ? w.t("работа без задачи. Завести новую?", "work without a task. Make a new one?")
+                                                           : w.t("работа без ключа задачи. Это она?", "work without a task key. Is it this task?"))]
         for s in r.items {
             lines.append("#\(s.id) \(s.key) — \(w.dur(s.workedSec)), \(w.clock(s.start))–\(w.clock(s.end)), "
                          + q(Self.clip(60)(s.sessionTitle ?? s.project ?? s.sessionId))
@@ -755,7 +769,7 @@ public struct TaskSuggester {
         }
         for d in r.drafts { lines.append("#\(d.id) " + w.t("новая задача", "new task") + ": \(q(d.title)) — \(w.dur(d.workedSec))") }
         if !buttons { lines.append(w.t("Ответ: ", "Answer: ") + "zagon task accept <id…> / zagon task reject <id…>") }
-        let yes = w.t("Да", "Yes"), no = w.t("Нет", "No"), create = w.t("Создать", "Create"), skip = w.t("Не надо", "Skip")
+        let yes = w.t("Да", "Yes"), no = w.t("Нет", "No"), create = w.t("В Zagon", "To Zagon"), skip = w.t("Не надо", "Skip")
         return Message(title: w.t("Подсказки задач", "Task suggestions"), text: lines.joined(separator: "\n"), buttons: buttons ? r.items.map {
             [.init("\(yes) #\($0.id) \($0.key)", "sg:y:\($0.id):\($0.taskId):\(Int($0.start))"),
              .init("\(no) #\($0.id)", "sg:n:\($0.id):\($0.taskId):\(Int($0.start))")]
