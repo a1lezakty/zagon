@@ -385,11 +385,13 @@ func channelText(_ s: String) -> String {
         defer { try? FileManager.default.removeItem(atPath: h) }
         let home = "/home/u"  // the tree lies in the temporary folder, outside this home
         func p(_ c: String, tmp: String? = nil) -> String { Projects.resolve(c, home: home, tmp: tmp).project }
+        // The folder tempDir() made the tree in: $TMPDIR, which need not be under /tmp (a build box sets its own).
+        let tmp = Sys.dirname(h)
         #expect(p(h + "/pub") == "proj-one" && p(h + "/pub/src") == "proj-one" && p(h + "/pub-wt/x") == "proj-one")
         #expect(p(h + "/ssh") == "proj-two" && p(h + "/plain") == "plain")
         #expect(p(h + "/crlf") == "proj-three" && p(h + "/dotgit") == "proj-four")
         #expect(p("/private/var/tmp/x") == Projects.temp)
-        #expect(p(h + "/scratch/out") == Projects.temp && p(h + "/gone/away") == Projects.temp)
+        #expect(p(h + "/scratch/out", tmp: tmp) == Projects.temp && p(h + "/gone/away", tmp: tmp) == Projects.temp)
         #expect(p("/home/u/.claude/projects/-x") == Projects.temp && p("/var/folders/ab/T/x") == Projects.temp)
         #expect(p("/scratch/t/x", tmp: "/scratch/t/") == Projects.temp && p("/scratch/x", tmp: "/scratch/t") == "x")
         #expect(p("/home/u/notes") == "notes" && p("/tmpx/y") == "y" && Projects.resolve("/home/u", home: home).home)
