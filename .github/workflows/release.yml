@@ -40,6 +40,33 @@ jobs:
           echo "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::version must be x.y.z, got '$v'"; exit 1; }
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
+  # Release notes: the tag's annotation, else the commits since the previous tag (for a manual run: up to HEAD).
+  # Built first: the macOS job puts them into appcast.xml (Sparkle's update alert).
+  notes:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          ref=HEAD
+          case $GITHUB_REF in refs/tags/v*)
+            ref=$GITHUB_REF_NAME
+            git fetch --force origin "refs/tags/$ref:refs/tags/$ref" ;;  # the annotated tag object, not a lightweight copy
+          esac
+          if [ "$(git cat-file -t "$ref")" = tag ]; then
+            { git tag -l --format='%(contents:subject)' "$ref"; echo; git tag -l --format='%(contents:body)' "$ref"; } > notes.md
+          else
+            prev=$(git describe --tags --abbrev=0 --match 'v*' "$ref^" 2>/dev/null || true)
+            git log --no-merges --format='- %s' ${prev:+"$prev.."}"$ref" > notes.md
+          fi
+          cat notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes
+          path: notes.md
+          if-no-files-found: error
+
   linux:
     needs: version
     runs-on: ubuntu-24.04
@@ -85,7 +112,7 @@ jobs:
           if-no-files-found: error
 
   macos:
-    needs: version
+    needs: [version, notes]
     runs-on: macos-15
     timeout-minutes: 60
     env:
@@ -96,14 +123,18 @@ jobs:
         run: |
           sed -i '' "s/^let zagonVersion = \"dev\"$/let zagonVersion = \"$VERSION\"/" Sources/zagon/Version.swift
           grep -qF "\"$VERSION\"" Sources/zagon/Version.swift
-      # Contract with apps/macos: release-mac.sh <version> <build> leaves Zagon.dmg, Zagon.zip (the Sparkle update)
-      # and appcast.xml (signed with SPARKLE_ED_PRIVATE_KEY, enclosure
-      # https://github.com/<repo>/releases/download/v<version>/Zagon.zip) in apps/macos/build/.
+      - uses: actions/download-artifact@v4
+        with:
+          name: notes
+          path: ${{ runner.temp }}/notes
+      # Contract with apps/macos: release-mac.sh <version> <build> [notes.md] leaves Zagon.dmg, Zagon.zip (the Sparkle
+      # update) and appcast.xml (signed with SPARKLE_ED_PRIVATE_KEY, enclosure
+      # https://github.com/<repo>/releases/download/v<version>/Zagon.zip, the notes inside) in apps/macos/build/.
       - name: App, DMG, appcast
         working-directory: apps/macos
         env:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
-        run: scripts/release-mac.sh "$VERSION" "$GITHUB_RUN_NUMBER"
+        run: scripts/release-mac.sh "$VERSION" "$GITHUB_RUN_NUMBER" "$RUNNER_TEMP/notes/notes.md"
       - uses: actions/upload-artifact@v4
         with:
           name: macos
@@ -113,39 +144,47 @@ jobs:
             apps/macos/build/appcast.xml
           if-no-files-found: error
 
+  # Installed copies read releases/latest: zagon update and install.sh take SHA256SUMS and the binary, Zagon.app takes
+  # appcast.xml. So the release is published (not a draft or prerelease) and checked to be `latest` with every file.
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [version, linux, macos]
+    needs: [version, notes, linux, macos]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
       VERSION: ${{ needs.version.outputs.version }}
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
+          name: linux
           path: assets
-          merge-multiple: true
-      - name: SHA256SUMS
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: notes
+      - name: Check the files, SHA256SUMS
         working-directory: assets
         run: |
+          for f in zagon-linux-x86_64 zagon-linux-aarch64 Zagon.dmg Zagon.zip appcast.xml; do
+            [ -s "$f" ] || { echo "::error::$f is missing"; exit 1; }
+          done
+          if ! grep -q 'sparkle:edSignature="' appcast.xml || ! grep -qF "/releases/download/$GITHUB_REF_NAME/Zagon.zip" appcast.xml; then
+            echo "::error::appcast.xml is not signed or points to another release"; exit 1
+          fi
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
-      - name: Release notes (tag annotation, else the commits since the previous tag)
-        run: |
-          tag=$GITHUB_REF_NAME
-          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"  # the annotated tag object, not a lightweight copy
-          if [ "$(git cat-file -t "$tag")" = tag ]; then
-            { git tag -l --format='%(contents:subject)' "$tag"; echo; git tag -l --format='%(contents:body)' "$tag"; } > notes.md
-          else
-            prev=$(git describe --tags --abbrev=0 --match 'v*' "$tag^" 2>/dev/null || true)
-            git log --no-merges --format='- %s' ${prev:+"$prev.."}"$tag" > notes.md
-          fi
-          cat notes.md
       - name: Publish
+        run: gh release create "$GITHUB_REF_NAME" assets/* --title "Zagon $VERSION" --notes-file notes.md --verify-tag --latest
+      - name: Check that releases/latest is this release, with appcast.xml
         run: |
-          gh release create "$GITHUB_REF_NAME" assets/* --title "Zagon $VERSION" --notes-file notes.md --verify-tag
+          gh api "repos/$GH_REPO/releases/latest" | jq -e --arg t "$GITHUB_REF_NAME" '.tag_name == $t and (.draft | not)
+            and (.prerelease | not) and ([.assets[].name] | index("appcast.xml") and index("SHA256SUMS"))' > /dev/null ||
+            { echo "::error::releases/latest is not $GITHUB_REF_NAME with appcast.xml and SHA256SUMS"; exit 1; }
+          curl -fsSL -o /dev/null "https://github.com/$GH_REPO/releases/latest/download/appcast.xml"
+          curl -fsSL "https://github.com/$GH_REPO/releases/latest/download/SHA256SUMS" | grep -q zagon-linux-x86_64

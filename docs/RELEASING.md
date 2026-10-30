@@ -4,9 +4,11 @@ A release is a `v<x.y.z>` tag on `main`. `.github/workflows/release.yml` does th
 
 - writes the version into `Sources/zagon/Version.swift` (`zagon --version`; a local build says `dev`);
 - builds the static Linux binaries `zagon-linux-x86_64` and `zagon-linux-aarch64`;
-- on macOS runs `apps/macos/scripts/release-mac.sh <version> <run number>`, which leaves `Zagon.dmg`, `Zagon.zip`
-  (the update Sparkle downloads, EdDSA-signed) and `appcast.xml` in `apps/macos/build/`;
-- publishes a GitHub Release with all of them plus `SHA256SUMS`.
+- writes the release notes first: the tag's annotation, else the commit subjects since the previous tag;
+- on macOS runs `apps/macos/scripts/release-mac.sh <version> <run number> notes.md`, which leaves `Zagon.dmg`,
+  `Zagon.zip` (the update Sparkle downloads, EdDSA-signed) and `appcast.xml` (with the notes) in `apps/macos/build/`;
+- publishes a GitHub Release (not a draft or prerelease) with all of them plus `SHA256SUMS`, and checks that
+  `releases/latest` is now this release with `appcast.xml`: that is the feed installed apps read.
 
 Installed copies pick it up from there: `zagon update` and `install.sh` read
 `releases/latest/download/SHA256SUMS` and the binary for their CPU; Zagon.app reads
@@ -32,8 +34,9 @@ run; nothing is published.
 ## The Sparkle key
 
 The app ships the public key (`SUPublicEDKey` in `Info.plist`, set by `apps/macos/scripts/build-app.sh`). The private
-key is the repository secret `SPARKLE_ED_PRIVATE_KEY` (base64, as `generate_keys -x` exports it); the maintainer
-keeps a copy outside the repository. `release-mac.sh` refuses to publish an update whose signature does not match
+key is the repository secret `SPARKLE_ED_PRIVATE_KEY` (base64, as `generate_keys -x` exports it). The secret cannot
+be read back, so keep an offline copy of the key: the app's signature is ad-hoc, there is no Apple signature to fall
+back on. `release-mac.sh` refuses to publish an update whose signature does not match
 the public key in the app.
 
 If the private key is lost, installed apps cannot accept updates signed with a new one: ship the new public key in a

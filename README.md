@@ -46,7 +46,7 @@ The macOS app (sample data): the menu bar, then the Day, Week and Calendar windo
 - Everything stays local and there is no telemetry. The only network requests are the notifications you configure
   (Telegram Bot API or ntfy, through `curl`), Jira if you connect it, and updates: `zagon update` goes to GitHub only
   when you run it (the service never checks), and the macOS app checks its update feed on GitHub once a day (turn
-  that off in its settings).
+  that off in Settings → Updates).
 - It reads only local files: Claude Code transcripts (`~/.claude/projects`), Codex session files and its thread index
   (`~/.codex/sessions`, `~/.codex/archived_sessions`, `~/.codex/state_*.sqlite`), plus what its own hooks and status
   line wrapper record.
@@ -229,14 +229,16 @@ Check with `zagon notify test`. The service reads the file when it starts, so re
 Download `Zagon.dmg` from [Releases](https://github.com/a1lezakty/zagon/releases/latest). The app has an ad-hoc
 signature, because there is no paid Apple developer account, so macOS blocks it on first launch:
 
-1. Open the DMG and drag Zagon to Applications.
+1. Open the DMG and drag Zagon to Applications. Run it from there: an app started from the DMG or from Downloads
+   cannot update itself.
 2. Open it once. macOS says it cannot verify the developer.
 3. Go to System Settings → Privacy & Security and click **Open Anyway** next to the Zagon message. On macOS 15 and
    later, right-click → Open no longer bypasses this.
 
 It needs macOS 13 or later. It offers servers from `~/.ssh/config`; each server needs the Linux version installed.
-After that the app updates itself: it checks for a new release once a day and asks before installing (the update is
-signed; turn the check off in its settings).
+After that the app updates itself: it checks GitHub for a new release once a day and asks before installing (the
+update is signed). Turn the check off, or check now, in Settings → Updates. Because the signature is ad-hoc, macOS may
+ask again for permissions tied to it (such as access to a folder) after an update.
 
 ## Build from source
 
