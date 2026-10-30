@@ -56,9 +56,9 @@ main() {
   case :$PATH: in *":$dir:"*) ;; *) echo "Add $dir to PATH to run zagon by name." ;; esac
   # what an upgrade from 0.1.0 starts doing by itself (README: Privacy)
   case $old in 0.0.*|0.1.0)
-    echo "New in 0.1.1: the AI day summary is written at 20:00 also with no notification channel (one cheap-model call a day),"
-    echo "and the evening task suggestions ask the AI every day, also for new tasks. Turn off: zagon summary --at off;"
-    echo "[tasks] evening_suggestions = false in ~/.zagon/config.toml, then restart the service." ;;
+    echo "New in 0.1.1: the AI day summary is written at 20:00 also with no notification channel (one cheap-model call a day);"
+    echo "with a channel, the evening task suggestions also ask the AI for new tasks. Turn off: zagon summary --at off;"
+    echo "[tasks] evening_suggestions = false in ~/.zagon/config.toml, then systemctl --user restart zagon (or its system unit)." ;;
   esac
 }
 main "$@"
