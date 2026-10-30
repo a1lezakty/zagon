@@ -96,7 +96,7 @@ public struct MainVM: Sendable {
                          time: f.duration(f.now.timeIntervalSince(s.since)), command: s.command)
         }
         // A worker driven by another session waits for that session, not for you: listed with the idle ones.
-        func driven(_ s: LiveSession) -> Bool { s.status == .waitingInput && s.driver != nil }
+        func driven(_ s: LiveSession) -> Bool { s.status == .waitingInput && s.drivenBy != nil }
         waiting = sessions.compactMap {
             switch $0.status {
             case .waitingPermission: return row($0, f.t("status.permission"))
@@ -106,7 +106,7 @@ public struct MainVM: Sendable {
         }
         working = sessions.filter { $0.status == .working }.map { row($0, $0.model) }
         idle = sessions.compactMap {
-            if driven($0), let d = $0.driver {
+            if driven($0), let d = $0.drivenBy {
                 return row($0, d.isEmpty ? f.t("status.otherSession") : f.t("status.session", d))
             }
             return $0.status == .idle ? row($0, $0.model) : nil

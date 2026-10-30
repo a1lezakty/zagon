@@ -182,7 +182,7 @@ public final class Notifier {
             SELECT id, tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at FROM session
             WHERE status IN ('waiting_input', 'waiting_permission') AND status_at <= ? AND status_at > ?
               AND last_at >= status_at - 600 AND coalesce(archived, 0) = 0
-              AND NOT (status = 'waiting_input' AND driver IS NOT NULL)  -- waits for the session that drives it, not you
+              AND NOT (status = 'waiting_input' AND \(UserTime.driverSQL("session")) IS NOT NULL)  -- waits for its driver, not you
             """, [.real(now - wait), .real(now - wait - 86400)]) {
             rows.append(SessionRow(id: $0.text(0) ?? "", tool: $0.text(1) ?? "", title: $0.text(2), project: $0.text(3),
                                    status: $0.text(4), statusAt: $0.optReal(5), lastAt: $0.optReal(6)))

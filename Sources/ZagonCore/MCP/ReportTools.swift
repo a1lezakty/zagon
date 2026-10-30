@@ -157,7 +157,7 @@ final class ReportTools {
 
     /// Waiting for the user: a driven worker waiting for input waits for its driver.
     static func waiting(_ s: SessionLine) -> Bool {
-        s.status == "waiting_permission" || (s.status == "waiting_input" && s.driver == nil)
+        s.status == "waiting_permission" || (s.status == "waiting_input" && s.drivenBy == nil)
     }
 
     func sessions(_ a: MCPArgs) throws -> String {
@@ -188,7 +188,7 @@ final class ReportTools {
             parts.append((s.project ?? "?") + (s.gitBranch.map { " (\($0))" } ?? ""))
             if let st = s.status {
                 var label = ["waiting_input": "waiting for input", "waiting_permission": "waiting for permission"][st] ?? st
-                if st == "waiting_input", let d = s.driver { label = d.isEmpty ? "waiting for another session" : "waiting for session \(d)" }
+                if st == "waiting_input", let d = s.drivenBy { label = d.isEmpty ? "waiting for another session" : "waiting for session \(d)" }
                 parts.append(label + (x.statusAt.map { " \(Txt.dur(t - $0))" } ?? ""))
             }
             if let l = s.lastAt { parts.append("last active \(Txt.when(l, now: t))") }

@@ -120,7 +120,7 @@ public enum Projects {
     /// (`dir_project`), else `session.project`. `s` = the name or alias of the `session` table in the query; `host` = the
     /// SQL of the host its directories are looked up under (the query's own when the session has none).
     static func sessionSQL(_ s: String = "s", host: String? = nil) -> String {
-        "coalesce((SELECT d.project FROM dir_project d WHERE d.host = \(host ?? s + ".host") AND d.cwd = \(s).cwd), \(s).project)"
+        "coalesce((SELECT dp.project FROM dir_project dp WHERE dp.host = \(host ?? s + ".host") AND dp.cwd = \(s).cwd), \(s).project)"
     }
 
     static func trimmed(_ p: String) -> String {

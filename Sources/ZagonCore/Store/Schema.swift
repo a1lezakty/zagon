@@ -4,9 +4,10 @@ enum Schema {
 
     /// v6: the session that typed a session's last typed message (`driver`, NULL = the human): a worker driven over
     /// `tmux send-keys` that waits for input waits for that session, not for you. Filled by the next recount of user
-    /// actions (`Ingest.dayRules` 4).
+    /// actions (`Ingest.dayRules` 4); a Mac pulls its servers' sessions again to get theirs.
     static let v6 = """
     ALTER TABLE session ADD COLUMN driver TEXT;
+    DELETE FROM meta WHERE key LIKE 'remote_seq:%';
     """
 
     /// v5: cache writes kept for an hour (`cache_write_1h`, part of `cache_write`: priced 2x input instead of 1.25x);

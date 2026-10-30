@@ -61,7 +61,7 @@ hooks, status line and importers:
 
 Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIATE).
 
-## Tables (schema v5, `Store/Schema.swift`; migrations are append-only)
+## Tables (schema v6, `Store/Schema.swift`; migrations are append-only)
 
 - `source_file` — per-file tail state; `usage_hour`, `tool_use`, `activity`, `user_action`, `fts_doc`, `msg`,
   `relay` carry `file_id`, so one file's contribution can be retracted. `recount` (v5) = 1: count the file again from
@@ -85,10 +85,13 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   of `cwd` in `dir_project` instead, when there is one (`Projects.sessionSQL`).
   `user_msgs` = the human's messages (`msg` not relayed, plus `channel`). `driver` (v6) = the session that typed
   its last typed message (the sender of the relay that made it relayed, see Time rules), NULL = the human; set
-  with `user_msgs`. A session waiting for input with a `driver` waits for that session, not for you: the live list
-  (`LiveSessionInfo.driver`), `sessions` (`SessionLine.driver`, both the driver's title, "" = untitled), the bot and
-  MCP say "waits for session <title>" / "another session", the Mac lists it with the idle ones, and no "waiting for
-  you" notification is sent for it.
+  with `user_msgs`, only from a relay aimed at exactly the session's name, or from any relay when the session has no
+  human messages at all (a looser match would hide a session that waits for you). A session waiting for input whose
+  driver is live (not `ended`, not archived) waits for that session, not for you: the live list
+  (`LiveSessionInfo.drivenBy`) and `sessions` (`SessionLine.drivenBy`, JSON `driven_by`) carry the driver's title,
+  else its project ("" = neither; `UserTime.driverSQL`); the CLI, the bot and MCP say "waits for session <name>",
+  the Mac lists it with the idle ones, and no "waiting for you" notification is sent for it. The v6 migration also
+  drops the Mac's `remote_seq:` cursors, so it pulls its servers' sessions (with their drivers) once again.
 - `activity(kind = working | waiting)`, `user_action(kind = msg | channel | read)`, `user_activity` (derived: your
   time, see Time rules).
 - `relay(file_id, session_id, ts, target)` (v5) — one row per `Relay` target.

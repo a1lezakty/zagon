@@ -150,7 +150,8 @@ public final class Bot {
         try store.db.query("""
             SELECT tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at, \(UserTime.driverSQL("session"))
             FROM session WHERE coalesce(archived, 0) = 0 AND coalesce(status, '') <> 'ended' AND max(coalesce(status_at, 0), coalesce(last_at, 0)) > ?
-            ORDER BY CASE WHEN status LIKE 'waiting%' THEN 0 WHEN status = 'working' THEN 1 ELSE 2 END,
+            ORDER BY CASE WHEN status = 'waiting_permission' OR (status = 'waiting_input' AND \(UserTime.driverSQL("session")) IS NULL)
+                     THEN 0 WHEN status = 'working' THEN 1 ELSE 2 END,
                      max(coalesce(status_at, 0), coalesce(last_at, 0)) DESC LIMIT 12
             """, [.real(now - 86400)]) { r in
             let since = r.optReal(4) ?? r.optReal(5) ?? now

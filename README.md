@@ -134,7 +134,9 @@ proxy: `sudo -E zagon update`, since sudo drops the proxy variables). On macOS t
 inside it included.
 
 The first start of 0.1.0 over an earlier build recounts the whole history once (database schema v5: usage by the
-folder of each request, the 1-hour cache split), which takes as long as the very first scan.
+folder of each request, the 1-hour cache split), which takes as long as the very first scan. 0.1.1 moves the database
+to schema v6 (which session drives a worker) and rebuilds the days once; after that 0.1.0 no longer opens it, so
+update servers and the Mac together and do not roll back to 0.1.0.
 
 ## Use
 

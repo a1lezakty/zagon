@@ -10,7 +10,9 @@ enum UserTime {
     static let relayBefore = 30.0, relayAfter = 5.0
 
     /// Points that make your time (sorted), the number of human messages per session, and the sessions whose last
-    /// typed message another session typed (`drivers`: session → that session), over this host's sessions.
+    /// typed message another session typed (`drivers`: session → that session), over this host's sessions. A driver
+    /// takes a relay aimed at the session's own name, or any relay when the session has no human messages at all: a
+    /// looser match there would hide a session that waits for you.
     static func humanActions(_ db: SQLite, host: String)
         throws -> (points: [Timestamp], messages: [String: Int], drivers: [String: String]) {
         var relays: [(ts: Timestamp, session: String, target: String)] = []
@@ -26,26 +28,29 @@ enum UserTime {
             }
         }
         func same(_ name: String, _ target: String) -> Bool { name.hasPrefix(target) || target.hasPrefix(name) }
-        /// The session that typed `session`'s message at `t`, nil = the human.
-        func relayed(_ session: String, _ t: Timestamp) -> String? {
+        /// The session that typed `session`'s message at `t` (nil = the human); `named`: its relay was aimed at exactly
+        /// `session`'s name.
+        func relayed(_ session: String, _ t: Timestamp) -> (by: String, named: Bool)? {
             var lo = 0, hi = relays.count
             while lo < hi { let m = (lo + hi) / 2; if relays[m].ts < t - relayBefore { lo = m + 1 } else { hi = m } }
             let name = names[session]
+            var loose: String?
             while lo < relays.count, relays[lo].ts <= t + relayAfter {
                 let r = relays[lo]; lo += 1
                 guard r.session != session else { continue }
-                guard !r.target.isEmpty else { return r.session }
-                if let name { if same(name, r.target) { return r.session } else { continue } }
-                if !names.contains(where: { $0.key != session && $0.value == r.target }) { return r.session }
+                if let name, name == r.target { return (r.session, true) }
+                guard !r.target.isEmpty else { loose = loose ?? r.session; continue }
+                if let name { if same(name, r.target) { loose = loose ?? r.session }; continue }
+                if !names.contains(where: { $0.key != session && $0.value == r.target }) { loose = loose ?? r.session }
             }
-            return nil
+            return loose.map { ($0, false) }
         }
         var acts: [(session: String, ts: Timestamp, kind: String)] = []
         try db.query("""
             SELECT a.session_id, a.ts, a.kind FROM user_action a LEFT JOIN session s ON s.id = a.session_id
             WHERE coalesce(s.host, ?1) = ?1 ORDER BY a.session_id, a.ts
             """, [.text(host)]) { acts.append(($0.text(0) ?? "", $0.real(1), $0.text(2) ?? "")) }
-        var points: [Timestamp] = [], messages: [String: Int] = [:], drivers: [String: String] = [:]
+        var points: [Timestamp] = [], messages: [String: Int] = [:], drivers: [String: (by: String, named: Bool)] = [:]
         var session = "", nextRelayed = false  // walking back: whether the session's next action was relayed
         var last = true  // walking back: no typed message of the session seen yet
         for a in acts.reversed() {
@@ -66,13 +71,18 @@ enum UserTime {
                 points.append(a.ts)
             }
         }
-        return (points.sorted(), messages, drivers)
+        return (points.sorted(), messages,
+                drivers.filter { $0.value.named || messages[$0.key, default: 0] == 0 }.mapValues(\.by))
     }
 
-    /// SQL for the title of the session that typed the last typed message of session `s` (`session.driver`): NULL = the
-    /// human, '' = a session without a title.
+    /// SQL for the name of the session that typed the last typed message of session `s` (`session.driver`): its title,
+    /// else its project, '' = neither. NULL = the human, also when that session has ended or is archived (no one else
+    /// will answer).
     static func driverSQL(_ s: String = "s") -> String {
-        "CASE WHEN \(s).driver IS NULL THEN NULL ELSE coalesce((SELECT d.title FROM session d WHERE d.id = \(s).driver), '') END"
+        """
+        (SELECT coalesce(d.title, \(Projects.sessionSQL("d")), '') FROM session d
+         WHERE d.id = \(s).driver AND coalesce(d.status, '') <> 'ended' AND coalesce(d.archived, 0) = 0)
+        """
     }
 
     /// Lower-case letters and digits: `LB-web` and `lbweb` are one name.

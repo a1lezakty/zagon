@@ -84,7 +84,7 @@ enum Fmt {
             let id = s.id.split(separator: ":").last.map { String($0.prefix(8)) } ?? s.id
             let title = s.title ?? s.project ?? "-"
             var state = (s.status.map { "  \($0)" } ?? "") + (s.statusDetail.map { " (\($0))" } ?? "")
-            if s.status == "waiting_input", let d = s.driver {  // driven over tmux: waits for that session, not you
+            if s.status == "waiting_input", let d = s.drivenBy {  // driven over tmux: waits for that session, not you
                 state += " (waits for " + (d.isEmpty ? "another session" : "session " + d) + ")"
             }
             print("  \(id)  \(pad(title, 40)) \(pad(s.project ?? "", 16)) \(lpad(tokens(s.tokens.total), 7)) \(lpad(dur(s.workingSec), 8))"

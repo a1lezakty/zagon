@@ -89,8 +89,8 @@ public struct LiveSessionInfo: Sendable, Equatable {
     public var model: String?
     public var state: LiveState
     /// Another session typed its last typed message (a worker driven over `tmux send-keys`): waiting for input, it waits
-    /// for that session, not for you. Its title, "" = untitled; nil = the human typed it.
-    public var driver: String?
+    /// for that session, not for you. Its title or project ("" = neither); nil = the human (`UserTime.driverSQL`).
+    public var drivenBy: String?
     /// When the current state began.
     public var since: Timestamp
     public var lastAt: Timestamp?
@@ -134,7 +134,7 @@ extension Query {
                 break
             }
             out.append(LiveSessionInfo(id: r.text(0) ?? "", tool: r.text(1) ?? "", title: r.text(2), project: r.text(3),
-                                       cwd: r.text(4), host: r.text(5), model: r.text(6), state: state, driver: r.text(11),
+                                       cwd: r.text(4), host: r.text(5), model: r.text(6), state: state, drivenBy: r.text(11),
                                        since: since, lastAt: lastAt))
         }
         return out.sorted { $0.since < $1.since }
