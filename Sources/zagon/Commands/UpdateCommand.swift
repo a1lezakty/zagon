@@ -40,6 +40,7 @@ struct UpdateCommand: ParsableCommand {
         if check { print("zagon \(zagonVersion): the release differs from this binary; `zagon update` installs it"); return }
 
         guard access(dir, W_OK) == 0, access(exe, W_OK) == 0 else {
+            if errno == EROFS { throw InstallError("\(dir) is read-only: install zagon somewhere writable (install.sh)") }
             throw InstallError("cannot write \(exe): run sudo zagon update (or reinstall to ~/.local/bin)")
         }
         // Same directory as the binary, so the final rename is atomic.
@@ -68,7 +69,9 @@ struct UpdateCommand: ParsableCommand {
         print("zagon \(zagonVersion) -> \(new) (\(exe); the old one is \(Sys.basename(prev)))")
         Self.restartServices(exe)
         #else
-        print("On macOS Zagon.app updates itself (and the zagon inside it); check in its settings.")
+        print(Sys.executablePath().contains(".app/Contents/")
+              ? "Zagon.app updates itself (and the zagon inside it); see its settings."
+              : "On macOS releases ship as Zagon.app; this zagon is built from source: git pull && swift build -c release")
         #endif
     }
 

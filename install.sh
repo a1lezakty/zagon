@@ -30,6 +30,7 @@ main() {
   # same directory as the binary, so the final mv is atomic
   tmp=$(mktemp "$dir/.zagon-install.XXXXXX")
   trap 'rm -f "$tmp"' EXIT
+  trap 'exit 130' INT TERM
 
   want=$(curl -fsSL "$url/SHA256SUMS" | awk -v a="$asset" '$2 == a || $2 == "*" a { print $1 }')
   [ -n "$want" ] || { echo "zagon: cannot read $url/SHA256SUMS, or $asset is not listed there" >&2; exit 1; }
@@ -42,6 +43,14 @@ main() {
   echo "Installed $dir/zagon $("$dir/zagon" --version)"
 
   "$dir/zagon" install "$@"
+  # a service already running (an upgrade over an older install) picks up the new binary or unit file
+  if command -v systemctl >/dev/null 2>&1; then
+    if [ "$(id -u)" = 0 ]; then
+      systemctl daemon-reload 2>/dev/null && systemctl try-restart 'zagon-*.service' 2>/dev/null || true
+    else
+      systemctl --user daemon-reload 2>/dev/null && systemctl --user try-restart zagon.service 2>/dev/null || true
+    fi
+  fi
   case :$PATH: in *":$dir:"*) ;; *) echo "Add $dir to PATH to run zagon by name." ;; esac
 }
 main "$@"
