@@ -140,8 +140,8 @@ enum Snapshots {
         p.staleLimits = true
         let stale = AppState(provider: p, lang: lang, homeBack: 1)
         stale.cli = AppState.mock(lang).cli
-        let a = write(MainPanel().environmentObject(empty), width: 400, "main-empty-\\(lang.rawValue)", dir)
-        let b = write(MainPanel().environmentObject(stale), width: 400, "main-stale-\\(lang.rawValue)", dir)
+        let a = write(MainPanel().environmentObject(empty), width: 400, "main-empty-\(lang.rawValue)", dir)
+        let b = write(MainPanel().environmentObject(stale), width: 400, "main-stale-\(lang.rawValue)", dir)
         return a && b
     }
 
