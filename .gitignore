@@ -1,0 +1,21 @@
+# build
+.build/
+.build-*/
+.swiftpm/
+Package.resolved.orig
+# local data: databases, transcripts, scratch
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+/data/
+/local/
+/tmp/
+*.jsonl.raw
+# never commit spike copies or real transcripts
+spike/
+_codex_copy/
+fixtures-raw/
+# dev markers
+.skeleton-ready
+.DS_Store

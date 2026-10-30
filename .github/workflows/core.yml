@@ -1,0 +1,138 @@
+name: core
+
+# Work branches run by hand (workflow_dispatch): a push there starts no CI.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# a push and the pull request of the same branch share one group
+concurrency:
+  group: core-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  # same SDK as scripts/dev.sh
+  SDK_URL: https://download.swift.org/swift-6.4.1-release/static-sdk/swift-6.4.1-RELEASE/swift-6.4.1-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz
+  SDK_SUM: cef5592d7430ed3c5ae1ddda479849c6f5252bd94a5723db1559f984caf38a7c
+  SDKS: .build-sdks
+  MAX_STATIC_BYTES: 20000000
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    container: swift:6.4.1-bookworm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      # the Jira and Telegram/ntfy tests talk to local mocks; without these tools they are skipped
+      - name: python3 and curl for the mock servers
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 curl
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test --parallel
+
+  static:
+    runs-on: ubuntu-24.04
+    container: swift:6.4.1-bookworm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Static Linux SDK (cached)
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SDKS }}
+          key: static-linux-sdk-${{ env.SDK_SUM }}
+      - name: Install the SDK
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: swift sdk install "$SDK_URL" --checksum "$SDK_SUM" --swift-sdks-path "$SDKS"
+      - name: Build static (x86_64, aarch64)
+        run: |
+          mkdir -p dist
+          for arch in x86_64 aarch64; do
+            set -- -c release --swift-sdks-path "$SDKS" --swift-sdk "$arch-swift-linux-musl"
+            swift build "$@" -Xlinker -s --product zagon
+            cp "$(swift build "$@" --show-bin-path)/zagon" "dist/zagon-linux-$arch"
+          done
+      - name: Size guard
+        run: |
+          for f in dist/zagon-linux-*; do
+            size=$(stat -c %s "$f")
+            echo "$f: $size bytes (limit $MAX_STATIC_BYTES)"
+            [ "$size" -le "$MAX_STATIC_BYTES" ] || { echo "::error::$f is over the limit (Foundation imported?)"; exit 1; }
+          done
+      - name: Smoke (x86_64)
+        run: |
+          z=dist/zagon-linux-x86_64 d=$RUNNER_TEMP/zagon fx=Tests/ZagonCoreTests/Fixtures
+          $z --help
+          $z scan --json --data-dir "$d" --claude-dir "$fx/claude" --codex-dir "$fx/codex/home" | tee scan.json
+          grep -q '"usage_records":[1-9]' scan.json
+          $z sessions --no-scan --data-dir "$d"
+          $z doctor --help > /dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zagon-linux-x86_64
+          path: dist/zagon-linux-x86_64
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zagon-linux-aarch64
+          path: dist/zagon-linux-aarch64
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - name: Test
+        run: swift test --parallel
+      - name: Build arm64 and x86_64, lipo
+        run: |
+          mkdir -p dist
+          for arch in arm64 x86_64; do
+            set -- -c release --triple "$arch-apple-macosx13.0"
+            swift build "$@" --product zagon
+            cp "$(swift build "$@" --show-bin-path)/zagon" "dist/zagon-$arch"
+          done
+          lipo -create dist/zagon-arm64 dist/zagon-x86_64 -output dist/zagon-macos-universal
+          strip -x dist/zagon-macos-universal
+          lipo -info dist/zagon-macos-universal
+          otool -L dist/zagon-arm64
+          ls -l dist
+      - name: Smoke
+        run: |
+          z=$PWD/dist/zagon-macos-universal fx=$PWD/Tests/ZagonCoreTests/Fixtures
+          h=$RUNNER_TEMP/home d=$RUNNER_TEMP/zagon
+          mkdir -p "$h/.claude" "$d"
+          $z --help > /dev/null
+          $z scan --json --data-dir "$d" --claude-dir "$fx/claude" --codex-dir "$fx/codex/home" | tee scan.json
+          grep -q '"usage_records":[1-9]' scan.json
+          { $z daemon 2>&1 || true; } | grep -q "Zagon.app" || { echo "::error::daemon message"; exit 1; }
+          # hook: recorded normally, silent and unrecorded under ZAGON_INTERNAL
+          export HOME="$h" ZAGON_DIR="$d"
+          echo '{"session_id":"s1","cwd":"/x"}' | ZAGON_INTERNAL=1 $z hook claude Stop
+          [ -z "$(ls "$d/spool" 2>/dev/null)" ] || { echo "::error::internal hook wrote the spool"; exit 1; }
+          echo '{"session_id":"s1","cwd":"/x"}' | $z hook claude Stop
+          [ -n "$(ls "$d/spool")" ] || { echo "::error::hook wrote nothing"; exit 1; }
+          # install -> doctor -> uninstall leaves settings.json byte for byte
+          printf '{\n  "model": "sonnet"\n}\n' > "$h/.claude/settings.json"
+          cp "$h/.claude/settings.json" "$RUNNER_TEMP/settings.before"
+          $z install --bin "$z" --no-mcp --no-codex
+          grep -q "$z" "$h/.claude/settings.json"
+          $z doctor --bin "$z" --no-mcp --no-codex
+          $z uninstall --no-mcp --no-codex
+          cmp "$h/.claude/settings.json" "$RUNNER_TEMP/settings.before"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zagon-macos-universal
+          path: dist/zagon-macos-universal
+          if-no-files-found: error

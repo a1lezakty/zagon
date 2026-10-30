@@ -1,0 +1,33 @@
+name: linux-ui
+
+# Work branches run by hand (workflow_dispatch): a push there starts no CI.
+on:
+  push:
+    branches: [main]
+    paths: ['apps/macos/**', 'Sources/**', 'Package.swift', 'Tests/ZagonCoreTests/Fixtures/scenario/**', '.github/workflows/linux-ui.yml']
+  pull_request:
+    paths: ['apps/macos/**', 'Sources/**', 'Package.swift', 'Tests/ZagonCoreTests/Fixtures/scenario/**', '.github/workflows/linux-ui.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# a push and the pull request of the same branch share one group
+concurrency:
+  group: linux-ui-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  ui-model:
+    runs-on: ubuntu-24.04
+    container: swift:6.4.1-bookworm
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/macos
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test

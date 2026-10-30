@@ -1,0 +1,262 @@
+import Foundation
+import ZagonCore
+
+/// Tasks and the worklog plan where they live: the `zagon` of this Mac (inside Zagon.app) or of a server over ssh,
+/// asked with `--json`. Edits go through the same CLI; the plan goes to Jira only by `commit`, and only while it is
+/// still the plan that was shown.
+public struct TaskBackend: Sendable {
+    public enum Source: Hashable, Sendable {
+        case local, server(String)
+        /// As kept in settings: "" = this Mac, else the ssh alias.
+        public var saved: String { if case .server(let h) = self { return h } else { return "" } }
+        public init(saved: String) { self = saved.isEmpty ? .local : .server(saved) }
+    }
+    public let source: Source
+    /// `zagon <args>` with a time limit; nil = no answer in time.
+    let run: @Sendable (_ args: [String], _ timeout: Double) throws -> Proc.Result?
+
+    public init(source: Source, run: @escaping @Sendable (_ args: [String], _ timeout: Double) throws -> Proc.Result?) {
+        self.source = source; self.run = run
+    }
+
+    /// The CLI inside Zagon.app with the login shell's PATH (git, for links by branch).
+    public static func local(cli: String, path: String) -> TaskBackend {
+        TaskBackend(source: .local) { try Proc.run(cli, $0, env: ["PATH": path], timeout: $1) }
+    }
+
+    public static func server(_ host: String, controlDir: String = Remote.controlDir(), ssh: String = "/usr/bin/ssh") -> TaskBackend {
+        TaskBackend(source: .server(host)) {
+            try Proc.run(ssh, Remote.sshArguments(host: host, zagon: $0, controlDir: controlDir), timeout: $1)
+        }
+    }
+
+    public struct Failure: Error, Sendable, CustomStringConvertible {
+        public var description: String
+    }
+
+    /// stdout, and the `jira: …` warning from stderr; a failure as one short line without home folders.
+    func call(_ args: [String], timeout: Double = 120) throws -> (out: Data, jira: String?) {
+        guard let r = try run(args, timeout) else { throw Failure(description: "no answer in \(Int(timeout)) s") }
+        guard r.status == 0 else { throw failure(r) }
+        let err = String(decoding: r.err, as: UTF8.self).split(separator: "\n").map(String.init)
+        return (r.out, err.last { $0.hasPrefix("jira: ") }.map { Remote.scrubHomes(String($0.dropFirst(6))) })
+    }
+
+    func decode<T: Decodable>(_ args: [String]) throws -> (T, jira: String?) {
+        let (out, jira) = try call(args)
+        // A login banner may come first: the JSON is the last line.
+        return (try Self.parse(out.split(separator: UInt8(ascii: "\n")).last.map { Data($0) } ?? out, args), jira)
+    }
+
+    static func parse<T: Decodable>(_ line: Data, _ args: [String]) throws -> T {
+        let d = JSONDecoder()
+        d.keyDecodingStrategy = .convertFromSnakeCase
+        guard let v = try? d.decode(T.self, from: line) else {
+            throw Failure(description: "zagon answered \(args.prefix(2).joined(separator: " ")) in a form this app does not read (another version?)")
+        }
+        return v
+    }
+
+    struct Digest: Decodable { var commitDigest: String? }
+
+    public func list() throws -> [TaskListLine] { try decode(["task", "list", "--json"]).0 }
+    /// `scan: false` right after an edit: nothing new to read, and the answer comes sooner.
+    public func card(_ key: String, scan: Bool = true) throws -> TaskCard {
+        try decode(["task", "show", "--json"] + (scan ? [] : ["--no-scan"]) + ["--", key]).0
+    }
+    public func plan(_ day: String) throws -> WorklogPlan {
+        let args = ["log", "plan", "--json", "--", day]
+        let (out, jira) = try call(args)
+        var line = out.split(separator: UInt8(ascii: "\n")).last.map { Data($0) } ?? out
+        // `commit_digest` came with `log commit --expect`; a zagon from before sends none, and `DayPlan` may require it.
+        let digest = (try? Self.parse(line, args) as Digest)?.commitDigest.flatMap { $0.isEmpty ? nil : $0 }
+        if digest == nil, line.first == UInt8(ascii: "{") { line = Data("{\"commit_digest\":\"\",".utf8) + line.dropFirst() }
+        return WorklogPlan(plan: try Self.parse(line, args), jiraError: jira, digest: digest)
+    }
+
+    // `--` keeps a text that starts with "-" from being read as an option.
+    public func addTodo(_ key: String, _ text: String) throws { _ = try call(["task", "todo", "--", key, text]) }
+    /// `number` is 1-based in creation order (the card's order).
+    public func checkTodo(_ key: String, number: Int, done: Bool) throws {
+        _ = try call(["task", "todo", done ? "--check" : "--uncheck", String(number), "--", key])
+    }
+    public func addNote(_ key: String, _ text: String) throws { _ = try call(["task", "note", "--", key, text]) }
+    public func setStatus(_ key: String, _ state: TaskState) throws {
+        let s: TaskStatus = state == .done ? .done : state == .planned ? .planned : .inProgress
+        _ = try call(["task", "status", "--", key, s.rawValue])
+    }
+
+    public enum Commit: Sendable {
+        /// What the CLI reported; `problems` are its "not logged …" lines.
+        case written(logged: Int, failed: Int, problems: [String])
+        /// The plan is no longer the one shown: nothing was written, this is the new one.
+        case changed(WorklogPlan)
+        case nothing
+    }
+
+    /// Writes the day's planned rows to Jira if the plan is still `shown` (`log commit` plans the day again itself and
+    /// writes what it planned).
+    /// A plan made while Jira failed did not keep clear of the worklogs already there: such a plan is never written.
+    public func commit(_ day: String, shown: WorklogPlan) throws -> Commit {
+        if let e = shown.jiraError { throw Failure(description: "the plan was made without Jira (\(e)): reload it") }
+        if let digest = shown.digest {
+            // The CLI plans the day again and writes only if that is the plan shown (exit 3 otherwise).
+            guard shown.plan.jiraSec != nil else { throw Failure(description: "Jira is not connected there ([jira] in config.toml)") }
+            guard !Self.toJira(shown.plan).isEmpty else { return .nothing }
+            guard let r = try run(["log", "commit", "--yes", "--no-scan", "--expect", digest, "--", day], 300) else {
+                throw Failure(description: "no answer in 300 s: part may be written, reload the plan")
+            }
+            if r.status == 3 { return .changed(try plan(day)) }
+            return try written(r)
+        }
+        // A zagon from before `--expect`: the check is made here, a moment before the CLI's own plan.
+        let fresh = try plan(day)
+        if let e = fresh.jiraError { throw Failure(description: "Jira does not answer: \(e)") }
+        guard fresh.plan.jiraSec != nil else { throw Failure(description: "Jira is not connected there ([jira] in config.toml)") }
+        guard Self.toJira(fresh.plan) == Self.toJira(shown.plan) else { return .changed(fresh) }
+        guard !Self.toJira(fresh.plan).isEmpty else { return .nothing }
+        // ponytail: here the CLI plans the day once more and writes that; the check above is a moment earlier (no
+        // rescan in between). Gone with servers on a zagon that has `--expect`.
+        guard let r = try run(["log", "commit", "--yes", "--no-scan", "--", day], 300) else {
+            throw Failure(description: "no answer in 300 s: part may be written, reload the plan")
+        }
+        return try written(r)
+    }
+
+    /// What `log commit` reported.
+    func written(_ r: Proc.Result) throws -> Commit {
+        let lines = String(decoding: r.out, as: UTF8.self).split(separator: "\n").map(String.init)
+        // Exit 1 with the summary line = some rows failed; anything else is a failure before writing.
+        guard let m = lines.last?.wholeMatch(of: /(\d+) worklogs logged(?:, (\d+) not logged)?/) else { throw failure(r) }
+        return .written(logged: Int(m.1) ?? 0, failed: m.2.flatMap { Int($0) } ?? 0,
+                        problems: lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.hasPrefix("not logged") }
+                            .map(Remote.scrubHomes))
+    }
+
+    func failure(_ r: Proc.Result) -> Failure {
+        // ArgumentParser prints the reason first and the usage after it.
+        let err = String(decoding: r.err, as: UTF8.self).split(separator: "\n").map(String.init)
+        let why = err.first { $0.hasPrefix("Error: ") }.map { String($0.dropFirst(7)) } ?? err.last ?? "exit \(r.status)"
+        // A zagon from before `task` / `--json` does not know the words.
+        if ["Unexpected argument", "Unknown option"].contains(where: why.contains) {
+            return Failure(description: "zagon there is older than this app, update it (\(Remote.scrubHomes(why)))")
+        }
+        return Failure(description: Remote.scrubHomes(why))
+    }
+
+    /// The rows `log commit` would write, as compared.
+    static func toJira(_ p: DayPlan) -> [String] {
+        p.rows.filter { $0.state == "planned" && $0.jiraKey != nil }
+            .map { "\($0.jiraKey ?? "")|\($0.start)|\($0.end)|\($0.seconds)|\($0.text)" }
+    }
+
+    public static func day(_ d: Date, _ zone: TimeZone = .autoupdatingCurrent) -> String { StoreDataProvider.day(d, zone) }
+}
+
+/// A day's plan, and why Jira was left out of it (nil: fine or not connected).
+public struct WorklogPlan: Sendable {
+    public var plan: DayPlan
+    public var jiraError: String?
+    /// The plan's `commit_digest`: `log commit --expect` writes only this plan (nil: a zagon from before it).
+    public var digest: String?
+    public func worklog(_ f: Fmt) -> WorklogData { TaskBackend.worklog(plan, jiraError: jiraError, f) }
+}
+
+/// What the task screens got from one source; an error is one grey line, the data stays.
+public struct TaskCache: Sendable {
+    public var list: [TaskItem]?
+    /// Full cards by key (time over the whole history), loaded when a task is opened.
+    public var cards: [String: TaskItem] = [:]
+    public var plans: [String: WorklogPlan] = [:]
+    public var loading = 0
+    public var error: String?
+    /// The last commit's outcome.
+    public var message: String?
+    public init() {}
+}
+
+// MARK: - what the screens show
+
+extension TaskBackend {
+    static func state(_ s: TaskStatus) -> TaskState {
+        switch s { case .planned: .planned; case .inProgress: .active; case .done: .done }
+    }
+
+    /// A list line: time over the last 7 days.
+    public static func item(_ l: TaskListLine) -> TaskItem {
+        TaskItem(key: l.task.key, title: l.task.title, description: l.task.description ?? "", state: state(l.task.status),
+                 userSec: l.weekSec, sessionSec: l.weekSessionSec, sessionCount: l.sessions, jiraKey: l.task.jiraKey)
+    }
+
+    /// A card: time over the task's whole history; `sessions` as this Mac knows them; days shown in `zone`.
+    public static func item(_ c: TaskCard, sessions: [TaskSession], zone: TimeZone = .autoupdatingCurrent) -> TaskItem {
+        let t = c.task
+        var days: [String] = [], done: [(day: Date, text: String)] = []
+        for d in c.done where !days.contains(d.day) {  // newest first, the manual text before the auto one
+            days.append(d.day)
+            done.append((StoreDataProvider.start(d.day, zone), d.text))
+        }
+        return TaskItem(
+            key: t.key, title: t.title, description: t.description ?? "", state: state(t.status),
+            jira: c.jira.map { JiraInfo(status: $0.status, statusMatches: $0.statusCategory == t.status.jiraCategory,
+                                        loggedSec: c.jiraLoggedSec ?? 0) },
+            userSec: c.time.userSec, sessionSec: c.time.sessionSec, tokens: c.time.tokens.total,
+            // Claude's and Codex's weekly limits are different limits: the larger share, not a sum.
+            weekPct: c.time.weekPct.values.max() ?? 0,
+            todo: c.todos.map { TodoItem($0.text, done: $0.done) }, doneByDay: done, sessions: sessions,
+            sessionCount: c.sessions.count, notes: c.notes.map(\.text), jiraKey: t.jiraKey, jiraError: c.jiraError.map(Remote.scrubHomes))
+    }
+
+    /// The plan as the worklog screen shows it; skipped rows are left out, rows being written count as in Jira.
+    public static func worklog(_ p: DayPlan, jiraError: String?, _ f: Fmt) -> WorklogData {
+        let rows = p.rows.filter { $0.state != "skipped" }.map { r in
+            // The Jira issue the row goes to, when it is not the task's own key.
+            let key = r.taskKey.map { t in r.jiraKey.map { $0 == t ? t : t + " → " + $0 } ?? t } ?? r.jiraKey ?? "—"
+            return WorklogRow(key: key, start: StoreDataProvider.date(r.start), end: StoreDataProvider.date(r.end), text: r.text,
+                              destination: r.state == "logged" || r.state == "writing" ? .alreadyLogged : r.jiraKey != nil ? .jira : .zagonOnly)
+        }
+        var notes = p.rows.filter { $0.state == "writing" }.map { f.t("worklog.writing", $0.jiraKey ?? "—", f.timeSpan(
+            StoreDataProvider.date($0.start), StoreDataProvider.date($0.end))) }
+        if p.unassignedSec >= 60 { notes.append(f.t("worklog.noTask", f.duration(p.unassignedSec))) }
+        if !p.unknownKeys.isEmpty { notes.append(f.t("worklog.unknownKeys", p.unknownKeys.joined(separator: ", "))) }
+        notes += p.unplaced.sorted { $0.key < $1.key }.map { f.t("worklog.unplaced", $0.key, f.duration(Double($0.value))) }
+        notes += p.notes.map(Remote.scrubHomes)
+        let blocked = jiraError.map { f.t("worklog.jiraFailed", Remote.scrubHomes($0)) } ?? (p.jiraSec == nil ? f.t("worklog.jiraOff") : nil)
+        // The plan has no work stretches of its own: no "from–to" under your time.
+        return WorklogData(day: StoreDataProvider.start(p.day, f.calendar.timeZone), workStart: nil, workEnd: nil,
+                           userSec: p.userSec, sessionSec: p.sessionSec, rows: rows, splits: [], notes: notes,
+                           jiraSec: p.jiraSec, jiraBlocked: blocked)
+    }
+}
+
+// MARK: - the same answers from a store in this process
+
+extension TaskBackend {
+    /// What the CLI answers to `task list`, `task show` and `log plan` (without Jira), from a store here: the samples
+    /// and tests go through the same JSON as a real CLI.
+    public static func inProcess(_ store: Store, queue: DispatchQueue, now: Date) -> TaskBackend {
+        nonisolated(unsafe) let store = store
+        return TaskBackend(source: .local) { args, _ in
+            try queue.sync {
+                let e = JSONEncoder()
+                e.keyEncodingStrategy = .convertToSnakeCase
+                e.outputFormatting = [.sortedKeys]
+                let linker = try TaskLinker()
+                try linker.linkSessions(store)
+                let tasks = Tasks(store: store), ts = now.timeIntervalSince1970
+                let words = args.filter { $0 != "--json" && $0 != "--" }
+                let out: Data
+                switch (words.first, words.dropFirst().first, words.dropFirst(2).first) {
+                case ("task", "list", nil): out = try e.encode(try tasks.overview(now: ts))
+                case ("task", "show", let k?):
+                    guard let t = try tasks.find(k) else { return Proc.Result(status: 64, out: Data(), err: Data("Error: no task \(k)\n".utf8)) }
+                    out = try e.encode(try tasks.card(t, now: ts))
+                case ("log", "plan", let d?):
+                    out = try e.encode(try DayWorklog(store: store, linker: linker, jira: nil).plan(d).plan)
+                default: return Proc.Result(status: 64, out: Data(), err: Data("Error: not here: \(words.joined(separator: " "))\n".utf8))
+                }
+                return Proc.Result(status: 0, out: out, err: Data())
+            }
+        }
+    }
+}

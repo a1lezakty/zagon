@@ -1,0 +1,120 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
+import Foundation
+#endif
+
+/// `zagon export --since <seq>`: NDJSON of the totals changed after `seq`, for the Mac app over SSH.
+/// Lines (keys in snake_case):
+/// - `{"type":"export","schema","since","seq"}` first; pass `seq` as the next `--since`;
+/// - `{"type":"session",…}` per session changed after `since` (all `session` columns), each followed by
+///   `{"type":"activity","session_id","kind","start","end"}` lines: the session's complete working / waiting
+///   intervals (merged per kind), which replace what the client had for that session;
+/// - `{"type":"day","day","host","seq","start","end","rows":[…],"usage":[…],"tools":[…],"user":[…]}` per local day
+///   with a change: the complete `day_agg` rows of that day and host, the `usage_hour` and `tool_use` rows of the day
+///   (summed over files) and your-time intervals clipped to the day; together they replace what the client had for
+///   that day (rows that vanished are gone). `ExportImport` is the reference client;
+/// - `{"type":"limit",…}` the latest reading per (tool, window), every time (a handful of rows).
+public enum Export {
+    struct Header: Encodable { var type = "export"; var schema: Int; var since: Int; var seq: Int }
+    struct SessionLine: Encodable {
+        var type = "session"
+        var id: String, tool: String, host: String?, project: String?, cwd: String?, gitBranch: String?, title: String?
+        var model: String?, startedAt: Double?, lastAt: Double?, status: String?, statusAt: Double?, statusDetail: String?
+        var userMsgs: Int
+        var archived: Bool?, seq: Int
+    }
+    struct DayRow: Encodable {
+        var tool: String, project: String, model: String
+        var input: Int, output: Int, cacheRead: Int, cacheWrite: Int, requests: Int, toolCalls: Int
+        var sessionSec: Double, userSec: Double
+    }
+    struct UsageRow: Encodable {
+        var sessionId: String, agent: String, hour: Int, model: String
+        var input: Int, output: Int, cacheRead: Int, cacheWrite: Int, requests: Int, toolCalls: Int
+    }
+    struct ToolRow: Encodable { var sessionId: String, hour: Int, name: String, n: Int }
+    struct Span: Encodable { var start: Double, end: Double }
+    struct DayLine: Encodable {
+        var type = "day"; var day: String; var host: String; var seq: Int; var start: Double; var end: Double
+        var rows: [DayRow]; var usage: [UsageRow]; var tools: [ToolRow]; var user: [Span]
+    }
+    struct ActivityLine: Encodable { var type = "activity"; var sessionId: String, kind: String, start: Double, end: Double }
+    struct LimitLine: Encodable {
+        var type = "limit"
+        var tool: String, window: String, usedPct: Double, resetsAt: Double?, windowMinutes: Int?, ts: Double
+    }
+
+    /// Writes the lines through `write`; reads one consistent snapshot of the database.
+    public static func run(store: Store, since: Int, write: (String) -> Void) throws {
+        let db = store.db
+        let e = JSONEncoder()
+        e.keyEncodingStrategy = .convertToSnakeCase
+        e.outputFormatting = [.sortedKeys]
+        func out<T: Encodable>(_ v: T) throws { write(String(decoding: try e.encode(v), as: UTF8.self)) }
+
+        try db.exec("BEGIN")  // deferred: a read snapshot, writers are not blocked
+        defer { try? db.exec("COMMIT") }
+        let seq = try db.one("SELECT value FROM meta WHERE key='seq'") { $0.int(0) } ?? 0
+        try out(Header(schema: Store.schemaVersion, since: since, seq: seq))
+
+        var sessions: [SessionLine] = []
+        try db.query("""
+            SELECT id, tool, host, project, cwd, git_branch, title, model, started_at, last_at, status, status_at, user_msgs,
+                   archived, seq, status_detail FROM session WHERE seq > ? ORDER BY seq
+            """, [.int(Int64(since))]) { r in
+            sessions.append(SessionLine(id: r.text(0) ?? "", tool: r.text(1) ?? "", host: r.text(2), project: r.text(3),
+                                        cwd: r.text(4), gitBranch: r.text(5), title: r.text(6), model: r.text(7),
+                                        startedAt: r.optReal(8), lastAt: r.optReal(9), status: r.text(10),
+                                        statusAt: r.optReal(11), statusDetail: r.text(15), userMsgs: r.int(12),
+                                        archived: r.optInt(13).map { $0 != 0 },
+                                        seq: r.int(14)))
+        }
+        for s in sessions {
+            try out(s)
+            var byKind: [String: [Interval]] = [:]
+            try db.query("SELECT kind, start, \"end\" FROM activity WHERE session_id = ? AND kind IN ('working', 'waiting')",
+                         [.text(s.id)]) { byKind[$0.text(0) ?? "", default: []].append(Interval($0.real(1), $0.real(2))) }
+            for (kind, xs) in byKind.sorted(by: { $0.key < $1.key }) {
+                for iv in Intervals.merge(xs) { try out(ActivityLine(sessionId: s.id, kind: kind, start: iv.start, end: iv.end)) }
+            }
+        }
+
+        var days: [(String, String, Int)] = []
+        try db.query("SELECT day, host, max(seq) FROM day_agg GROUP BY day, host HAVING max(seq) > ? ORDER BY day, host",
+                     [.int(Int64(since))]) { days.append(($0.text(0) ?? "", $0.text(1) ?? "", $0.int(2))) }
+        for (day, host, dseq) in days {
+            var rows: [DayRow] = []
+            try db.query("""
+                SELECT tool, project, model, input, output, cache_read, cache_write, requests, tool_calls, session_sec, user_sec
+                FROM day_agg WHERE day = ? AND host = ? ORDER BY tool, project, model
+                """, [.text(day), .text(host)]) { r in
+                rows.append(DayRow(tool: r.text(0) ?? "", project: r.text(1) ?? "", model: r.text(2) ?? "", input: r.int(3),
+                                   output: r.int(4), cacheRead: r.int(5), cacheWrite: r.int(6), requests: r.int(7),
+                                   toolCalls: r.int(8), sessionSec: r.real(9), userSec: r.real(10)))
+            }
+            guard let (start, end) = Time.dayBounds(day) else { continue }
+            var usage: [UsageRow] = [], tools: [ToolRow] = [], user: [Span] = []
+            try db.query("""
+                SELECT session_id, agent, hour, model, sum(input), sum(output), sum(cache_read), sum(cache_write), sum(requests),
+                       sum(tool_calls) FROM usage_hour WHERE hour >= ? AND hour < ? GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3, 4
+                """, [.real(start), .real(end)]) { r in
+                usage.append(UsageRow(sessionId: r.text(0) ?? "", agent: r.text(1) ?? "", hour: r.int(2), model: r.text(3) ?? "",
+                                      input: r.int(4), output: r.int(5), cacheRead: r.int(6), cacheWrite: r.int(7),
+                                      requests: r.int(8), toolCalls: r.int(9)))
+            }
+            try db.query("""
+                SELECT session_id, hour, name, sum(n) FROM tool_use WHERE hour >= ? AND hour < ? GROUP BY 1, 2, 3 ORDER BY 1, 2, 3
+                """, [.real(start), .real(end)]) { tools.append(ToolRow(sessionId: $0.text(0) ?? "", hour: $0.int(1), name: $0.text(2) ?? "", n: $0.int(3))) }
+            try db.query("SELECT start, \"end\" FROM user_activity WHERE start < ? AND \"end\" > ? ORDER BY start",
+                         [.real(end), .real(start)]) { user.append(Span(start: max(start, $0.real(0)), end: min(end, $0.real(1)))) }
+            try out(DayLine(day: day, host: host, seq: dseq, start: start, end: end, rows: rows, usage: usage, tools: tools,
+                            user: user))
+        }
+
+        for l in try store.latestLimits() {
+            try out(LimitLine(tool: l.tool.rawValue, window: l.window, usedPct: l.usedPct, resetsAt: l.resetsAt,
+                              windowMinutes: l.windowMinutes, ts: l.ts))
+        }
+    }
+}
