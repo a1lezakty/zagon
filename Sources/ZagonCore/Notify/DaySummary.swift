@@ -307,6 +307,9 @@ public struct DaySummary {
     /// or tools; `result` is claude's JSON answer (usage, cost, time), nil for codex. `what` names it in the log.
     public func complete(_ text: String, what: String = "summary") -> (text: String, engine: String, result: JValue?)? {
         let prompt = Array(text.utf8)
+        // A user service runs with systemd's PATH: the CLIs' own install places come after it.
+        let searchPath = ([searchPath] + [".local/bin", ".claude/local", ".npm-global/bin"].map { paths.home + "/" + $0 }
+                          + ["/usr/local/bin", "/opt/homebrew/bin"]).compactMap { $0 }.joined(separator: ":")
         let run = paths.dir + "/run"
         Sys.mkdirs(run)
         switch config.summaryEngine {
