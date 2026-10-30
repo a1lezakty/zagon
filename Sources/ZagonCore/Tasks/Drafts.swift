@@ -138,7 +138,8 @@ extension TaskSuggester {
     public func acceptNew(_ id: String, title: String? = nil, description: String? = nil, jiraKey: String? = nil) throws -> String {
         let id = id.uppercased(), claimKey = "jira:create:" + id
         // Jira made the issue for it already (an earlier create that did not finish here): it goes under that key.
-        let jiraKey = try jiraKey ?? meta(claimKey)?["key"]?.string
+        let claim = try meta(claimKey), jiraKey = jiraKey ?? claim?["key"]?.string
+        let title = title ?? claim?["titles"]?.array?.last?.string
         let (open, taken) = try openDraft(id), tasks = Tasks(store: store)
         func keepJiraTask(_ key: String, _ why: String) throws -> String {
             try store.db.transaction {
@@ -242,7 +243,7 @@ extension TaskSuggester {
     /// on the user's explicit confirmation (CLI `--yes` or y, MCP `confirm: true` with the preview's token, the app's
     /// Create button). Every try is remembered in `jira:create:N…` (when, titles, projects; the key once Jira gave
     /// it) until the draft is accepted: an issue made by an earlier try is taken (by its key, else by a search of your
-    /// issues of those projects made in the last 7 days with one of those titles) instead of making a second one, and
+    /// issues of those projects made since the first try (at least 15 days back) with one of those titles) instead of making a second one, and
     /// while a try that ended unclear is younger than `createWait` (it may still be under way) no other one starts.
     /// `takeOnly`: only take an issue an earlier try made, never make one (when the plan could not be shown).
     public func createInJira(_ id: String, project: String, title: String? = nil, description: String? = nil,

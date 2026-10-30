@@ -45,6 +45,10 @@ public final class TaskTools: TaskService {
     public func createInJira(id: String, project: String?, title: String?, description: String?, confirm: Bool, token: String?) throws -> String {
         let s = try suggester()
         return try mapErrors {
+            // An earlier try that Jira answered: its issue is taken, nothing new is made.
+            if try s.jiraClaimKey(id) != nil {
+                return try s.createInJira(id, project: project ?? "", title: title, description: description, takeOnly: true)
+            }
             let p: JiraCreatePlan
             do { p = try s.jiraPlan(id, project: project, title: title, description: description) } catch {
                 // An earlier try may have made the issue: that one is taken; none is made without the plan shown.
