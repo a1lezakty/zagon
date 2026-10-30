@@ -90,7 +90,8 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   driver is live (not `ended`, not archived) waits for that session, not for you: the live list
   (`LiveSessionInfo.drivenBy`) and `sessions` (`SessionLine.drivenBy`, JSON `driven_by`) carry the driver's title,
   else its project ("" = neither; `UserTime.driverSQL`); the CLI, the bot and MCP say "waits for session <name>",
-  the Mac lists it with the idle ones, and no "waiting for you" notification is sent for it. The v6 migration also
+  the Mac lists it with the idle ones, and no "waiting for you" or "finished" notification is sent for it (its
+  driver watches it). The v6 migration also
   drops the Mac's `remote_seq:` cursors, so it pulls its servers' sessions (with their drivers) once again.
 - `activity(kind = working | waiting)`, `user_action(kind = msg | channel | read)`, `user_activity` (derived: your
   time, see Time rules).

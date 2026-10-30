@@ -193,6 +193,16 @@ let day0 = Time.dayBounds("2026-10-30")!.start
         #expect(try n.tick(now: t + 11 * 60) == ["wait:claude:me"])
     }
 
+    @Test func aDrivenWorkerSendsNoDone() throws {
+        let (s, n, _) = try setUp()
+        let t = day0 + 12 * 3600
+        try stopped(s, "claude:a", file: 1, minutes: 20, at: t)
+        try stopped(s, "claude:b", file: 2, minutes: 20, at: t)
+        try session(s, "claude:lead", status: "working", at: t, lastAt: t)
+        try s.db.run("UPDATE session SET driver = 'claude:lead' WHERE id = 'claude:a'")
+        #expect(try n.tick(now: t + 101) == ["done:claude:b"])
+    }
+
     @Test func doneWaitsForTheSessionsOwnSubAgent() throws {
         let (s, n, _) = try setUp()
         let t = day0 + 12 * 3600

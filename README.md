@@ -220,7 +220,8 @@ The service sends alerts through your own Telegram bot or an [ntfy](https://ntfy
 - a session waiting for you longer than 10 minutes (unless "finished" was already sent for that stop); a worker that
   another session drives over `tmux send-keys` waits for that session, not for you, so it is shown as "waits for
   session …" and sends no such alert;
-- a turn that worked longer than 15 minutes has finished, and its sub-agents and background commands too;
+- a turn that worked longer than 15 minutes has finished, and its sub-agents and background commands too (not for
+  a worker another session drives: that session watches it);
 - the day summary at 20:00, with a picture of the day.
 
 Nothing is sent during quiet hours (23:00–08:00). Keep notifications on one host only. Every key in
