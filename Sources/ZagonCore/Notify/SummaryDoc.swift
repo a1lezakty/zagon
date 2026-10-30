@@ -66,15 +66,9 @@ public struct SummaryDoc: Codable, Sendable, Equatable {
 
     var words: Words { lang == "en" ? .english : .ru }
 
-    /// What a card says for a task's day ("what was done" of the task card and the worklog).
-    public func taskText(_ i: Item) -> String {
-        let w = words
-        var out: [String] = []
-        if let was = i.was { out.append(w.t("Было: ", "Was: ") + was) }
-        if !i.done.isEmpty { out.append(w.t("Сделано: ", "Done: ") + i.done.joined(separator: "; ")) }
-        if let left = i.left { out.append(w.t("Осталось: ", "Left: ") + left) }
-        return out.joined(separator: "\n")
-    }
+    /// What a card did, for the task's day ("what was done" of the task, which is also its worklog text in Jira):
+    /// the points only; what it was and what is left stay in the summary.
+    public func taskText(_ i: Item) -> String { i.done.joined(separator: "; ") }
 
     /// The summary as text: `markdown` for files and the Mac's export, plain for messages and the terminal.
     public func text(markdown: Bool = false) -> String {

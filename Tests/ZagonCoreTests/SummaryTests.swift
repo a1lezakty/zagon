@@ -66,7 +66,7 @@ import Testing
         #expect(doc.text() == "Итог.\n\nГлавное:\n• Главное\n\n▸ alpha · PROJ-1 Парсер — 1 ч 30 м, $12\nЧто было: Падал\nЧто сделано:\n• починен\nЧто осталось: тесты")
         #expect(doc.text(markdown: true) == "Итог.\n\n**Главное за период**\n\n- Главное\n\n### alpha · PROJ-1 Парсер — 1 ч 30 м, $12\n\n"
                 + "**Что было:** Падал\n\n**Что сделано:**\n- починен\n\n**Что осталось:** тесты")
-        #expect(doc.taskText(doc.items[0]) == "Было: Падал\nСделано: починен\nОсталось: тесты")
+        #expect(doc.taskText(doc.items[0]) == "починен")
         var en = doc
         en.lang = "en"; en.items[0].cost = 0.2
         #expect(en.text().contains("▸ alpha · PROJ-1 Парсер — 1 h 30 min, <$1\nWhat it was: Падал\nWhat was done:\n• починен"))

@@ -65,8 +65,9 @@ The macOS app (sample data): the menu bar, then the Day, Week and Calendar windo
   It gets a compact digest: titles, projects, branches, linked tasks (key and title), times, edited files, your
   commit subjects and the first words (up to 120 characters, secrets redacted) of the day's first and last typed
   messages. The summary is kept in the database and goes to the Mac app with the rest of the export; it may quote
-  those first words (the summary built without AI starts each card with them). The card of a linked task becomes
-  that task's "what was done" for the day, which is also its worklog text in Jira unless you set one by hand. A week,
+  those first words (the summary built without AI starts each card with them). The "what was done" points of a
+  linked task's card (not what it was or what is left) become that task's text for the day, which is also its
+  worklog text in Jira unless you set one by hand. A week,
   a month or a range is one more call over the days' summaries. With `[summary] engine = "none"` the summary is
   built without AI.
 - Your typed messages go into a contentless full-text index used for search: the words can be searched, the text

@@ -384,8 +384,8 @@ public struct DaySummary {
         if let r = ai(f) { (doc, engine) = r }
         try save(doc, engine: engine, now: now)
         if engine != "none" {
-            // One text per task and day: the cards of one task together. It is also the task's worklog text in Jira
-            // (unless one was set by hand), so it is kept short.
+            // One text per task and day: the points of its cards. It is also the task's worklog text in Jira (unless one
+            // was set by hand), so it is kept short.
             let tasks = Tasks(store: store)
             var texts: [String: [String]] = [:], order: [String] = []
             for i in doc.items {
@@ -395,8 +395,8 @@ public struct DaySummary {
             }
             for key in order {
                 guard let t = try tasks.find(key) else { continue }
-                let text = texts[key]!.joined(separator: "\n\n")
-                try tasks.setDone(t.id, day: day, text: text.count > 1000 ? String(text.prefix(999)) + "…" : text, source: "auto")
+                let text = texts[key]!.joined(separator: "; ")
+                try tasks.setDone(t.id, day: day, text: text.count > 300 ? String(text.prefix(299)) + "…" : text, source: "auto")
             }
         }
         return (f, doc, engine)
