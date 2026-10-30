@@ -50,4 +50,5 @@ release, and users have to install that release from the DMG by hand.
 
 Release a fixed version: Sparkle never installs an older build, so apps that already took the bad one only move on
 with a newer one. To stop more installs meanwhile, delete the bad release on GitHub (`latest` falls back to the
-previous one). On a server, `zagon.prev` next to the binary is the version before the last `zagon update`.
+previous one). On a server, `zagon.prev` next to the binary is the version before the last `zagon update`. A rollback
+across a schema change does not work: the database is not rolled back, and the older binary refuses a newer database.

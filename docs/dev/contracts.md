@@ -43,9 +43,10 @@ inode) is a new file.
 
 ## Store (`Sources/ZagonCore/Store/`)
 
-`Store(path:)` opens SQLite in WAL mode and applies migrations (`PRAGMA user_version`). `Store.host` is the
-machine the database belongs to: `meta.host`, fixed at the first open (gethostname, or for a database from before
-pinning the host most of its sessions carry), so a renamed machine (`X.local` → `X-2.local`) keeps one host.
+`Store(path:)` opens SQLite in WAL mode and applies migrations (`PRAGMA user_version`); a database newer than the
+binary's schema throws `StoreError` before any write. `Store.host` is the machine the database belongs to:
+`meta.host`, fixed at the first open (gethostname, or for a database from before pinning the host most of its sessions
+carry), so a renamed machine (`X.local` → `X-2.local`) keeps one host.
 `IngestOptions.host` nil = that host (set it only to import another machine's data). Public write API for
 hooks, status line and importers:
 

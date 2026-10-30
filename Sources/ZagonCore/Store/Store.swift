@@ -1,3 +1,7 @@
+public struct StoreError: Error, CustomStringConvertible {
+    public let description: String
+}
+
 /// The Zagon database (`~/.zagon/zagon.db`). Parsers do not write here directly: `Ingest` feeds `ParseOutput`
 /// through the store. Hooks / status line / external importers use the small public API below.
 public final class Store {
@@ -9,6 +13,13 @@ public final class Store {
 
     public init(path: String) throws {
         db = try SQLite(path: path)
+        // A newer zagon migrated this database (e.g. before `mv zagon.prev zagon`): writing to it with an older schema
+        // would corrupt it, so refuse before any write.
+        let v = try db.one("PRAGMA user_version") { $0.int(0) } ?? 0
+        guard v <= Schema.migrations.count else {
+            throw StoreError(description: "\(path): the database is newer than this zagon (schema v\(v) > "
+                             + "v\(Schema.migrations.count)): update zagon or put the newer version back")
+        }
         try db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")
         try migrate()
         host = try pinHost()
