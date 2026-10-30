@@ -92,9 +92,9 @@ final class ZagonUIModelTests: XCTestCase {
                            base: Palette.fiveHour, f: f)
         XCTAssertNil(stale.pct)
         XCTAssertNil(stale.leftPct)
-        XCTAssertEqual([stale.resetLine, stale.inLine], ["reset at 11:32", "no new reading yet"])
+        XCTAssertEqual([stale.resetLine, stale.inLine], ["reset at 11:32", "no new reading"])
         XCTAssertEqual(stale.color, Palette.fiveHour)
-        XCTAssertEqual(stale.spoken, ": reset at 11:32, no new reading yet")
+        XCTAssertEqual(stale.spoken, ": reset at 11:32, no new reading")
     }
 
     /// No reading, an old one, a stale one: the panel says so in words instead of 0 %.
@@ -115,7 +115,7 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertEqual(old.week?.pct, 47)
         XCTAssertTrue(old.limitsMissing)
         XCTAssertEqual(old.limitsAge, "обновлено 6 ч 30 м назад")
-        XCTAssertEqual(old.five?.spoken, "5 часов: сброшен в 09:20, новых данных пока нет")
+        XCTAssertEqual(old.five?.spoken, "5 часов: сброшен в 09:20, нет новых данных")
 
         let empty = MainVM(StoreDataProvider.empty(), f)
         XCTAssertNil(empty.five)
