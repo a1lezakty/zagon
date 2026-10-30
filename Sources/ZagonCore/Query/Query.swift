@@ -98,7 +98,7 @@ extension Store {
 /// One limit's usage as its readings come in, oldest first. Usage only grows within a window period (`resets_at` within
 /// 2 minutes), so a lower reading is an older one re-sent and the period's highest so far stands (see
 /// `Store.latestLimits`); a reading of a period before the current one is a late report and is skipped. A reading without
-/// `resets_at` belongs to the current period while that has not reset, else it is taken as it comes.
+/// `resets_at` belongs to the current period while that has not reset, else it opens a new one.
 struct LimitUsage {
     let tool: String, window: String
     /// The usage now and its period's reset; nil before any reading.

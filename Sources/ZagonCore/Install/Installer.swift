@@ -250,19 +250,6 @@ public struct Installer {
         return prev
     }
 
-    /// What `zagon update` from `old` to `new` turns on by itself: lines to print, only when it crosses 0.1.1 (none
-    /// for a build from source, whose version is "dev").
-    public static func updateNews(from old: String, to new: String) -> [String] {
-        func v(_ s: String) -> [Int]? {
-            let p = s.split(separator: ".").map { Int($0.prefix { $0.isNumber }) }
-            return p.count == 3 && !p.contains(nil) ? p.compactMap { $0 } : nil
-        }
-        guard let o = v(old), let n = v(new), o.lexicographicallyPrecedes([0, 1, 1]), !n.lexicographicallyPrecedes([0, 1, 1])
-        else { return [] }
-        return ["new in 0.1.1: a daily AI summary at 20:00 (one Haiku call, ~$0.005) and evening task suggestions (one more call)",
-                "turn off: zagon summary --at off; [tasks] evening_suggestions = false in ~/.zagon/config.toml (README: Privacy)"]
-    }
-
     /// systemd stops an account's --user services when its last login ends (ssh logout) unless it lingers; turning
     /// that on needs root, so it is only advised. loginctl knows nothing of an account with no login (root installing
     /// for another one): then the flag file `enable-linger` writes decides.

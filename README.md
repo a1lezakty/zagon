@@ -81,7 +81,7 @@ The macOS app (sample data): the menu bar, then the Day, Week and Calendar windo
   description, the last two comments and your earlier worklogs; and samples of how you write in Jira (issues you
   created, your worklogs and comments), so new tasks and worklog texts read like yours. `[tasks] evening_suggestions
   = false` turns the evening call off (`zagon task suggest` still runs it when you ask); `[tasks] style_samples =
-  false` leaves the samples out.
+  false` leaves the samples out. The service reads these when it starts: restart it after a change.
 - Your typed messages go into a contentless full-text index used for search: the words can be searched, the text
   itself is not kept. Pass `--no-index-prompts` to `zagon scan` / `zagon daemon` to turn that off.
 - Data lives in `~/.zagon` (or `$ZAGON_DIR`): `zagon.db`, `spool/`, `archive/`, `logs/`, `config.toml`, `backup/`.

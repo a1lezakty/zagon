@@ -39,6 +39,7 @@ main() {
   got=$(sha256sum "$tmp" | cut -d' ' -f1)
   [ "$got" = "$want" ] || { echo "zagon: checksum mismatch for $asset; nothing installed" >&2; exit 1; }
   chmod 755 "$tmp"
+  old=$("$dir/zagon" --version 2>/dev/null || true)
   mv -f "$tmp" "$dir/zagon"
   echo "Installed $dir/zagon $("$dir/zagon" --version)"
 
@@ -53,5 +54,11 @@ main() {
   done
   "$dir/zagon" update --restart-services ${user:+--user "$user"} 2>/dev/null || true
   case :$PATH: in *":$dir:"*) ;; *) echo "Add $dir to PATH to run zagon by name." ;; esac
+  # what an upgrade from 0.1.0 starts doing by itself (README: Privacy)
+  case $old in 0.0.*|0.1.0)
+    echo "New in 0.1.1: the AI day summary is written at 20:00 also with no notification channel (one cheap-model call a day),"
+    echo "and the evening task suggestions ask the AI every day, also for new tasks. Turn off: zagon summary --at off;"
+    echo "[tasks] evening_suggestions = false in ~/.zagon/config.toml, then restart the service." ;;
+  esac
 }
 main "$@"
