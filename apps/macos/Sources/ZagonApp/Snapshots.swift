@@ -15,6 +15,7 @@ enum Snapshots {
         var failed = false
         for lang in Lang.allCases {
             failed = !screens(AppState.mock(lang), query: queries[lang] ?? "", prefix: "", lang, dir) || failed
+            failed = !emptyStates(lang, dir) || failed
             if let fixtures {
                 do {
                     failed = !screens(try AppState.fixture(fixtures, lang), query: "demo video", prefix: "db-", lang, dir) || failed
@@ -65,6 +66,19 @@ enum Snapshots {
             ok = write(root, width: 1280, "\(prefix)\(screen.rawValue)-\(lang.rawValue)", dir) && ok
         }
         return ok
+    }
+
+    /// The panel with nothing to show yet (an empty store, not connected) and with the last reading from before a reset.
+    static func emptyStates(_ lang: Lang, _ dir: URL) -> Bool {
+        let empty = AppState(provider: StoreDataProvider.empty(), lang: lang)
+        empty.cli = Connect.Status(missing: ["hooks: ~/.claude/settings.json"])
+        var p = MockDataProvider(lang: lang)
+        p.staleLimits = true
+        let stale = AppState(provider: p, lang: lang, homeBack: 1)
+        stale.cli = AppState.mock(lang).cli
+        let a = write(MainPanel().environmentObject(empty), width: 400, "main-empty-\(lang.rawValue)", dir)
+        let b = write(MainPanel().environmentObject(stale), width: 400, "main-stale-\(lang.rawValue)", dir)
+        return a && b
     }
 
     static func write<V: View>(_ view: V, width: CGFloat, _ name: String, _ dir: URL) -> Bool {

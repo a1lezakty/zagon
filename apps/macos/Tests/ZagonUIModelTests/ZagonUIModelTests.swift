@@ -90,8 +90,40 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertNil(MainVM.forecast(LimitWindow(usedPct: 50, resetsAt: p.now.addingTimeInterval(3600), pctPerHour: 10), f))
         let stale = RingVM(title: "", window: LimitWindow(usedPct: 97, resetsAt: p.now.addingTimeInterval(-600)),
                            base: Palette.fiveHour, f: f)
-        XCTAssertEqual([String(stale.pct), stale.resetLine, stale.inLine], ["0", "reset at 11:32", ""])
+        XCTAssertNil(stale.pct)
+        XCTAssertNil(stale.leftPct)
+        XCTAssertEqual([stale.resetLine, stale.inLine], ["reset at 11:32", "no new reading yet"])
         XCTAssertEqual(stale.color, Palette.fiveHour)
+        XCTAssertEqual(stale.spoken, ": reset at 11:32, no new reading yet")
+    }
+
+    /// No reading, an old one, a stale one: the panel says so in words instead of 0 %.
+    func testLimitsWithoutCurrentReadings() {
+        let (p, f) = env(.ru)
+        let vm = MainVM(p, f)
+        XCTAssertEqual(vm.limitsHeader, "ЛИМИТЫ CLAUDE")
+        XCTAssertNil(vm.limitsAge)
+        XCTAssertFalse(vm.limitsMissing)
+        XCTAssertNil(vm.noSessions)
+        XCTAssertEqual(vm.five?.spoken, "5 часов: использовано 62 %, сброс в 14:20, через 2 ч 38 м")
+        XCTAssertEqual(vm.five?.spokenLeft, "5 часов: осталось 38 %, через 2 ч 38 м")
+
+        var stale = MockDataProvider(lang: .ru, timeZone: TimeZone(identifier: "UTC")!)
+        stale.staleLimits = true
+        let old = MainVM(stale, f)
+        XCTAssertNil(old.five?.pct)
+        XCTAssertEqual(old.week?.pct, 47)
+        XCTAssertTrue(old.limitsMissing)
+        XCTAssertEqual(old.limitsAge, "обновлено 6 ч 30 м назад")
+        XCTAssertEqual(old.five?.spoken, "5 часов: сброшен в 09:20, новых данных пока нет")
+
+        let empty = MainVM(StoreDataProvider.empty(), f)
+        XCTAssertNil(empty.five)
+        XCTAssertEqual(empty.limitsHeader, "ЛИМИТЫ")
+        XCTAssertTrue(empty.limitsMissing)
+        XCTAssertEqual(empty.noSessions, "Сейчас ни одна сессия не работает.")
+        let none = RingVM.empty("Неделя", f)
+        XCTAssertEqual([none.pct == nil ? "–" : "?", none.resetLine, none.spoken], ["–", "нет данных", "Неделя: нет данных"])
     }
 
     func testDay() {

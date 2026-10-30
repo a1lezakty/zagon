@@ -5,6 +5,8 @@ import UserNotifications
 enum MacNotifications {
     static var available: Bool { Bundle.main.bundleURL.pathExtension == "app" }
     private static let delegate = ShowWhileActive()
+    /// A click on one of Zagon's notifications (`ZagonCommands` sets it).
+    @MainActor static var onOpen: (@MainActor () -> Void)?
 
     /// Asks for permission once and shows banners even while the app is active.
     static func start() {
@@ -41,6 +43,14 @@ enum MacNotifications {
         func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                     withCompletionHandler handler: @escaping (UNNotificationPresentationOptions) -> Void) {
             handler([.banner, .sound])
+        }
+
+        func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                    withCompletionHandler handler: @escaping () -> Void) {
+            if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+                Task { @MainActor in MacNotifications.onOpen?() }
+            }
+            handler()
         }
     }
 }

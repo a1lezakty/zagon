@@ -59,6 +59,8 @@ struct Sidebar: View {
                 }
                 .font(.system(size: 13)).foregroundColor(Z.body)
                 .padding(.vertical, 6).padding(.horizontal, 12)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(app.f.t(h.online ? "host.online" : "host.offline", h.name))
             }
             Spacer(minLength: 0)
         }

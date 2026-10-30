@@ -280,8 +280,8 @@ struct Header<Trailing: View>: View {
         HStack(spacing: 12) {
             if let prev, let next {
                 HStack(spacing: 6) {
-                    SquareButton(symbol: "chevron.left", label: app.f.t("nav.prev"), action: prev)
-                    SquareButton(symbol: "chevron.right", label: app.f.t("nav.next"), action: next)
+                    SquareButton(symbol: "chevron.left", label: app.f.t("nav.prev"), action: prev).keyboardShortcut("[")
+                    SquareButton(symbol: "chevron.right", label: app.f.t("nav.next"), action: next).keyboardShortcut("]")
                 }
             }
             Text(title).font(.system(size: 24, weight: .bold)).foregroundColor(Z.text).lineLimit(1)
