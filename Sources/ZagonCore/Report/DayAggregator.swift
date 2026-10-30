@@ -29,7 +29,7 @@ struct DayAggregator {
         }
         var total = Row()
         try db.query("""
-            SELECT coalesce(s.tool,''), coalesce(\(Projects.sessionSQL()),''), sum(t.n) FROM tool_use t
+            SELECT coalesce(s.tool,''), coalesce(\(Projects.sessionSQL(host: "coalesce(s.host, ?3)")),''), sum(t.n) FROM tool_use t
             LEFT JOIN session s ON s.id = t.session_id
             WHERE t.hour >= ?1 AND t.hour < ?2 AND coalesce(s.host, ?3) = ?3 GROUP BY 1, 2
             """, [.real(s), .real(e), .text(host)]) { r in

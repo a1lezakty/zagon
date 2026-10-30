@@ -164,7 +164,9 @@ public final class Notifier {
     struct SessionRow { var id, tool: String; var title, project: String?; var status: String?; var statusAt, lastAt: Double? }
 
     func session(_ id: String) throws -> SessionRow? {
-        try store.db.one("SELECT id, tool, title, project, status, status_at, last_at FROM session WHERE id = ?", [.text(id)]) {
+        try store.db.one("""
+            SELECT id, tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at FROM session WHERE id = ?
+            """, [.text(id)]) {
             SessionRow(id: $0.text(0) ?? "", tool: $0.text(1) ?? "", title: $0.text(2), project: $0.text(3), status: $0.text(4),
                        statusAt: $0.optReal(5), lastAt: $0.optReal(6))
         }
@@ -177,7 +179,7 @@ public final class Notifier {
         var rows: [SessionRow] = []
         // The agent must have done something just before (a fresh or resumed session waiting for the first prompt is not news).
         try store.db.query("""
-            SELECT id, tool, title, project, status, status_at, last_at FROM session
+            SELECT id, tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at FROM session
             WHERE status IN ('waiting_input', 'waiting_permission') AND status_at <= ? AND status_at > ?
               AND last_at >= status_at - 600 AND coalesce(archived, 0) = 0
             """, [.real(now - wait), .real(now - wait - 86400)]) {

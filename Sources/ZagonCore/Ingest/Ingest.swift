@@ -573,19 +573,30 @@ public final class Ingest {
         }
     }
 
-    /// This machine's `dir_project` rows resolved by the current rules: those still on disk, and gone ones that counted
-    /// by their last component (a temporary folder becomes `Projects.temp`); a gone checkout keeps the name it had.
+    /// This machine's `dir_project` rows resolved by the current rules. A directory still on disk is resolved again, so
+    /// is a gone one that counted by its last component (a temporary folder becomes `Projects.temp`). A gone one that had
+    /// a checkout's name (a removed worktree, a deleted subfolder) takes the new name of the directories on disk that had
+    /// that name, when they agree on one; else it keeps its name.
     func resolveDirsAgain() throws {
         let home = options.home ?? Sys.env("HOME") ?? ""
-        var changed: [(cwd: String, project: String)] = []
+        var rows: [(cwd: String, old: String)] = []
         try db.query("SELECT cwd, project FROM dir_project WHERE host = ?", [.text(host)]) { r in
-            guard let c = r.text(0), let old = r.text(1) else { return }
+            if let c = r.text(0), let old = r.text(1) { rows.append((c, old)) }
+        }
+        var changed: [(cwd: String, project: String)] = [], gone: [(cwd: String, old: String)] = []
+        var renamed: [String: Set<String>] = [:]
+        for (c, old) in rows {
             #if os(macOS)
-            if Projects.guarded(Projects.trimmed(c), homes: Projects.homes(home)) { return }  // never looked into
+            if Projects.guarded(Projects.trimmed(c), homes: Projects.homes(home)) { continue }  // never looked into
             #endif
-            guard old == ClaudeParser.project(c) || Sys.isDir(c) else { return }
+            let named = old == ClaudeParser.project(c)
+            guard named || Sys.isDir(c) else { gone.append((c, old)); continue }
             let p = Projects.resolve(c, home: home).project
+            if Sys.isDir(c), p != Projects.temp { renamed[old, default: []].insert(p) }
             if p != old { changed.append((c, p)) }
+        }
+        for (c, old) in gone {
+            if let n = renamed[old], n.count == 1, let p = n.first, p != old { changed.append((c, p)) }
         }
         guard !changed.isEmpty else { return }
         let seq = try store.nextSeq()

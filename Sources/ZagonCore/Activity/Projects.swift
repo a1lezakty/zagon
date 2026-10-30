@@ -40,6 +40,9 @@ public enum Projects {
                 // A worktree: `commondir` leads to the main checkout's .git (or a bare repository).
                 let common = absolute(String(decoding: cb, as: UTF8.self), in: gitdir)
                 let name = Sys.basename(common)
+                #if os(macOS)
+                if guarded(common, homes: homes) { return Dir(project: Sys.basename(d), home: dir.home) }
+                #endif
                 return Dir(project: repo(common) ?? (name == ".git" ? Sys.basename(Sys.dirname(common))
                                     : name.hasSuffix(".git") ? String(name.dropLast(4)) : name), home: dir.home)
             }
@@ -53,13 +56,15 @@ public enum Projects {
     static func repo(_ gitDir: String) -> String? {
         guard let b = Sys.readFile(gitDir + "/config") else { return nil }
         var origin = false
-        for raw in String(decoding: b, as: UTF8.self).split(separator: "\n") {
+        for raw in String(decoding: b, as: UTF8.self).split(whereSeparator: \.isNewline) {
             let line = strip(raw)
             if line.hasPrefix("[") { origin = line == "[remote \"origin\"]"; continue }
             let kv = line.split(separator: "=", maxSplits: 1)
             guard origin, kv.count == 2, strip(kv[0]) == "url" else { continue }
             var u = strip(kv[1])
+            if u.count > 1, u.hasPrefix("\""), u.hasSuffix("\"") { u = u.dropFirst().dropLast() }
             while u.hasSuffix("/") { u.removeLast() }
+            if u.hasSuffix("/.git") { u = u.dropLast(5) }  // `/srv/zagon/.git`: the folder above
             if let i = u.lastIndex(where: { $0 == "/" || $0 == ":" }) { u = u[u.index(after: i)...] }
             if u.hasSuffix(".git") { u = u.dropLast(4) }
             return u.isEmpty ? nil : String(u)
@@ -73,7 +78,8 @@ public enum Projects {
         func under(_ r: String) -> Bool { c == r || c.hasPrefix(r + "/") }
         if homes.contains(where: { under($0 + "/.claude") }) { return true }
         if homes.contains(where: under) { return false }
-        let roots = ["/tmp", "/var/tmp", "/var/folders", "/private/tmp", "/private/var/folders"] + [tmp.map(trimmed) ?? ""]
+        let roots = ["/tmp", "/var/tmp", "/var/folders", "/private/tmp", "/private/var/tmp", "/private/var/folders"]
+            + [tmp.map(trimmed) ?? ""]
         return roots.contains { $0.count > 1 && under($0) }
     }
 
@@ -111,9 +117,10 @@ public enum Projects {
     }
 
     /// SQL for the project a session is listed under, as `of` counts it: that of the folder it started in
-    /// (`dir_project`), else `session.project`. `s` = the name or alias of the `session` table in the query.
-    static func sessionSQL(_ s: String = "s") -> String {
-        "coalesce((SELECT d.project FROM dir_project d WHERE d.host = \(s).host AND d.cwd = \(s).cwd), \(s).project)"
+    /// (`dir_project`), else `session.project`. `s` = the name or alias of the `session` table in the query; `host` = the
+    /// SQL of the host its directories are looked up under (the query's own when the session has none).
+    static func sessionSQL(_ s: String = "s", host: String? = nil) -> String {
+        "coalesce((SELECT d.project FROM dir_project d WHERE d.host = \(host ?? s + ".host") AND d.cwd = \(s).cwd), \(s).project)"
     }
 
     static func trimmed(_ p: String) -> String {

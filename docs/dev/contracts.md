@@ -151,8 +151,9 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   were built in is kept in `meta.tz`, the version of the rules that build them in `meta.day_rules`
   (`Ingest.dayRules`, an integer; never lowered); a scan in another zone or with newer rules rebuilds all days of the
   host and writes both values only together with the rebuilt days. Rules 3 first resolve this host's `dir_project`
-  rows again (directories still on disk, and gone ones that had only their last component; changed rows get a new
-  `seq`)
+  rows again (directories still on disk, and gone ones that had only their last component; a gone one with a
+  checkout's name, such as a removed worktree, takes the new name of the directories on disk that had that name when
+  they agree on one; changed rows get a new `seq`)
   (one left empty keeps a zero totals row, so `export` tells clients). The zone is set by
   `zagon tz`, the bot's `/tz` and MCP `settings_timezone` (`Settings.setTimezone`); `zagon daemon` sees the change
   within ~10 s and restarts itself in place (`execve`, same pid), `zagon notify` switches in its loop. Usage is bucketed by UTC

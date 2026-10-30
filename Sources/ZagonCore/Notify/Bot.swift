@@ -148,7 +148,7 @@ public final class Bot {
     func sessions(now: Double) throws -> String {
         var lines: [String] = []
         try store.db.query("""
-            SELECT tool, title, project, status, status_at, last_at FROM session
+            SELECT tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at FROM session
             WHERE coalesce(archived, 0) = 0 AND coalesce(status, '') <> 'ended' AND max(coalesce(status_at, 0), coalesce(last_at, 0)) > ?
             ORDER BY CASE WHEN status LIKE 'waiting%' THEN 0 WHEN status = 'working' THEN 1 ELSE 2 END,
                      max(coalesce(status_at, 0), coalesce(last_at, 0)) DESC LIMIT 12

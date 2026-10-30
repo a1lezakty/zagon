@@ -236,7 +236,7 @@ public struct TaskSuggester {
         let map = try Tasks(store: store).linkMap()
         var out: [Suggestion] = []
         try store.db.query("""
-            SELECT ts.rowid, ts.task_id, ts.session_id, ts.start, ts."end", t.key, t.title, s.title, s.project
+            SELECT ts.rowid, ts.task_id, ts.session_id, ts.start, ts."end", t.key, t.title, s.title, \(Projects.sessionSQL())
             FROM task_session ts JOIN task t ON t.id = ts.task_id LEFT JOIN session s ON s.id = ts.session_id
             WHERE ts.how = 'suggested' AND ts.start >= ? AND ts.start < ?
             """, [.real(from - LinkHow.maxNudge), .real(to - LinkHow.maxNudge)]) { r in
@@ -364,7 +364,9 @@ public struct TaskSuggester {
         var out: [String: Facts] = [:]
         for sid in Set(segs.map(\.session)) {
             var f = Facts()
-            try store.db.query("SELECT project, title, cwd FROM session WHERE id = ?", [.text(sid)]) { f.project = $0.text(0); f.title = $0.text(1); f.cwd = $0.text(2) }
+            try store.db.query("SELECT \(Projects.sessionSQL("session")), title, cwd FROM session WHERE id = ?", [.text(sid)]) {
+                f.project = $0.text(0); f.title = $0.text(1); f.cwd = $0.text(2)
+            }
             out[sid] = f
         }
         var files: [(path: String, sid: String, agent: String)] = []

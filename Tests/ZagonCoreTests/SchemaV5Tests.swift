@@ -374,6 +374,9 @@ func channelText(_ s: String) -> String {
         Sys.writeFile(h + "/pub-wt/.git", Array("gitdir: ../pub/.git/worktrees/pub-wt\n".utf8))
         Sys.writeFile(h + "/ssh/.git/config", Array("[remote \"origin\"]\n  url = git@example.com:me/proj-two\n".utf8))
         Sys.writeFile(h + "/plain/.git/config", Array("[remote \"upstream\"]\n\turl = https://example.com/x/other.git\n".utf8))
+        Sys.mkdirs(h + "/crlf/.git"); Sys.mkdirs(h + "/dotgit/.git")
+        Sys.writeFile(h + "/crlf/.git/config", Array("[core]\r\n\tbare = false\r\n[remote \"origin\"]\r\n\turl = \"https://example.com/me/proj-three.git\"\r\n".utf8))
+        Sys.writeFile(h + "/dotgit/.git/config", Array("[remote \"origin\"]\n\turl = /srv/repos/proj-four/.git\n".utf8))
         return h
     }
 
@@ -384,6 +387,8 @@ func channelText(_ s: String) -> String {
         func p(_ c: String, tmp: String? = nil) -> String { Projects.resolve(c, home: home, tmp: tmp).project }
         #expect(p(h + "/pub") == "proj-one" && p(h + "/pub/src") == "proj-one" && p(h + "/pub-wt/x") == "proj-one")
         #expect(p(h + "/ssh") == "proj-two" && p(h + "/plain") == "plain")
+        #expect(p(h + "/crlf") == "proj-three" && p(h + "/dotgit") == "proj-four")
+        #expect(p("/private/var/tmp/x") == Projects.temp)
         #expect(p(h + "/scratch/out") == Projects.temp && p(h + "/gone/away") == Projects.temp)
         #expect(p("/home/u/.claude/projects/-x") == Projects.temp && p("/var/folders/ab/T/x") == Projects.temp)
         #expect(p("/scratch/t/x", tmp: "/scratch/t/") == Projects.temp && p("/scratch/x", tmp: "/scratch/t") == "x")
@@ -408,6 +413,7 @@ func channelText(_ s: String) -> String {
         #expect(try Query(store: env.store).lanes(from: T0 - hour, to: T0 + hour).map(\.project) == ["proj-one"])
         // Kept as the parser saw it: only what is shown follows the directory.
         #expect(try env.store.db.one("SELECT project FROM session") { $0.text(0) } == "pub-wt")
+        #expect(try env.store.db.one("SELECT \(Projects.sessionSQL("session")) FROM session") { $0.text(0) } == "proj-one")
     }
 
     @Test func directoriesResolvedByOlderRulesAreResolvedAgainOnce() throws {
@@ -421,7 +427,8 @@ func channelText(_ s: String) -> String {
         try env.store.db.exec("""
             UPDATE dir_project SET project = 'pub';
             INSERT INTO dir_project(host, cwd, project, home, seq) VALUES('test', '/srv/gone/app', 'app-repo', 0, 0),
-              ('test', '\(h)/gone/out', 'out', 0, 0), ('other', '\(h)/pub-wt', 'pub', 0, 0);
+              ('test', '\(h)/gone/out', 'out', 0, 0), ('other', '\(h)/pub-wt', 'pub', 0, 0),
+              ('test', '\(h)/pub-wt-removed', 'pub', 0, 0);
             UPDATE day_agg SET project = 'pub' WHERE project != '';
             UPDATE meta SET value = '2' WHERE key = 'day_rules'
             """)
@@ -432,8 +439,10 @@ func channelText(_ s: String) -> String {
         }
         #expect(project("test", h + "/pub-wt") == "proj-one" && project("test", "/srv/gone/app") == "app-repo")
         #expect(project("test", h + "/gone/out") == Projects.temp && project("other", h + "/pub-wt") == "pub")
+        // A removed worktree follows the directories on disk that had the same name.
+        #expect(project("test", h + "/pub-wt-removed") == "proj-one")
         // Changed rows are exported again.
-        #expect(env.int("SELECT count(*) FROM dir_project WHERE seq > ? AND project = 'proj-one'", [.int(Int64(seq))]) == 1)
+        #expect(env.int("SELECT count(*) FROM dir_project WHERE seq > ? AND project = 'proj-one'", [.int(Int64(seq))]) == 2)
         #expect(env.int("SELECT count(*) FROM day_agg WHERE project = 'pub'") == 0)
         #expect(env.int("SELECT count(*) FROM day_agg WHERE project = 'proj-one'") > 0)
     }
