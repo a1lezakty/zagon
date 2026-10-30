@@ -1,5 +1,6 @@
 import AppKit
 import ServiceManagement
+import Sparkle
 import SwiftUI
 import ZagonUIModel
 
@@ -93,6 +94,16 @@ final class AppState: ObservableObject {
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
+    /// Sparkle in the built Zagon.app (its Info.plist has the feed); nil under `swift run` and in the samples.
+    var updater: SPUStandardUpdaterController?
+    /// Look for an update once a day (Sparkle keeps the setting).
+    var autoUpdate: Bool {
+        get { updater?.updater.automaticallyChecksForUpdates ?? false }
+        set { objectWillChange.send(); updater?.updater.automaticallyChecksForUpdates = newValue }
+    }
+
+    func checkForUpdates() { updater?.checkForUpdates(nil) }
+
     /// The last pull of a checked server worked (grey until the first one did); the samples have no store.
     func serverOnline(_ alias: String) -> Bool { store?.serverOnline(alias) ?? true }
     /// The zone the dates kept on screens were made in; screens drop their own dates when it changes.
@@ -138,6 +149,9 @@ final class AppState: ObservableObject {
                 state.setLaunchAtLogin(true)
             }
             state.launchAtLogin = SMAppService.mainApp.status == .enabled
+            if Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil {
+                state.updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+            }
             // The Mac moved to another zone while running: "System" follows it.
             NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak state] _ in
                 NSTimeZone.resetSystemTimeZone()
@@ -207,6 +221,7 @@ final class AppState: ObservableObject {
     }
 
     var hostErrors: [String: String] { store?.hostErrors ?? [:] }
+    var hostHints: [String: String] { store?.hostHints ?? [:] }
 
     private func save(_ value: Bool, _ key: String) {
         if persist { UserDefaults.standard.set(value, forKey: key) }
@@ -520,6 +535,7 @@ struct MainPanel: View {
         } else {
             Menu {
                 Button(app.f.t("main.openSettings")) { open(.settings) }
+                Button(app.f.t("main.checkUpdates")) { app.checkForUpdates() }
                 Button(app.f.t("main.quit")) { NSApp.terminate(nil) }
             } label: { gear }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()

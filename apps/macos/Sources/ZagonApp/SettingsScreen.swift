@@ -99,7 +99,7 @@ struct SettingsScreen: View {
                 Text(f.t("settings.servers")).font(.system(size: 15, weight: .semibold))
                 Text(f.t("settings.servers.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                let hosts = app.sshHosts, errors = app.hostErrors
+                let hosts = app.sshHosts, errors = app.hostErrors, hints = app.hostHints
                 if hosts.isEmpty {
                     Text(f.t("settings.servers.none")).font(.system(size: 13)).foregroundColor(Z.muted)
                 }
@@ -113,6 +113,8 @@ struct SettingsScreen: View {
                             if on { Dot(color: app.serverOnline(h) ? Z.working : Z.faint, size: 7) }
                             if on, let e = errors[h] {
                                 Text(e == Remote.oldZagon ? f.t("servers.oldZagon") : e).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1).truncationMode(.middle)
+                            } else if on, let hint = hints[h] {
+                                Text(f.t(hint)).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1)
                             }
                             Spacer(minLength: 0)
                         }
@@ -121,6 +123,13 @@ struct SettingsScreen: View {
                     }
                     .buttonStyle(.plain)
                 }
+            }
+            .frame(maxWidth: 640, alignment: .leading)
+            Card(spacing: 12) {
+                Text(f.t("settings.updates")).font(.system(size: 15, weight: .semibold))
+                Text(f.t("settings.updates.version", AppState.version)).font(.system(size: 13)).foregroundColor(Z.secondary)
+                CheckRow(title: f.t("settings.updates.auto"), on: app.autoUpdate) { app.autoUpdate.toggle() }
+                PillButton(title: f.t("main.checkUpdates")) { app.checkForUpdates() }
             }
             .frame(maxWidth: 640, alignment: .leading)
             Card(spacing: 12) {

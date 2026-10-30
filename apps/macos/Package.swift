@@ -9,13 +9,16 @@ let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingL
 let core = Target.Dependency.product(name: "ZagonCore", package: root.lastPathComponent.lowercased())
 
 var products: [Product] = [.library(name: "ZagonUIModel", targets: ["ZagonUIModel"])]
+var dependencies: [Package.Dependency] = [.package(path: "../..")]
 var targets: [Target] = [
     .target(name: "ZagonUIModel", dependencies: [core]),
     .testTarget(name: "ZagonUIModelTests", dependencies: ["ZagonUIModel", core]),
 ]
 #if os(macOS)
 products.append(.executable(name: "Zagon", targets: ["ZagonApp"]))
-targets.append(.executableTarget(name: "ZagonApp", dependencies: ["ZagonUIModel"],
+// Sparkle updates Zagon.app from the appcast of the latest GitHub release (scripts/release-mac.sh).
+dependencies.append(.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"))
+targets.append(.executableTarget(name: "ZagonApp", dependencies: ["ZagonUIModel", .product(name: "Sparkle", package: "Sparkle")],
                                  swiftSettings: [.swiftLanguageMode(.v5)]))
 #endif
 
@@ -23,6 +26,6 @@ let package = Package(
     name: "ZagonMac",
     platforms: [.macOS(.v13)],
     products: products,
-    dependencies: [.package(path: "../..")],
+    dependencies: dependencies,
     targets: targets
 )

@@ -20,6 +20,8 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
     private var isReady = false
     private var remote: [String] = []
     private var remoteErrors: [String: String] = [:]
+    /// Advice per server by its zagon version (a strings key, `Remote.hint`).
+    private var remoteHints: [String: String] = [:]
     /// Servers pulled at least once since start (a grey dot until then).
     private var pulled: Set<String> = []
     private var scanErrors = 0
@@ -114,6 +116,7 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
 
     /// Last ssh / import error per server.
     public var hostErrors: [String: String] { readyLock.withLock { remoteErrors } }
+    public var hostHints: [String: String] { readyLock.withLock { remoteHints } }
 
     /// Pulled since start, and the last pull worked.
     public func serverOnline(_ alias: String) -> Bool { readyLock.withLock { pulled.contains(alias) && remoteErrors[alias] == nil } }
@@ -128,6 +131,7 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 self.aliases = self.aliases.filter { $0.value != alias }
                 self.pulled.remove(alias)
                 self.remoteErrors[alias] = nil
+                self.remoteHints[alias] = nil
             }
             Task { @MainActor in done() }
         }
@@ -138,7 +142,11 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
     public func pull(_ hosts: [String], done: @escaping @MainActor @Sendable (Bool) -> Void) {
         DispatchQueue.global(qos: .utility).async {
             var changed = self.readyLock.withLock {
-                defer { self.remote = hosts; self.remoteErrors = self.remoteErrors.filter { hosts.contains($0.key) } }
+                defer {
+                    self.remote = hosts
+                    self.remoteErrors = self.remoteErrors.filter { hosts.contains($0.key) }
+                    self.remoteHints = self.remoteHints.filter { hosts.contains($0.key) }
+                }
                 return self.remote != hosts
             }
             let controlDir = Remote.controlDir()
@@ -152,7 +160,10 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                         guard self.readyLock.withLock({ self.remote.contains(h) }) else { return nil }
                         return try Remote.apply(data, alias: h, store: self.writer!, localHost: self.localHost, checked: hosts)
                     }) else { continue }
-                    self.readyLock.withLock { for x in n.hosts { self.aliases[x] = h } }
+                    self.readyLock.withLock {
+                        for x in n.hosts { self.aliases[x] = h }
+                        self.remoteHints[h] = Remote.hint(server: n.version, app: Remote.appVersion)
+                    }
                     changed = changed || n.sessions + n.days > 0
                     if n.old { error = Remote.oldZagon }
                 } catch let e {

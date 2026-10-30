@@ -38,7 +38,22 @@ public enum Remote {
     }
 
     /// The error of a server whose zagon predates usage in its export (shown translated, logged as is).
-    public static let oldZagon = "zagon there is older than this app (no usage in its export): update it; its days stay empty until then"
+    public static let oldZagon = "zagon there is older than this app (no usage in its export): reinstall it (install.sh); its days stay empty until then"
+
+    /// This app's version; nil outside Zagon.app.
+    static let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+
+    /// The strings key of the advice for a server by the `version` of its export: older than the app → `zagon update`;
+    /// none at all → it predates releases and `zagon update`, so install.sh again. "dev" builds get no advice.
+    public static func hint(server: String?, app: String?) -> String? {
+        func parts(_ v: String) -> [Int]? {
+            let p = v.split(separator: ".").compactMap { Int($0) }
+            return p.count == 3 && p.map(String.init).joined(separator: ".") == v ? p : nil
+        }
+        guard let a = app.flatMap(parts) else { return nil }
+        guard let server else { return "servers.reinstall" }
+        return parts(server).map { $0.lexicographicallyPrecedes(a) } == true ? "servers.update" : nil
+    }
 
     /// Where ssh keeps the connections it shares (`~/.zagon/ssh`, created).
     public static func controlDir() -> String {
@@ -57,6 +72,8 @@ public enum Remote {
         public var hosts: [String] = []
         /// The server's zagon predates usage and your time in its export: its days stay empty here until it is updated.
         public var old = false
+        /// `version` of the server's zagon (`zagon --version`); nil from one older than the releases.
+        public var version: String?
     }
 
     /// Applies one export through the core's reference client (`ExportImport`: rows under `export:<alias>`, untouched
@@ -72,8 +89,9 @@ public enum Remote {
         guard !lines.isEmpty else { throw RemoteError(host: alias, status: 0, message: "empty export") }
         var n = Imported(), hosts = Set<String>(), withUsage = 0
         for (i, l) in lines.enumerated() {
-            let v = JValue.topLevelStrings(Array(l.utf8), keys: ["type", "host"])
+            let v = JValue.topLevelStrings(Array(l.utf8), keys: ["type", "host", "version"])
             guard i > 0 || v?["type"] == "export" else { throw RemoteError(host: alias, status: 0, message: "not an export") }
+            if i == 0 { n.version = v?["version"] }
             switch v?["type"] {
             case "session": n.sessions += 1
             case "day":

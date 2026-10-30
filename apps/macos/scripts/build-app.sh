@@ -19,6 +19,14 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 lipo -create "${slices[@]}" -output "$app/Contents/MacOS/Zagon"
 lipo -info "$app/Contents/MacOS/Zagon"
 
+# Sparkle (universal already) next to the build products → Contents/Frameworks, found there through the rpath. The app
+# is not sandboxed: Sparkle installs without its XPC services, so they are left out.
+fw=$app/Contents/Frameworks/Sparkle.framework
+mkdir -p "$app/Contents/Frameworks"
+ditto "$(dirname "${slices[0]}")/Sparkle.framework" "$fw"
+rm -rf "$fw/XPCServices" "$fw/Versions/B/XPCServices"
+install_name_tool -add_rpath @executable_path/../Frameworks "$app/Contents/MacOS/Zagon"
+
 # The CLI the app installs for Claude Code / Codex (hooks, status line, MCP): Contents/Helpers/zagon, universal too.
 cli=()
 for arch in arm64 x86_64; do
@@ -47,12 +55,21 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>SUFeedURL</key><string>https://github.com/a1lezakty/zagon/releases/latest/download/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>vIO98LBiTe/r01tyS9sF0GoAxcYFD0gUcn8rMKWtzkw=</string>
+  <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUScheduledCheckInterval</key><integer>86400</integer>
 </dict>
 </plist>
 PLIST
 plutil -lint "$app/Contents/Info.plist"
-codesign --force --deep -s - "$app"
-codesign --verify --verbose "$app"
+# Inside out, no --deep: Sparkle's helpers, the framework, then the app (Sparkle accepts an ad-hoc signed update
+# when its EdDSA signature matches SUPublicEDKey).
+codesign --force -s - "$fw/Versions/B/Autoupdate"
+codesign --force -s - "$fw/Versions/B/Updater.app"
+codesign --force -s - "$fw"
+codesign --force -s - "$app"
+codesign --verify --deep --strict --verbose=2 "$app"
 
 mkdir -p build/dmg
 cp -R "$app" build/dmg/

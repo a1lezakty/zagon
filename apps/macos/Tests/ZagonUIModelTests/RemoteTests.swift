@@ -135,6 +135,22 @@ final class RemoteTests: XCTestCase {
         XCTAssertEqual(try Remote.cursor("srv", db: client.db), 0, "the days it sent without usage are pulled again")
     }
 
+    /// The advice under a server comes from the `version` in the first line of its export.
+    func testVersionHint() throws {
+        let client = try Store(path: ":memory:")
+        let header = { (v: String) in Data("{\"type\":\"export\",\"schema\":4,\"since\":0,\"seq\":1\(v)}\n".utf8) }
+        XCTAssertEqual(try Remote.apply(header(",\"version\":\"0.1.0\""), alias: "srv", store: client).version, "0.1.0")
+        XCTAssertNil(try Remote.apply(header(""), alias: "srv", store: client).version)
+        XCTAssertEqual(Remote.hint(server: "0.1.0", app: "0.2.0"), "servers.update")
+        XCTAssertEqual(Remote.hint(server: "0.9.9", app: "0.10.0"), "servers.update")
+        XCTAssertNil(Remote.hint(server: "0.2.0", app: "0.2.0"))
+        XCTAssertNil(Remote.hint(server: "1.0.0", app: "0.2.0"))
+        XCTAssertNil(Remote.hint(server: "dev", app: "0.2.0"))
+        XCTAssertEqual(Remote.hint(server: nil, app: "0.2.0"), "servers.reinstall")
+        XCTAssertNil(Remote.hint(server: nil, app: nil), "swift run: no version to compare")
+        XCTAssertNil(Remote.hint(server: "0.1.0", app: "dev"))
+    }
+
     func testPullReadsBothPipesAndTimesOut() throws {
         // 200 KB of stderr before stdout would block a reader that drains stdout first.
         let loud = try Remote.pull(host: "x", since: 0, controlDir: "", timeout: 20, executable: "/bin/sh",
