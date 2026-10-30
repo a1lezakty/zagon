@@ -128,7 +128,7 @@ zagon update            # replace the binary and restart the service
 
 `zagon update` downloads the latest release for your CPU, checks it against `SHA256SUMS`, and only then replaces
 its own binary (atomically, in the same directory). The old binary stays next to it as `zagon.prev`: move it back to
-roll back. Running services are restarted. If the binary is in `/usr/local/bin`, run `sudo zagon update` (behind a
+roll back (not across a database schema change: the older binary refuses a newer database). Running services are restarted. If the binary is in `/usr/local/bin`, run `sudo zagon update` (behind a
 proxy: `sudo -E zagon update`, since sudo drops the proxy variables). On macOS the app updates itself, the `zagon`
 inside it included.
 
@@ -172,10 +172,10 @@ zagon update                   # the latest release (see Update above)
 
 ### Your time
 
-"Your time" is built from the messages you type (and your replies to finished answers), chained while the gaps stay
-under `--idle-gap`. A message that one session types into another (an agent driving worker sessions with
+"Your time" is built from the messages you type and the ends of the answers you replied to, chained while the gaps
+stay under `--idle-gap`. A message that one session types into another (an agent driving worker sessions with
 `tmux send-keys`) is not yours: Zagon sees the driver's `tmux send-keys` / `send` / `paste-buffer` call in its Claude
-Code transcript and takes a message typed in another session 30 s before to 5 s after it as relayed. Limits:
+Code transcript and takes a message typed in another session from 5 s before to 30 s after it as relayed. Limits:
 
 - if you type into an unnamed session (or one named like the target) within those 35 s after another session sent
   keys to a pane that names no other session, your message is taken for a relay;

@@ -44,8 +44,14 @@ main() {
 
   "$dir/zagon" install "$@"
   # services already running this binary (an upgrade over an older install) pick up the new binary or unit file:
-  # system units, this account's user unit and, under sudo, the sudo user's
-  "$dir/zagon" update --restart-services 2>/dev/null || true
+  # system units, this account's user unit and the one of the account installed for (--user, else the sudo user)
+  user=; prev=
+  for a in "$@"; do
+    case $prev in --user) user=$a ;; esac
+    case $a in --user=*) user=${a#--user=} ;; esac
+    prev=$a
+  done
+  "$dir/zagon" update --restart-services ${user:+--user "$user"} 2>/dev/null || true
   case :$PATH: in *":$dir:"*) ;; *) echo "Add $dir to PATH to run zagon by name." ;; esac
 }
 main "$@"

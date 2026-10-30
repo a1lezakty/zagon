@@ -8,9 +8,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version for a test build, e.g. 0.1.0 (artifacts only, no release)'
+        description: 'Version for a test build, above the last tag (artifacts only, no release)'
         required: true
-        default: '0.0.0'
 
 permissions:
   contents: read
@@ -39,8 +38,8 @@ jobs:
           case $GITHUB_REF in refs/tags/v*) v=${GITHUB_REF_NAME#v} ;; *) v=$INPUT ;; esac
           echo "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::version must be x.y.z, got '$v'"; exit 1; }
           # above every other v* tag: zagon update takes whatever `latest` is, and Sparkle's build number only grows
-          last=$(git ls-remote --tags --refs "https://github.com/$GITHUB_REPOSITORY" 'v*' | sed 's#.*refs/tags/v##' |
-            grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | grep -vxF "$v" | sort -V | tail -1)
+          tags=$(git ls-remote --tags --refs "https://github.com/$GITHUB_REPOSITORY" 'v*') || { echo "::error::cannot list tags"; exit 1; }
+          last=$(printf '%s\n' "$tags" | sed 's#.*refs/tags/v##' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | grep -vxF "$v" | sort -V | tail -1 || true)
           if [ -n "$last" ] && [ "$(printf '%s\n%s\n' "$last" "$v" | sort -V | tail -1)" != "$v" ]; then
             echo "::error::version $v is not above the last tag v$last"; exit 1
           fi

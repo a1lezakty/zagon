@@ -19,10 +19,11 @@ struct UpdateCommand: ParsableCommand {
     var from = "https://github.com/a1lezakty/zagon/releases/latest/download"
     @Flag(name: .customLong("restart-services"), help: ArgumentHelp("Only restart the running services of this binary (install.sh).", visibility: .hidden))
     var restartOnly = false
+    @Option(help: ArgumentHelp("With --restart-services: the account install.sh installed for.", visibility: .hidden)) var user: String?
 
     func run() throws {
         #if os(Linux)
-        if restartOnly { Self.restartServices(Sys.executablePath()); return }
+        if restartOnly { Self.restartServices(Sys.executablePath(), user: user); return }
         #if arch(x86_64)
         let asset = "zagon-linux-x86_64"
         #elseif arch(arm64)
@@ -101,9 +102,9 @@ struct UpdateCommand: ParsableCommand {
 
     /// Restarts the running zagon units whose ExecStart is this binary (try-restart leaves stopped ones alone), after a
     /// daemon-reload (install.sh may have just rewritten them): the system units (`zagon-<user>.service`) as root, the
-    /// user unit of this account and, under sudo, the sudo user's too (`--machine`). Two of them on one database would
-    /// be two versions writing it.
-    static func restartServices(_ exe: String) {
+    /// user unit of this account and of the account installed for (`user`, else the sudo user). Two of them on one
+    /// database would be two versions writing it.
+    static func restartServices(_ exe: String, user: String? = nil) {
         guard let sc = Sys.which("systemctl") else { return }
         let sysDir = Installer.Options().systemUnitDir
         let system = Sys.listDir(sysDir).sorted().filter { $0.hasPrefix("zagon") && $0.hasSuffix(".service") && runs(sysDir + "/" + $0, exe) }
@@ -115,17 +116,26 @@ struct UpdateCommand: ParsableCommand {
                 print("service: sudo systemctl restart \(f)")
             }
         }
-        // This account by its passwd entry (sudo may keep the caller's HOME), then the sudo user's.
+        // This account (its $HOME, as `zagon install` uses it; as root the passwd home, since sudo may keep the caller's),
+        // then the account installed for: `--user`, else the sudo user.
+        let root = geteuid() == 0
         let me = getpwuid(getuid()).flatMap { Account.named(String(cString: $0.pointee.pw_name)) }
-        for (account, other) in [(me, false), (try? Account.target(explicit: nil), true)] {
-            guard let account, runs(Installer.Options(user: account).userUnitDir + "/zagon.service", exe) else { continue }
-            // root reaches any user manager, its own too, through --machine (no XDG_RUNTIME_DIR needed, as in sudo or su)
-            let user = [sc, "--user"] + (other || geteuid() == 0 ? ["--machine=\(account.name)@"] : [])
-            _ = Sys.run(user + ["daemon-reload"], quiet: true)
-            if Sys.run(user + ["try-restart", "zagon.service"], quiet: true) == 0 {
-                print("service: zagon.service of \(account.name) (systemd --user) restarted")
-            } else if other {  // for this account a failure means no user manager, so nothing of it runs
-                print("service: as \(account.name): systemctl --user restart zagon.service")
+        var units = [(dir: Installer.Options(user: root ? me : nil).userUnitDir, name: me?.name ?? "", other: false)]
+        if let a = try? Account.target(explicit: user), a.uid != getuid() {
+            units.append((Installer.Options(user: a).userUnitDir, a.name, true))
+        }
+        for u in units where runs(u.dir + "/zagon.service", exe) {
+            // Plain --user needs this login's XDG_RUNTIME_DIR; --machine (systemd 248+) reaches any user manager as root.
+            var tries: [[String]] = u.other ? [] : [[sc, "--user"]]
+            if (u.other || root) && !u.name.isEmpty { tries.append([sc, "--user", "--machine=\(u.name)@"]) }
+            let done = tries.contains { t in
+                _ = Sys.run(t + ["daemon-reload"], quiet: true)
+                return Sys.run(t + ["try-restart", "zagon.service"], quiet: true) == 0
+            }
+            if done {
+                print("service: zagon.service of \(u.name) (systemd --user) restarted")
+            } else if u.other {  // for this account a failure means no user manager, so nothing of it runs
+                print("service: as \(u.name): systemctl --user restart zagon.service")
             }
         }
     }
