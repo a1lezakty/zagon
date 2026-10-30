@@ -213,6 +213,8 @@ struct NewTaskJiraTests {
         try x.s.setMeta("jira:create:N1", .object([.init("at", .number("\(at)")), .init("titles", .array([.string("Never made")])),
                                                     .init("projects", .array([.string("PROJ")]))]))
         let busy = #expect(throws: TaskError.self) { try x.s.createInJira("N1", project: "PROJ", now: at + 60) }
+        // Only taking (the plan could not be shown): nothing is made, also when the try is old.
+        #expect(throws: TaskError.self) { try x.s.createInJira("N1", project: "PROJ", takeOnly: true, now: at + 4000) }
         #expect(try busy?.description.contains("has not ended clearly") == true && issues(m).count == 2)
         #expect(try x.s.createInJira("N1", project: "PROJ", now: at + 400).hasPrefix("N1 accepted: PROJ-103"))
         #expect(try issues(m).count == 3)
@@ -224,6 +226,13 @@ struct NewTaskJiraTests {
         #expect(try y.s.createInJira("N1", project: "PROJ", title: "Kept") == "N1: PROJ-103 is a task here; the suggestion was "
                 + "answered meanwhile, so no work was linked to it · created in Jira")
         #expect(try y.tasks.find("PROJ-103") != nil && issues(m).count == 3 && !y.s.jiraClaim("N1"))
+
+        // A plain accept of a draft whose issue Jira made already goes under that key.
+        let z = try fixture(m)
+        _ = try z.s.suggest(day, now: h(20))
+        try z.s.setMeta("jira:create:N1", .object([.init("at", .number("\(at)")), .init("key", .string("PROJ-103"))]))
+        #expect(try z.s.acceptNew("N1").hasPrefix("N1 accepted: PROJ-103"))
+        #expect(try z.tasks.links(try #require(try z.tasks.find("PROJ-103")).id).map(\.how) == ["manual"] && issues(m).count == 3)
     }
 
     /// MCP: without confirm only what would be made; with it the issue is created. Answers take N… ids.

@@ -248,11 +248,16 @@ struct TaskCommand: ParsableCommand {
                 guard ids.count == 1, new.count == 1 else { throw ValidationError("--title, --description, --create-in-jira: one N… id") }
             }
             if createInJira {
+                // An earlier try that Jira answered: its issue is taken, nothing new is made, nothing to confirm.
+                if try s.jiraClaimKey(new[0]) != nil {
+                    print(try s.createInJira(new[0], project: project ?? "", title: title, description: description, takeOnly: true))
+                    return
+                }
                 let p: JiraCreatePlan
                 do { p = try s.jiraPlan(new[0], project: project, title: title, description: description) } catch {
-                    // The suggestion is gone, but an earlier try may have made the issue: that one is taken, none is made.
+                    // An earlier try may have made the issue: that one is taken; none is made without the plan shown.
                     guard try s.jiraClaim(new[0]) else { throw error }
-                    print(try s.createInJira(new[0], project: project ?? "", title: title, description: description))
+                    print(try s.createInJira(new[0], project: project ?? "", title: title, description: description, takeOnly: true))
                     return
                 }
                 guard let proj = p.project else {

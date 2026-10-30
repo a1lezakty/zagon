@@ -53,8 +53,9 @@ extension TaskSuggester {
     /// How long a create in Jira that ended unclear blocks another try of the same draft (it may still be under way).
     static let createWait: Double = 300
 
-    /// Adds drafts for the day (inside the caller's transaction): a draft of that day with the same title (case and
-    /// spaces aside) takes the stretches instead of a second one; ids continue one counter (`suggest:new-seq`).
+    /// Adds drafts for the day (inside the caller's transaction): a draft of that day with the same title (case aside;
+    /// titles come with their spaces squeezed) takes the stretches instead of a second one; ids continue one counter
+    /// (`suggest:new-seq`).
     func addDrafts(_ items: [(segs: [Segment], title: String, description: String, done: String, confidence: Double)], day: String,
                    now: Timestamp) throws {
         guard !items.isEmpty else { return }
@@ -136,6 +137,8 @@ extension TaskSuggester {
     /// already takes the work); that task is kept whatever happened to the suggestion meanwhile.
     public func acceptNew(_ id: String, title: String? = nil, description: String? = nil, jiraKey: String? = nil) throws -> String {
         let id = id.uppercased(), claimKey = "jira:create:" + id
+        // Jira made the issue for it already (an earlier create that did not finish here): it goes under that key.
+        let jiraKey = try jiraKey ?? meta(claimKey)?["key"]?.string
         let (open, taken) = try openDraft(id), tasks = Tasks(store: store)
         func keepJiraTask(_ key: String, _ why: String) throws -> String {
             try store.db.transaction {
@@ -232,17 +235,23 @@ extension TaskSuggester {
     /// second one is made without a new plan), even when the draft itself is gone.
     public func jiraClaim(_ id: String) throws -> Bool { try meta("jira:create:" + id.uppercased()) != nil }
 
+    /// The key Jira gave an earlier create of the draft that is not accepted here yet.
+    public func jiraClaimKey(_ id: String) throws -> String? { try meta("jira:create:" + id.uppercased())?["key"]?.string }
+
     /// Creates the draft's task in Jira (a Task in `project`, assigned to you) and accepts it under the new key. Only
     /// on the user's explicit confirmation (CLI `--yes` or y, MCP `confirm: true` with the preview's token, the app's
     /// Create button). Every try is remembered in `jira:create:N…` (when, titles, projects; the key once Jira gave
     /// it) until the draft is accepted: an issue made by an earlier try is taken (by its key, else by a search of your
     /// issues of those projects made in the last 7 days with one of those titles) instead of making a second one, and
     /// while a try that ended unclear is younger than `createWait` (it may still be under way) no other one starts.
+    /// `takeOnly`: only take an issue an earlier try made, never make one (when the plan could not be shown).
     public func createInJira(_ id: String, project: String, title: String? = nil, description: String? = nil,
-                             now: Timestamp = Time.now()) throws -> String {
+                             takeOnly: Bool = false, now: Timestamp = Time.now()) throws -> String {
         guard let jira else { throw TaskError("Jira is not connected ([jira] in config.toml)") }
-        let id = id.uppercased(), claimKey = "jira:create:" + id, claim = try meta(claimKey)
-        let titles = (claim?["titles"]?.array ?? []).compactMap(\.string), tried = (claim?["projects"]?.array ?? []).compactMap(\.string)
+        let started = Time.now(), id = id.uppercased(), claimKey = "jira:create:" + id, claim = try meta(claimKey)
+        // `title`: the single title a claim of an earlier version kept.
+        let titles = ((claim?["titles"]?.array ?? []) + [claim?["title"]].compactMap { $0 }).compactMap(\.string)
+        let tried = (claim?["projects"]?.array ?? []).compactMap(\.string)
         func accept(_ key: String) throws -> String {
             try setMeta("jira:last-project", .string(String(key.prefix { $0 != "-" })))
             return try acceptNew(id, title: Self.given(title) ?? titles.last, description: description, jiraKey: key) + " · created in Jira"
@@ -250,8 +259,10 @@ extension TaskSuggester {
         if let key = claim?["key"]?.string { return try accept(key) }
         if let claim {
             let want = Set(titles + [Self.given(title)].compactMap { $0 })
+            // Back to the first try (the claim lives as long as the draft, and longer when the draft is gone).
+            let days = max(Self.showDays + 1, Int((now - (claim["first"]?.double ?? claim["at"]?.double ?? now)) / 86400) + 2)
             for p in Array(Set(tried + [project.uppercased()].filter { !$0.isEmpty })).sorted() {
-                let found = try jira.search("creator = currentUser() AND project = \"\(p)\" AND created >= -7d ORDER BY created DESC", limit: 100)
+                let found = try jira.search("creator = currentUser() AND project = \"\(p)\" AND created >= -\(days)d ORDER BY created DESC", limit: 100)
                 if let k = found.first(where: { want.contains($0.summary) })?.key { return try accept(k) }
             }
             let at = claim["at"]?.double ?? 0
@@ -260,6 +271,7 @@ extension TaskSuggester {
                                 + "issue is not there, try again after \(Txt.clock(at + Self.createWait))")
             }
         }
+        guard !takeOnly else { throw TaskError("\(id): no issue an earlier try made was found in Jira; nothing was created") }
         let p = try jiraPlan(id, project: project, title: title, description: description)
         guard let proj = p.project else { throw TaskError("no Jira project \(project) you may create issues in") }
         // Reads first: their failures did not reach the create.
@@ -267,7 +279,12 @@ extension TaskSuggester {
         _ = try jira.accountId()
         try store.db.transaction {
             guard try meta(claimKey) == claim else { throw TaskError("a create of \(id) in Jira is under way elsewhere: check Jira") }
-            try setMeta(claimKey, .object([.init("at", .number("\(now)")), .init("titles", .array((titles + [p.title]).map(JValue.string))),
+            // Accepted by another run meanwhile (its claim is gone with it).
+            guard try storedDrafts().compactMap(Self.draft).contains(where: { $0.id == id }) else { throw TaskError("\(id): already answered") }
+            // The time of the POST, not of the call: the reads before it may have taken a while.
+            let at = now + (Time.now() - started)
+            try setMeta(claimKey, .object([.init("at", .number("\(at)")), .init("first", .number("\(claim?["first"]?.double ?? at)")),
+                                           .init("titles", .array((titles + [p.title]).map(JValue.string))),
                                            .init("projects", .array((tried + [proj]).map(JValue.string)))]))
         }
         let key: String

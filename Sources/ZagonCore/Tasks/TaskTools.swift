@@ -47,9 +47,9 @@ public final class TaskTools: TaskService {
         return try mapErrors {
             let p: JiraCreatePlan
             do { p = try s.jiraPlan(id, project: project, title: title, description: description) } catch {
-                // The suggestion is gone, but an earlier try may have made the issue: that one is taken, none is made.
+                // An earlier try may have made the issue: that one is taken; none is made without the plan shown.
                 guard try s.jiraClaim(id) else { throw error }
-                return try s.createInJira(id, project: project ?? "", title: title, description: description)
+                return try s.createInJira(id, project: project ?? "", title: title, description: description, takeOnly: true)
             }
             guard let proj = p.project else {
                 throw MCPToolError((project.map { "No Jira project \($0) you may create issues in. " } ?? "Choose a project. ")
