@@ -96,7 +96,11 @@ public final class Ingest {
         let stored = try db.one("SELECT value FROM meta WHERE key='tz'") { $0.text(0) } ?? nil
         guard stored != id else { return }
         try db.transaction {
-            try db.run("DELETE FROM day_agg WHERE host=?", [.text(host)])
+            // Days this host has are rebuilt in the new zone, not deleted: one left empty keeps a zero totals row
+            // (DayAggregator), so `export` tells clients to drop it.
+            try db.query("SELECT DISTINCT day FROM day_agg WHERE host=?", [.text(host)]) { r in
+                if let d = r.text(0), let (s, _) = Time.dayBounds(d) { touchedHours.insert(Time.hour(s)) }
+            }
             for sql in ["SELECT DISTINCT hour FROM usage_hour", "SELECT DISTINCT hour FROM tool_use", "SELECT start FROM activity",
                         "SELECT \"end\" FROM activity", "SELECT ts FROM user_action"] {
                 try db.query(sql) { touchedHours.insert(Time.hour($0.real(0))) }

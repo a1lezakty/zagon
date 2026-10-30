@@ -133,7 +133,7 @@ import Testing
         env.scan()
         let seq0 = env.int("SELECT max(seq) FROM day_agg")
         try env.ingest.checkTimezone("TZ=Somewhere/Else")
-        #expect(env.int("SELECT count(*) FROM day_agg") == 0)
+        #expect(env.int("SELECT count(*) FROM day_agg") > 0)  // kept: finish() rebuilds them (an emptied day stays as zeros)
         try env.ingest.finish()
         #expect(env.int("SELECT max(seq) FROM day_agg") > seq0)
         #expect(env.int("SELECT sum(input) FROM day_agg WHERE model <> ''") == 10)

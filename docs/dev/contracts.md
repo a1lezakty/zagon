@@ -92,7 +92,8 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   across all sessions, chained when the gap is at most `idle_gap` (default 20 min).
 - days are local days in the top-level `timezone` of config.toml (the older `[notify] timezone` is still read),
   else `TZ` / `/etc/localtime`; every command applies it at start (`Settings.applyTimezone`). The zone the day rows
-  were built in is kept in `meta.tz`; a scan in another zone rebuilds all days of the host. The zone is set by
+  were built in is kept in `meta.tz`; a scan in another zone rebuilds all days of the host
+  (one left empty keeps a zero totals row, so `export` tells clients). The zone is set by
   `zagon tz`, the bot's `/tz` and MCP `settings_timezone` (`Settings.setTimezone`); `zagon daemon` sees the change
   within ~10 s and restarts itself in place (`execve`, same pid), `zagon notify` switches in its loop. Usage is bucketed by UTC
   hour, so zones with a non-whole-hour offset get day edges rounded to the hour.

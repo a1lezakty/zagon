@@ -136,6 +136,10 @@ extension ChannelTests {
         bot.log = { _ in }
         var changes = 0
         bot.onTimezoneChange = { changes += 1 }  // a service would restart here; this process keeps its zone
+        // This process stays in the machine's zone. Not read from `TZ`: other tests change it for the whole process
+        // (QueryFixture sets UTC) while this one runs, and the zone name with it.
+        bot.zoneApplied = { Settings.timezone($0) == nil }
+        func systemZoneReply(_ s: String?) -> Bool { s.map { $0.hasPrefix("Пояс ") && $0.contains(" (системный), сейчас ") } ?? false }
         func send(_ texts: [String]) {
             let u = texts.enumerated().map { #"{"update_id": \#(100 + $0.offset), "message": {"chat": {"id": 123456789}, "text": "\#($0.element)"}}"# }
             Sys.writeFile(dir + "/updates.json", Array(("[" + u.joined(separator: ",") + "]").utf8))
@@ -147,7 +151,7 @@ extension ChannelTests {
         #expect(bot.pollOnce(timeout: 0) == 3)
         var r = replies()
         #expect(r.count == 2)
-        #expect(r.first?.hasPrefix("Пояс \(Settings.zoneName()) (системный), сейчас ") == true)
+        #expect(systemZoneReply(r.first))
         #expect(r.last == "Нет такого пояса: Nowhere/Zone. Пример: /tz Asia/Almaty, /tz system")
         // Written; the answer waits until the zone is in effect (after the restart).
         #expect(Settings.timezone(paths) == "Etc/GMT-3" && changes == 1)
@@ -159,7 +163,7 @@ extension ChannelTests {
         send(["/tz system"])
         bot.pollOnce(timeout: 0)
         r = replies()
-        #expect(r.count == 3 && r.last?.hasPrefix("Пояс \(Settings.zoneName()) (системный), сейчас ") == true)
+        #expect(r.count == 3 && systemZoneReply(r.last))
         #expect(Settings.timezone(paths) == nil && changes == 2)
         #expect(try store.db.one("SELECT count(*) FROM meta WHERE key = 'telegram:tz_reply'") { $0.int(0) } == 0)
     }

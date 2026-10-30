@@ -45,7 +45,9 @@ import Testing
         return parts.joined(separator: "\n")
     }
 
-    @Test func roundTripAndIncrementalWithoutDoubling() throws {
+    /// `zoneChange`: the zone id changes before the second scan (`zagon tz`, or another test setting `TZ` for the whole
+    /// process), so the server rebuilds every day; a day left empty must still reach the client.
+    @Test(arguments: [false, true]) func roundTripAndIncrementalWithoutDoubling(zoneChange: Bool) throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
         let fm = FileManager.default
@@ -90,6 +92,7 @@ import Testing
             {"type":"assistant","timestamp":"\(ts2)","sessionId":"s2","cwd":"/home/user/project-2","message":{"id":"msg_s2","model":"claude-opus-4","role":"assistant","content":[{"type":"tool_use","id":"toolu_s2","name":"Bash","input":{"command":"true"}}],"usage":{"input_tokens":11,"output_tokens":7,"cache_read_input_tokens":100}}}
 
             """.write(toFile: dir + "/claude/-home-user-project-2/s2.jsonl", atomically: false, encoding: .utf8)
+        if zoneChange { try ingest.checkTimezone("TZ=Elsewhere/Zone") }
         try ingest.scan()
         hook("PermissionRequest", t0 + 400); hook("Stop", t0 + 500)
         try SpoolIngest.run(store: src, spoolDir: paths.spool, now: t0 + 600)
