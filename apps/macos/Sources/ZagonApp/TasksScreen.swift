@@ -24,7 +24,7 @@ struct TasksScreen: View {
             if let detail {
                 self.detail(detail)
             } else {
-                Text(f.t("tasks.empty")).font(.system(size: 13)).foregroundColor(Z.secondary)
+                Text(f.t(all.isEmpty || all.contains(where: \.worked) ? "tasks.empty" : "tasks.noWork")).font(.system(size: 13)).foregroundColor(Z.secondary)
                     .padding(28).frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
@@ -105,7 +105,7 @@ struct TasksScreen: View {
                         StateChip(text: d.status, state: d.state, height: 22, fontSize: 12)
                     } else {
                         Menu {
-                            ForEach([TaskState.planned, .active, .done], id: \.self) { s in
+                            ForEach([TaskState.planned, .active, .review, .done], id: \.self) { s in
                                 Button(f.t("state.\(s)")) { app.editTask(d.key, relist: true) { try $0.setStatus(d.key, s) } }
                             }
                         } label: {

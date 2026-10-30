@@ -187,8 +187,16 @@ final class ZagonUIModelTests: XCTestCase {
     func testTasks() {
         let (p, f) = env(.en)
         let vm = TasksVM(p.tasks(), filter: .active, f)
-        XCTAssertEqual(vm.filters.map(\.label), ["Active · 4", "Planned · 4", "Done · 1"])
-        XCTAssertEqual(vm.rows.map(\.key), ["PROJ-21", "PROJ-12", "ZAG-1", "ZAG-2"])
+        XCTAssertEqual(vm.filters.map(\.label), ["Active · 3", "In review · 1", "Planned · 4", "Done · 1"])
+        XCTAssertEqual(vm.rows.map(\.key), ["PROJ-21", "ZAG-1", "ZAG-2"])
+        XCTAssertEqual(TasksVM(p.tasks(), filter: .review, f).rows.map(\.key), ["PROJ-12"])
+        // Jira issues with no work here go under their own filter, the main ones do not count them.
+        var more = p.tasks()
+        more.append(TaskItem(key: "PROJ-30", title: "Backlog item", state: .review, userSec: 0, jiraKey: "PROJ-30", worked: false,
+                             jiraStatus: "Ready to release"))
+        let jira = TasksVM(more, filter: .jira, f)
+        XCTAssertEqual(jira.filters.map(\.label), ["Active · 3", "In review · 1", "Planned · 4", "Done · 1", "More in Jira · 1"])
+        XCTAssertEqual(jira.rows.map(\.status), ["Ready to release"])
         XCTAssertEqual(vm.rows[0].sessions, "5 sessions")
         XCTAssertEqual(vm.rows[2].sync, "no Jira")
         let d = vm.detail(nil)!

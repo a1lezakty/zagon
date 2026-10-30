@@ -30,7 +30,7 @@ final class FakeHandoff: HandoffService {
 final class FakeTasks: TaskService {
     var calls: [String] = []
     var fields: TaskFields?
-    func list(status: String?, limit: Int) throws -> String { calls.append("list \(status ?? "-") \(limit)"); return "0 tasks" }
+    func list(status: String?, all: Bool, limit: Int) throws -> String { calls.append("list \(status ?? "-") \(limit)"); return "0 tasks" }
     func get(_ ref: String) throws -> String { calls.append("get \(ref)"); return "task \(ref)" }
     func create(_ f: TaskFields) throws -> String { fields = f; calls.append("create"); return "created ZAG-1" }
     func update(_ ref: String, _ f: TaskFields) throws -> String { fields = f; calls.append("update \(ref)"); return "updated" }

@@ -151,12 +151,18 @@ zagon tz Asia/Almaty           # the zone days are cut in (no argument: show it;
 zagon daemon --verbose         # what the service runs: follow files, keep totals current, notify, archive
 zagon export --since 0         # changed totals as NDJSON, read by the macOS app over SSH
 zagon handoff latest --to claude   # a summary of a session to continue it in a new one (claude|codex|gemini|cursor|clipboard|file)
-zagon task list                # your tasks with their time; task add|show|todo|note|done|status|link|import|suggest
+zagon task list                # tasks worked on in the last 7 days; --all; task add|show|todo|note|done|status|link|import|suggest
 zagon log plan 2026-10-29      # what to log to Jira that day; log commit writes it (asks first)
 zagon update                   # the latest release (see Update above)
 ```
 
 - Every report takes `--json`.
+- Tasks come from work: a key (`PROJ-123`) in a branch, a session title, a typed message or a commit links that time
+  to the task. With `[jira]` connected (read-only; read again at most once an hour, or `zagon task import`), your Jira
+  issues become tasks as their keys show up in work; the task list shows what was worked on in the last 7 days and
+  your other open issues only under "More in Jira" (`task list --all`). Jira statuses map by their category, and a
+  name with review, QA, test, "ready for" or "ready to release" in it is "in review" (`[jira] review_statuses =
+  ["review", "staging"]` to change the list).
 - `$` is at API list prices, for comparison: a subscription is billed differently. Each model has its own price
   for input, output, cache reads and cache writes (Anthropic: 1.25x input for 5 minutes, 2x for 1 hour; OpenAI: as
   listed, free for most models), from the Anthropic and OpenAI pricing pages. In the CLI and MCP reports a model with

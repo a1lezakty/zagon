@@ -19,17 +19,32 @@ public struct JiraConfig: Sendable {
     /// The token is the last non-empty line of this file.
     public var tokenFile: String
     public var curl = "curl"
+    /// Jira statuses that mean "in review / ready to release" here, by part of the name (any case), whatever their
+    /// status category (Jira often files "Ready to release" under To Do); a status Jira counts as done stays done.
+    public var reviewStatuses = JiraConfig.defaultReview
+    public static let defaultReview = ["review", "qa", "test", "ready for", "ready to release", "ревью", "провер", "тест",
+                                       "к релизу", "готово к"]
     public init(baseURL: String, email: String, tokenFile: String) {
         self.baseURL = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
         self.email = email; self.tokenFile = tokenFile
     }
 
-    /// `[jira] url, email, token_file` from config.toml; nil when the module is not configured.
+    /// `[jira] url, email, token_file, review_statuses` from config.toml; nil when the module is not configured.
     public static func load(configText: String) -> JiraConfig? {
         guard let u = TOMLLite.string(in: configText, section: "jira", key: "url"),
               let e = TOMLLite.string(in: configText, section: "jira", key: "email"),
               let f = TOMLLite.string(in: configText, section: "jira", key: "token_file") else { return nil }
-        return JiraConfig(baseURL: u, email: e, tokenFile: f)
+        var c = JiraConfig(baseURL: u, email: e, tokenFile: f)
+        if let r = TOMLLite.raw(in: configText, section: "jira", key: "review_statuses").flatMap(stringList) { c.reviewStatuses = r }
+        return c
+    }
+
+    /// A one-line TOML array of strings, `["a", "b"]`; nil when it is not one.
+    static func stringList(_ raw: Substring) -> [String]? {
+        guard raw.hasPrefix("["), let close = raw.lastIndex(of: "]") else { return nil }
+        // Quoted strings are every other piece between quotes (no escaped quotes in status names).
+        let parts = raw[raw.index(after: raw.startIndex)..<close].split(separator: "\"", omittingEmptySubsequences: false)
+        return stride(from: 1, to: parts.count, by: 2).map { String(parts[$0]) }.filter { !$0.isEmpty }
     }
 }
 

@@ -29,8 +29,9 @@ public struct TaskFields: Sendable, Equatable {
 
 /// Own task registry and worklog plan (Jira optional).
 public protocol TaskService: AnyObject {
-    /// `status`: `planned` | `in_progress` | `done` | nil (all).
-    func list(status: String?, limit: Int) throws -> String
+    /// `status`: `planned` | `in_progress` | `review` | `done` | nil (all); `all`: also tasks and Jira issues with no
+    /// work in the last 7 days.
+    func list(status: String?, all: Bool, limit: Int) throws -> String
     /// `ref`: task id, own key (`ZAG-3`) or Jira key.
     func get(_ ref: String) throws -> String
     /// `fields.title` is set.
@@ -59,7 +60,7 @@ enum ServiceTools {
         MCPToolError("\(name) is not available in this build (\(what) is not included yet).")
     }
 
-    static let statuses = ["planned", "in_progress", "done"]
+    static let statuses = ["planned", "in_progress", "review", "done"]
 
     static func tools(handoff: HandoffService?, tasks: TaskService?) -> [MCPTool] {
         func h(_ name: String) throws -> HandoffService {
@@ -107,14 +108,17 @@ enum ServiceTools {
                 try h("handoff_list").list(limit: min(max(try a.int("limit") ?? 10, 1), 50))
             },
             MCPTool(name: "task_list", title: "List tasks",
-                    description: "Tasks of the user's own registry: key, title, status, time and tokens spent.",
+                    description: "Tasks the user worked on in the last 7 days: key, title, status (Jira status too), time "
+                        + "and sessions. Jira is a reference: open Jira issues with no work here are listed only with all: true.",
                     inputSchema: MCPSchema.object([
                         "status": MCPSchema.string("Only this status", enum: statuses),
+                        "all": ["type": "boolean", "description": "Also tasks and Jira issues with no work in the last 7 days"],
                         "limit": MCPSchema.integer("How many (default 20)", min: 1, max: 100),
                     ])) { a in
                 let status = try a.string("status")
                 if let s = status, !statuses.contains(s) { throw MCPToolError("status must be one of \(statuses.joined(separator: ", "))") }
-                return try t("task_list").list(status: status, limit: min(max(try a.int("limit") ?? 20, 1), 100))
+                return try t("task_list").list(status: status, all: try a.bool("all") ?? false,
+                                               limit: min(max(try a.int("limit") ?? 20, 1), 100))
             },
             MCPTool(name: "task_get", title: "Show a task",
                     description: "One task: description, status, TODO, notes, what was done by day, linked sessions, time "

@@ -1,13 +1,17 @@
 /// Own task registry over the `task*` tables (works without Jira).
 public enum TaskStatus: String, Codable, Sendable, CaseIterable {
-    case planned, inProgress = "in_progress", done
+    /// `review`: in review, testing or ready to release.
+    case planned, inProgress = "in_progress", review, done
     /// Older rows may carry the schema default `open`.
     init(stored: String?) { self = TaskStatus(rawValue: stored ?? "") ?? .planned }
-    /// Jira status category (`new` | `indeterminate` | `done`) that matches.
-    public var jiraCategory: String {
-        switch self { case .planned: "new"; case .inProgress: "indeterminate"; case .done: "done" }
-    }
     public init(jiraCategory c: String) { self = c == "done" ? .done : c == "indeterminate" ? .inProgress : .planned }
+    /// A Jira status as a status here: a name with a part from `review` (any case) is `review` unless Jira counts it
+    /// done; the rest by the status category (`new` | `indeterminate` | `done`).
+    public init(jira i: JiraIssue, review: [String] = JiraConfig.defaultReview) {
+        let name = i.status.lowercased()
+        if i.statusCategory != "done", review.contains(where: { !$0.isEmpty && name.contains($0.lowercased()) }) { self = .review }
+        else { self.init(jiraCategory: i.statusCategory) }
+    }
 }
 
 public struct TaskItem: Codable, Sendable, Equatable {

@@ -1,7 +1,8 @@
-/// Links sessions to existing tasks by keys (`PROJ-123`), each for the time the key is about: a session title for
-/// the whole session; a branch, a commit or a typed key only for the session's working intervals (sub-agents
-/// included) next to it, found by the folder each interval was worked in. Only tasks that exist are linked; keys of
-/// unknown tasks come back from `unknownKeys` so the plan can suggest adding them.
+/// Links sessions to tasks by keys (`PROJ-123`), each for the time the key is about: a session title for the whole
+/// session; a branch, a commit or a typed key only for the session's working intervals (sub-agents included) next to
+/// it, found by the folder each interval was worked in. A key that is not a task yet but one of your Jira issues
+/// (`JiraCache.mine`) becomes a task here as its work is linked; keys of other unknown tasks come back from
+/// `unknownKeys` so the plan can suggest adding them.
 public struct TaskLinker {
     public static let defaultPattern = #"[A-Z][A-Z0-9]+-\d+"#
     /// A commit's keys take its repository's working time since the previous commit, at most this far back.
@@ -40,6 +41,23 @@ public struct TaskLinker {
         return ix
     }
 
+    /// Task ids by key; a key that is one of your Jira issues and no task yet becomes a task when work asks for it.
+    final class Known {
+        var ids: [String: [Int]]
+        let cache: JiraCache, tasks: Tasks
+        init(_ store: Store, _ linker: TaskLinker) throws {
+            ids = try linker.index(store); cache = JiraCache.load(store); tasks = Tasks(store: store)
+        }
+        var isEmpty: Bool { ids.isEmpty && cache.mine.isEmpty }
+        func callAsFunction(_ k: String) throws -> [Int]? {
+            if let v = ids[k] { return v }
+            guard cache.mine.contains(k), let i = cache.issues[k] else { return nil }
+            let t = try tasks.add(title: i.summary.isEmpty ? k : i.summary, key: k, status: TaskStatus(jira: i, review: cache.review))
+            ids[k] = [t.id]
+            return [t.id]
+        }
+    }
+
     /// Working intervals of a session (all its files), merged; with `cwd`, only those worked in that folder
     /// (an interval of unknown folder counts as the session's folder).
     static func working(_ db: SQLite, _ session: String, cwd: String?? = nil) throws -> [Interval] {
@@ -59,7 +77,7 @@ public struct TaskLinker {
     /// working without a pause longer than `idleGap`, until a message with other keys). Returns links written.
     @discardableResult
     public func linkSessions(_ store: Store) throws -> Int {
-        let db = store.db, tasks = Tasks(store: store), ix = try index(store)
+        let db = store.db, tasks = Tasks(store: store), ix = try Known(store, self)
         var n = 0
         try db.transaction {
             // Whole-session commit links are what the v3 migration left; new ones always have a period.
@@ -68,11 +86,11 @@ public struct TaskLinker {
             var rows: [(id: String, branch: String?, title: String?, cwd: String?)] = []
             try db.query("SELECT id, git_branch, title, cwd FROM session") { rows.append(($0.text(0) ?? "", $0.text(1), $0.text(2), $0.text(3))) }
             for s in rows {
-                for k in s.title.map(keys) ?? [] { for t in ix[k] ?? [] { try tasks.link(t, session: s.id, how: .title); n += 1 } }
-                let bk = (s.branch.map(keys) ?? []).filter { ix[$0] != nil }
+                for k in s.title.map(keys) ?? [] { for t in try ix(k) ?? [] { try tasks.link(t, session: s.id, how: .title); n += 1 } }
+                let bk = try (s.branch.map(keys) ?? []).filter { try ix($0) != nil }
                 if !bk.isEmpty {
                     for iv in try Self.working(db, s.id, cwd: .some(s.cwd)) {
-                        for k in bk { for t in ix[k]! { try tasks.link(t, session: s.id, how: .branch, start: iv.start, end: iv.end); n += 1 } }
+                        for k in bk { for t in try ix(k)! { try tasks.link(t, session: s.id, how: .branch, start: iv.start, end: iv.end); n += 1 } }
                     }
                 }
             }
@@ -85,7 +103,7 @@ public struct TaskLinker {
                 } else { typed[sid, default: []].append((at, [k])) }
             }
             for (sid, msgs) in typed {
-                let known = msgs.map { (at: $0.at, keys: $0.keys.filter { ix[$0] != nil }) }
+                let known = try msgs.map { (at: $0.at, keys: try $0.keys.filter { try ix($0) != nil }) }
                 guard known.contains(where: { !$0.keys.isEmpty }) else { continue }
                 let ivs = try Self.working(db, sid)
                 var end = -Double.infinity
@@ -94,7 +112,7 @@ public struct TaskLinker {
                     if i > 0, known[i - 1].keys == m.keys, m.at <= end { continue }
                     let stop = known[(i + 1)...].first { $0.keys != m.keys }?.at ?? 1e18
                     end = reach(from: m.at, until: stop, ivs)
-                    for k in m.keys { for t in ix[k]! { try tasks.link(t, session: sid, how: .message, start: m.at, end: end); n += 1 } }
+                    for k in m.keys { for t in try ix(k)! { try tasks.link(t, session: sid, how: .message, start: m.at, end: end); n += 1 } }
                 }
             }
         }
@@ -120,7 +138,7 @@ public struct TaskLinker {
     /// moving into the repository. Other folders that are not git repositories are skipped.
     @discardableResult
     public func linkDay(_ store: Store, from: Timestamp, to: Timestamp, git: String = "git") throws -> Int {
-        let db = store.db, tasks = Tasks(store: store), ix = try index(store)
+        let db = store.db, tasks = Tasks(store: store), ix = try Known(store, self)
         var byCwd: [String: [(session: String, iv: Interval)]] = [:]
         try db.query("""
             SELECT a.session_id, coalesce(a.cwd, s.cwd), a.start, a."end" FROM activity a LEFT JOIN session s ON s.id = a.session_id
@@ -141,7 +159,7 @@ public struct TaskLinker {
                     let cuts = [it.iv.start] + cos.map(\.ts).filter { $0 > it.iv.start && $0 < it.iv.end } + [it.iv.end]
                     for (a, b) in zip(cuts, cuts.dropFirst()) {
                         let branch = cos.last { $0.ts <= a }?.to ?? cos.first?.from ?? info.branch
-                        for k in branch.map(keys) ?? [] where ix[k] != nil { worktree[k, default: []].append((it.session, Interval(a, b))) }
+                        for k in try (branch.map(keys) ?? []).filter({ try ix($0) != nil }) { worktree[k, default: []].append((it.session, Interval(a, b))) }
                     }
                 }
             }
@@ -169,12 +187,12 @@ public struct TaskLinker {
                        [.real(from - LinkHow.maxNudge), .real(to - LinkHow.maxNudge)])
             for (k, items) in worktree {
                 for (sid, iv) in Self.mergedBySession(items) {
-                    for t in ix[k]! { try tasks.link(t, session: sid, how: .worktree, start: iv.start, end: iv.end); n += 1 }
+                    for t in try ix(k)! { try tasks.link(t, session: sid, how: .worktree, start: iv.start, end: iv.end); n += 1 }
                 }
             }
             for repo in repos.values {
                 let cs = commits(repo.cwd, from: from, to: to, git: git)
-                guard cs.contains(where: { keys(in: $0.subject).contains { ix[$0] != nil } }) else { continue }
+                guard try cs.contains(where: { try keys(in: $0.subject).contains { try ix($0) != nil } }) else { continue }
                 var windows: [(lo: Timestamp, hi: Timestamp, keys: [String])] = []
                 for (i, c) in cs.enumerated() {
                     windows.append((max(i > 0 ? cs[i - 1].ts : from, c.ts - Self.commitReach), c.ts, keys(in: c.subject)))
@@ -182,12 +200,12 @@ public struct TaskLinker {
                 if let last = cs.last { windows.append((last.ts, last.ts + Self.afterCommit, keys(in: last.subject))) }
                 let items = Self.mergedBySession(repo.items)
                 for w in windows {
-                    let ks = w.keys.filter { ix[$0] != nil }
+                    let ks = try w.keys.filter { try ix($0) != nil }
                     guard !ks.isEmpty, w.hi > w.lo else { continue }
                     for (sid, iv) in items {
                         let a = max(iv.start, w.lo), b = min(iv.end, w.hi)
                         guard b > a else { continue }
-                        for k in ks { for t in ix[k]! { try tasks.link(t, session: sid, how: .commit, start: a, end: b); n += 1 } }
+                        for k in ks { for t in try ix(k)! { try tasks.link(t, session: sid, how: .commit, start: a, end: b); n += 1 } }
                     }
                 }
             }

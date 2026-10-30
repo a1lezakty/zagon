@@ -40,36 +40,40 @@ public final class TaskTools: TaskService {
 
     func scan() { if let refresh { do { try refresh() } catch { log("mcp: scan failed: \(error)") } } }
 
+    /// After a scan, Jira read again when the last read is older than an hour (`JiraCache`), links refreshed.
     func fresh() throws -> DayWorklog {
         scan()
         let w = try makeWorklog()
+        _ = JiraCache.current(store, w.jira, now: now(), log: log)
         try w.linker.linkSessions(store)
         return w
     }
 
+    /// A task to change; one of the user's Jira issues (as last read) becomes a task here.
     func find(_ ref: String) throws -> TaskItem {
-        guard let t = try tasks.find(ref) else { throw MCPToolError("No task \(ref). task_list shows the keys.") }
+        guard let t = try tasks.findOrAdopt(ref) else { throw MCPToolError("No task \(ref). task_list shows the keys.") }
         return t
     }
 
     func check(_ s: String?) throws -> TaskStatus? {
         guard let s else { return nil }
-        guard let v = TaskStatus(rawValue: s) else { throw MCPToolError("status must be planned, in_progress or done") }
+        guard let v = TaskStatus(rawValue: s) else { throw MCPToolError("status must be planned, in_progress, review or done") }
         return v
     }
 
     /// Models send "" for fields they do not mean to set.
     static func given(_ s: String?) -> String? { s.flatMap { $0.trimmed(" \t\n\r").isEmpty ? nil : $0 } }
 
-    public func list(status: String?, limit: Int) throws -> String {
+    public func list(status: String?, all: Bool, limit: Int) throws -> String {
         let w = try fresh()
-        let lines = try tasks.overview(status: try check(status), limit: limit, base: w.base, idleGap: w.idleGap, now: now())
-        return TaskText.list(lines, base: w.base)
+        let lines = try tasks.overview(status: try check(status), all: true, limit: .max, base: w.base, idleGap: w.idleGap, now: now())
+        return TaskText.list(lines, base: w.base, all: all, limit: limit, more: "task_list with all: true")
     }
 
     public func get(_ ref: String) throws -> String {
         let w = try fresh()
-        let c = try tasks.card(try find(ref), base: w.base, idleGap: w.idleGap, jira: w.jira, now: now())
+        guard let t = try tasks.find(ref) ?? tasks.jiraOnly(ref) else { throw MCPToolError("No task \(ref). task_list shows the keys.") }
+        let c = try tasks.card(t, base: w.base, idleGap: w.idleGap, jira: w.jira, now: now())
         return TaskText.card(c, base: w.base, jiraConnected: w.jira != nil)
     }
 

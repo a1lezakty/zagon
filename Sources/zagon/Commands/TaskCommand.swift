@@ -25,6 +25,12 @@ extension Common {
     /// nil when `[jira]` is not configured.
     func jira() throws -> JiraClient? { try JiraConfig.load(configText: configText).map(JiraClient.init) }
 
+    /// Reads Jira into `JiraCache` when the last read is older than an hour; Jira that cannot start or fails is only a
+    /// warning (the last read is used).
+    func refreshJira(_ store: Store) {
+        do { _ = JiraCache.current(store, try jira(), log: warn) } catch { warn("jira: \(error)") }
+    }
+
     /// Suggestions by meaning: the summary's engine (`[summary]`), `[tasks] suggest_min_confidence`, Jira read-only.
     func suggester(_ store: Store) throws -> TaskSuggester {
         let paths = ZagonPaths(dir: dataDir)
@@ -44,8 +50,9 @@ extension Common {
 
 func warn(_ s: String) { _ = Sys.writeAll(fd: 2, Array((s + "\n").utf8)) }
 
+/// A task to change; one of your Jira issues (as last read) becomes a task here.
 func taskRef(_ tasks: Tasks, _ ref: String) throws -> TaskItem {
-    guard let t = try tasks.find(ref) else { throw ValidationError("no task \(ref)") }
+    guard let t = try tasks.findOrAdopt(ref) else { throw ValidationError("no task \(ref)") }
     return t
 }
 
@@ -65,7 +72,7 @@ struct TaskCommand: ParsableCommand {
         @Option(help: "Jira key, if it differs from the key.") var jira: String?
         @Flag(help: "The key is not a Jira issue.") var noJira = false
         @Option(help: "Description.") var description: String?
-        @Option(help: "planned | in_progress | done") var status: TaskStatus = .planned
+        @Option(help: "planned | in_progress | review | done") var status: TaskStatus = .planned
         @OptionGroup var common: Common
         func run() throws {
             let store = try common.open(), tasks = Tasks(store: store)
@@ -77,17 +84,22 @@ struct TaskCommand: ParsableCommand {
     }
 
     struct List: ParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Tasks with their time over the last 7 days.")
-        @Option(help: "planned | in_progress | done") var status: TaskStatus?
+        static let configuration = CommandConfiguration(
+            abstract: "Tasks worked on over the last 7 days, with their time.",
+            discussion: "Jira is a reference: your open Jira issues with no work here are listed only with --all.")
+        @Option(help: "planned | in_progress | review | done") var status: TaskStatus?
+        @Flag(help: "Also tasks and your Jira issues with no work in the last 7 days.") var all = false
         @Option(help: "user: your time | sessions: wall-clock time any session worked (default).") var time: TaskTime.Base?
         @OptionGroup var common: Common
         @OptionGroup var report: ReportOptions
         func run() throws {
             let store = try prepare(common, report)
+            common.refreshJira(store)
             try common.linker().linkSessions(store)
             let base = common.timeBase(time)
-            let lines = try Tasks(store: store).overview(status: status, base: base, idleGap: common.idleGap * 60)
-            if report.json { try emit(lines) } else { print(TaskText.list(lines, base: base)) }
+            let lines = try Tasks(store: store).overview(status: status, all: true, limit: .max, base: base, idleGap: common.idleGap * 60)
+            if report.json { try emit(all ? lines : lines.filter { $0.worked != false }) }
+            else { print(TaskText.list(lines, base: base, all: all)) }
         }
     }
 
@@ -102,7 +114,8 @@ struct TaskCommand: ParsableCommand {
             try w.linker.linkSessions(store)
             if let e = w.jiraSetupError { warn("jira: \(e)") }
             let tasks = Tasks(store: store)
-            let c = try tasks.card(try taskRef(tasks, task), base: w.base, idleGap: w.idleGap, jira: w.jira)
+            guard let t = try tasks.find(task) ?? tasks.jiraOnly(task) else { throw ValidationError("no task \(task)") }
+            let c = try tasks.card(t, base: w.base, idleGap: w.idleGap, jira: w.jira)
             if report.json { try emit(c) } else { print(TaskText.card(c, base: w.base, jiraConnected: w.jira != nil)) }
         }
     }
@@ -147,7 +160,7 @@ struct TaskCommand: ParsableCommand {
     }
 
     struct Status: ParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Change the status: planned | in_progress | done.")
+        static let configuration = CommandConfiguration(abstract: "Change the status: planned | in_progress | review | done.")
         @Argument(help: "Key, Jira key or id.") var task: String
         @Argument var status: TaskStatus
         @OptionGroup var common: Common
@@ -217,20 +230,21 @@ struct TaskCommand: ParsableCommand {
     }
 
     struct Import: ParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Create tasks for your Jira issues (read-only in Jira).")
-        @Option(help: "JQL.") var jql = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+        static let configuration = CommandConfiguration(
+            abstract: "Read your Jira issues now (read-only in Jira).",
+            discussion: "Jira is a reference: an issue becomes a task here when work is linked to it (its key in a branch, "
+                + "title, message or commit), when you add it, or when you accept a suggestion. The task commands read "
+                + "Jira again on their own at most once an hour.")
+        @Option(help: "JQL of your issues.") var jql = JiraCache.mineJQL
         @OptionGroup var common: Common
         func run() throws {
             guard let jira = try common.jira() else { throw ValidationError("Jira is not configured ([jira] in config.toml)") }
-            let store = try common.open(), tasks = Tasks(store: store)
-            var added = 0
-            for i in try jira.search(jql) where try tasks.find(i.key) == nil {
-                try tasks.add(title: i.summary, key: i.key, status: TaskStatus(jiraCategory: i.statusCategory))
-                added += 1
-                print("  + \(i.key)  \(i.summary)")
-            }
+            let store = try common.open(), before = try Tasks(store: store).list().count
+            let c = try JiraCache.refresh(store, jira, jql: jql)
             try common.linker().linkSessions(store)
-            print("\(added) new tasks")
+            let added = try Tasks(store: store).list().count - before
+            print("\(c.mine.count) of your Jira issues read, \(c.issues.count - c.mine.count) more of tasks here; "
+                  + "\(added) became tasks by their work (task list)")
         }
     }
 }
