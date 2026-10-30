@@ -9,6 +9,9 @@ public struct MockDataProvider: ZagonDataProvider {
     let lang: Lang
     let cal: Calendar
 
+    /// The last limit reading is from 05:12, before the 5-hour reset at 09:20: the snapshots' "no new reading" state.
+    public var staleLimits = false
+
     public init(lang: Lang = .en, timeZone: TimeZone = .current) {
         var c = Calendar(identifier: .gregorian)
         c.timeZone = timeZone
@@ -35,9 +38,14 @@ public struct MockDataProvider: ZagonDataProvider {
     // MARK: menu bar
 
     public func limits() -> Limits {
+        if staleLimits {
+            return Limits(fiveHour: LimitWindow(usedPct: 97, resetsAt: at(30, 9 + 20 / 60), tool: .claude, readAt: ago(390)),
+                          week: LimitWindow(usedPct: 47, resetsAt: at(33, 9), tool: .claude, readAt: ago(390)))
+        }
         // 62 % now, 100 % at 13:50 — 30 minutes before the 14:20 reset.
-        Limits(fiveHour: LimitWindow(usedPct: 62, resetsAt: at(30, 14 + 20 / 60), pctPerHour: 38 / (128 / 60)),
-               week: LimitWindow(usedPct: 41, resetsAt: at(33, 9)))
+        return Limits(fiveHour: LimitWindow(usedPct: 62, resetsAt: at(30, 14 + 20 / 60), pctPerHour: 38 / (128 / 60),
+                                            tool: .claude, readAt: ago(2)),
+                      week: LimitWindow(usedPct: 41, resetsAt: at(33, 9), tool: .claude, readAt: ago(2)))
     }
 
     public func limitHistory(_ kind: LimitKind) -> [LimitPoint] {

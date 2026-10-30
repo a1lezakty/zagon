@@ -295,7 +295,8 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 for (tool, name) in names {
                     guard let r = all.first(where: { $0.tool == tool && $0.window == name }) else { continue }
                     let reset = r.resetsAt ?? r.ts + Double((r.windowMinutes ?? 0) * 60)
-                    return LimitWindow(usedPct: r.usedPct, resetsAt: Self.date(reset), pctPerHour: r.pctPerHour)
+                    return LimitWindow(usedPct: r.usedPct, resetsAt: Self.date(reset), pctPerHour: r.pctPerHour,
+                                       tool: tool == .codex ? .codex : .claude, readAt: Self.date(r.ts))
                 }
                 return nil
             }

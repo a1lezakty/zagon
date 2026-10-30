@@ -14,20 +14,20 @@ final class LimitSettingsTests: XCTestCase {
                           history: [LimitPoint(p.at(30, 10), 30), LimitPoint(p.at(29, 10), 99)], base: Palette.fiveHour, f: f)
         XCTAssertEqual(five.now.x, 142.0 / 300, accuracy: 1e-9)
         XCTAssertEqual(five.points.count, 3)  // origin, 10:00 (yesterday's reading is outside the window), now
-        XCTAssertEqual(five.verdict, "15% ahead of time")
+        XCTAssertEqual(five.verdict, "15% ahead of schedule")
         XCTAssertTrue(five.ahead)
         XCTAssertEqual(five.color, Palette.waiting)
 
         let week = PaceVM(title: "Week", window: try XCTUnwrap(lim.week), minutes: 10080, history: [], base: Palette.week, f: f)
         XCTAssertEqual(week.now.x, 4.1125 / 7, accuracy: 1e-9)
-        XCTAssertEqual(week.verdict, "18% behind time")
+        XCTAssertEqual(week.verdict, "18% behind schedule")
         XCTAssertEqual(week.color, Palette.week)
         // Work week: Mon 09:00 → Mon 09:00 holds 5 weekdays of time, and all of the 4.1125 days passed are weekdays.
         let work = PaceVM(title: "Week", window: try XCTUnwrap(lim.week), minutes: 10080, history: [], base: Palette.week,
                           weekdaysOnly: true, f: f)
         XCTAssertEqual(work.now.x, 4.1125 / 5, accuracy: 1e-9)
         XCTAssertEqual(PaceVM(title: "", window: LimitWindow(usedPct: 50, resetsAt: p.at(30, 14)), minutes: 300, history: [],
-                              base: 0, f: Fmt(lang: .ru, timeZone: utc, now: p.at(30, 11.5))).verdict, "ровно по времени")
+                              base: 0, f: Fmt(lang: .ru, timeZone: utc, now: p.at(30, 11.5))).verdict, "по графику")
     }
 
     func testPaceFromProviders() throws {

@@ -35,8 +35,11 @@ public struct LimitWindow: Sendable {
     public var resetsAt: Date
     /// Growth over the last 30–60 minutes in percent per hour; nil when there is not enough data.
     public var pctPerHour: Double?
-    public init(usedPct: Double, resetsAt: Date, pctPerHour: Double? = nil) {
-        self.usedPct = usedPct; self.resetsAt = resetsAt; self.pctPerHour = pctPerHour
+    /// Whose window this is and when it was read; nil in samples that do not say.
+    public var tool: Tool?
+    public var readAt: Date?
+    public init(usedPct: Double, resetsAt: Date, pctPerHour: Double? = nil, tool: Tool? = nil, readAt: Date? = nil) {
+        self.usedPct = usedPct; self.resetsAt = resetsAt; self.pctPerHour = pctPerHour; self.tool = tool; self.readAt = readAt
     }
 }
 
