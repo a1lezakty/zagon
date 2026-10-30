@@ -1,0 +1,63 @@
+name: sparkle-e2e
+
+# One-off check (throwaway branch): an ad-hoc signed Zagon 0.1.0 finds 0.1.1 in an appcast, Sparkle verifies the
+# EdDSA signature and installs it when the app quits.
+on:
+  push:
+    branches: [sparkle-e2e]
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: apps/macos
+    env:
+      SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Old app 0.1.0 (1)
+        run: |
+          scripts/release-mac.sh 0.1.0 1
+          ditto build/Zagon.app /Applications/Zagon.app
+      - name: Update 0.1.1 (2) on localhost
+        run: |
+          printf '## Zagon 0.1.1\n\n- notes with ]]> and <tags>\n' > "$RUNNER_TEMP/notes.md"
+          scripts/release-mac.sh 0.1.1 2 "$RUNNER_TEMP/notes.md"
+          mkdir -p ~/feed && cp build/Zagon.zip ~/feed/
+          sed 's#https://github.com/a1lezakty/zagon/releases/download/v0.1.1/Zagon.zip#http://127.0.0.1:8765/Zagon.zip#' build/appcast.xml > ~/feed/appcast.xml
+          cat ~/feed/appcast.xml
+          (cd ~/feed && nohup python3 -m http.server 8765 --bind 127.0.0.1 > ~/feed.log 2>&1 &)
+          sleep 3; curl -fsS -o /dev/null http://127.0.0.1:8765/appcast.xml
+      - name: The old app installs the update on quit
+        run: |
+          defaults write dev.zagon.app SUFeedURL http://127.0.0.1:8765/appcast.xml
+          defaults write dev.zagon.app SUAutomaticallyUpdate -bool YES
+          open /Applications/Zagon.app
+          for i in $(seq 1 36); do sleep 5; grep -q 'GET /Zagon.zip' ~/feed.log && break; done
+          cat ~/feed.log
+          sleep 45
+          echo "--- login item before the update"; sudo sfltool dumpbtm 2>/dev/null | grep -i -B2 -A12 'dev.zagon.app' | head -40 || true
+          printf 'import AppKit\nfor a in NSRunningApplication.runningApplications(withBundleIdentifier: "dev.zagon.app") { print("terminate", a.terminate()) }\n' > "$RUNNER_TEMP/quit.swift"
+          swift "$RUNNER_TEMP/quit.swift"
+          sleep 10
+          if pgrep -x Zagon; then (osascript -e 'tell application id "dev.zagon.app" to quit' &); sleep 20; pgrep -x Zagon || echo "quit by osascript"; fi
+          v=
+          for i in $(seq 1 36); do
+            sleep 5
+            v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/Zagon.app/Contents/Info.plist 2>/dev/null || true)
+            [ "$v" = 0.1.1 ] && break
+          done
+          log show --last 20m --info --debug --style compact --predicate 'subsystem == "org.sparkle-project.Sparkle"' | tail -40 || true
+          echo "installed: $v"
+          [ "$v" = 0.1.1 ]
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /Applications/Zagon.app/Contents/Info.plist
+          codesign --verify --deep --strict --verbose=2 /Applications/Zagon.app
+          ls /Applications/Zagon.app/Contents/Frameworks/Sparkle.framework/Versions/B
+          open /Applications/Zagon.app; sleep 20
+          echo "--- login item after the update and a start"; sudo sfltool dumpbtm 2>/dev/null | grep -i -B2 -A12 'dev.zagon.app' | head -40 || true
+          swift "$RUNNER_TEMP/quit.swift"
