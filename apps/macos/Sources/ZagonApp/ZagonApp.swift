@@ -710,6 +710,8 @@ struct LimitsBlock: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(left ? r.spokenLeft : r.spoken)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { app.showLeft.toggle() }
     }
 
     @ViewBuilder func chart(_ p: PaceVM?, _ r: RingVM) -> some View {
@@ -737,6 +739,8 @@ struct LimitsBlock: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel([left ? r.spokenLeft : r.spoken, pct == nil ? "" : p?.verdict ?? ""].filter { !$0.isEmpty }
             .joined(separator: ", "))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { app.showLeft.toggle() }
     }
 }
 

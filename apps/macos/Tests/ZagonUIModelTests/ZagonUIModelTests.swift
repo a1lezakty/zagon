@@ -122,6 +122,8 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertEqual(empty.limitsHeader, "ЛИМИТЫ")
         XCTAssertTrue(empty.limitsMissing)
         XCTAssertEqual(empty.noSessions, "Сейчас ни одна сессия не работает.")
+        XCTAssertEqual(old.five?.spokenLeft, old.five?.spoken)
+
         let none = RingVM.empty("Неделя", f)
         XCTAssertEqual([none.pct == nil ? "–" : "?", none.resetLine, none.spoken], ["–", "нет данных", "Неделя: нет данных"])
     }
