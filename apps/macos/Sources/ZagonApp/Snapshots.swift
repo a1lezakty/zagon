@@ -25,6 +25,8 @@ enum Snapshots {
             }
         }
         failed = !icons(dir) || failed
+        failed = !menubar(dir) || failed
+        failed = !appIcon(dir) || failed
         if failed { exit(1) }
     }
 
@@ -42,6 +44,71 @@ enum Snapshots {
         }
         .padding(16)
         return write(strip, width: 304, "icon", dir)
+    }
+
+    /// The status item on a light, a dark and a wallpaper-tinted menu bar, at the bar's own size and at 2x, monochrome
+    /// and coloured, numbers inside the rings and beside them: `menubar-<mode>-<layout>@<n>x.png`. Columns: 5 hours /
+    /// week at 2/41, 62/88, 97/100 and no reading.
+    static func menubar(_ dir: URL) -> Bool {
+        let bars: [(UInt32, Color)] = [(0xF2F2F4, .black.opacity(0.85)), (0x1E1E22, .white.opacity(0.9)),
+                                       (0x2F67C8, .white.opacity(0.95))]
+        let states: [(Int?, Int?)] = [(2, 41), (62, 88), (97, 100), (nil, nil)]
+        var ok = true
+        for colored in [false, true] {
+            for beside in [false, true] {
+                let sheet = VStack(spacing: 8) {
+                    ForEach(bars.indices, id: \.self) { b in
+                        HStack(spacing: 40) {
+                            ForEach(states.indices, id: \.self) { s in
+                                HStack(spacing: 14) {
+                                    MenuBarLabel(five: states[s].0, week: states[s].1, colored: colored, beside: beside,
+                                                 tint: bars[b].1)
+                                    Image(systemName: "wifi")
+                                    Image(systemName: "battery.75percent")
+                                    Text("Thu 20:18")
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .font(Font(NSFont.menuBarFont(ofSize: 0) as CTFont))
+                        .foregroundColor(bars[b].1)
+                        .padding(.horizontal, 12)
+                        .frame(height: 24)
+                        .background(Color(hex: bars[b].0))
+                    }
+                }
+                .padding(8)
+                .background(Color(hex: Palette.muted))
+                let name = "menubar-\(colored ? "color" : "mono")-\(beside ? "beside" : "inside")"
+                for scale in [1, 2] as [CGFloat] {
+                    ok = write(sheet, width: 1100, scale: scale, name + "@\(Int(scale))x", dir) && ok
+                }
+            }
+        }
+        return ok
+    }
+
+    /// The app icon at 1024, and at 16…256 px as Finder shows it on a light and a dark window.
+    /// `-pair`: the rings side by side, for comparison.
+    static func appIcon(_ dir: URL) -> Bool {
+        let sizes: [CGFloat] = [16, 32, 64, 128, 256]
+        var ok = true
+        for pair in [false, true] {
+            let rows = VStack(spacing: 0) {
+                ForEach([0xF5F5F7, 0x1E1E22] as [UInt32], id: \.self) { bg in
+                    HStack(alignment: .bottom, spacing: 24) {
+                        ForEach(sizes, id: \.self) { AppIconView(px: $0, pair: pair) }
+                    }
+                    .padding(24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(hex: bg))
+                }
+            }
+            let name = pair ? "app-icon-pair" : "app-icon"
+            ok = write(AppIconView(px: 1024, pair: pair), width: 1024, scale: 1, name, dir)
+                && write(rows, width: 640, scale: 1, name + "-sizes", dir) && ok
+        }
+        return ok
     }
 
     static func screens(_ state: AppState, query: String, prefix: String, _ lang: Lang, _ dir: URL) -> Bool {
@@ -67,10 +134,10 @@ enum Snapshots {
         return ok
     }
 
-    static func write<V: View>(_ view: V, width: CGFloat, _ name: String, _ dir: URL) -> Bool {
+    static func write<V: View>(_ view: V, width: CGFloat, scale: CGFloat = 2, _ name: String, _ dir: URL) -> Bool {
         let r = ImageRenderer(content: view.frame(width: width)
             .environment(\.isSnapshot, true).environment(\.colorScheme, .dark))
-        r.scale = 2
+        r.scale = scale
         r.proposedSize = ProposedViewSize(width: width, height: nil)
         guard let cg = r.cgImage,
               let png = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]),

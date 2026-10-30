@@ -407,6 +407,7 @@ enum Entry {
             Snapshots.render(to: URL(fileURLWithPath: value("--snapshots") ?? "build/snapshots"), fixtures: value("--fixtures"))
             return
         }
+        if let dir = value("--app-icon") { exit(AppIcon.iconset(URL(fileURLWithPath: dir)) ? 0 : 1) }
         ZagonApp.main()
     }
 }
