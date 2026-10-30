@@ -177,8 +177,8 @@ stay under `--idle-gap`. A message that one session types into another (an agent
 `tmux send-keys`) is not yours: Zagon sees the driver's `tmux send-keys` / `send` / `paste-buffer` call in its Claude
 Code transcript and takes a message typed in another session from 5 s before to 30 s after it as relayed. Limits:
 
-- if you type into an unnamed session (or one named like the target) within those 35 s after another session sent
-  keys to a pane that names no other session, your message is taken for a relay;
+- if you type into an unnamed session (or one named like the target) in that window around another session's
+  send-keys to a pane that names no other session, your message is taken for a relay;
 - a driver that types some other way (a script that hides `tmux` from the command, `screen`, `ssh` to another host)
   or sleeps longer than 30 s before the message is not seen, so its messages count as yours.
 

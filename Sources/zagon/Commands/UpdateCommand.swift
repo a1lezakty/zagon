@@ -125,15 +125,13 @@ struct UpdateCommand: ParsableCommand {
             units.append((Installer.Options(user: a).userUnitDir, a.name, true))
         }
         for u in units where runs(u.dir + "/zagon.service", exe) {
-            // Plain --user needs this login's XDG_RUNTIME_DIR; --machine (systemd 248+) reaches any user manager as root.
-            var tries: [[String]] = u.other ? [] : [[sc, "--user"]]
-            if (u.other || root) && !u.name.isEmpty { tries.append([sc, "--user", "--machine=\(u.name)@"]) }
-            let done = tries.contains { t in
-                _ = Sys.run(t + ["daemon-reload"], quiet: true)
-                return Sys.run(t + ["try-restart", "zagon.service"], quiet: true) == 0
-            }
-            if done {
-                print("service: zagon.service of \(u.name) (systemd --user) restarted")
+            // This account: plain --user on its own runtime dir, whatever XDG_RUNTIME_DIR sudo -E or su carried over
+            // (any systemd); another account: --machine (systemd 248+, as root).
+            let ctl = u.other ? [sc, "--user", "--machine=\(u.name)@"] : [sc, "--user"]
+            let env = u.other ? [:] : ["XDG_RUNTIME_DIR": "/run/user/\(getuid())"]
+            _ = Sys.capture(ctl + ["daemon-reload"], timeout: 60, env: env)
+            if Sys.capture(ctl + ["try-restart", "zagon.service"], timeout: 60, env: env).status == 0 {
+                print("service: zagon.service of \(u.name.isEmpty ? "this account" : u.name) (systemd --user) restarted")
             } else if u.other {  // for this account a failure means no user manager, so nothing of it runs
                 print("service: as \(u.name): systemctl --user restart zagon.service")
             }
