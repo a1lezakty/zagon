@@ -373,15 +373,25 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 Lane(title: Self.title(l.title, l.project, l.id), host: shown(l.host),
                      intervals: l.intervals.map { Interval(Self.date($0.start), Self.date($0.end), waiting: $0.waiting) })
             }
-            let kept = try kept(key)
+            let kept = try kept(key), branches = try branches(d.lanes.map(\.id))
+            var hostProjects: [String: [DoneProject]] = [:]
+            for h in Set(d.lanes.map { shown($0.host) }) {
+                var part = d
+                part.lanes = d.lanes.filter { shown($0.host) == h }
+                // The day's price of a project is not split by machine: none for one worked on several.
+                let elsewhere = Set(d.lanes.filter { shown($0.host) != h }.map { $0.project ?? "" })
+                part.byProject = d.byProject.filter { !elsewhere.contains($0.name) }
+                hostProjects[h] = Self.projects(part, branches: branches)
+            }
             return DayData(
                 day: start, totals: Totals(sessionSec: d.sessionSec, userSec: d.userSec, tokens: d.tokens.total, cost: d.cost),
                 limitHits: d.limitHits.map { Interval(Self.date($0.start), Self.date($0.end)) },
                 weekPctStart: d.weekPctStart, weekPctEnd: d.weekPctEnd, lanes: lanes,
                 usage: [.project: rows(d.byProject), .model: rows(d.byModel, name: Self.modelName), .agent: rows(d.byAgent),
                         .tool: d.byTool.map { UsageRow($0.name, tokens: $0.count, cost: 0) }, .host: rows(d.byHost) { shown($0.isEmpty ? nil : $0) }],
-                doc: kept?.doc, projects: Self.projects(d, branches: try branches(d.lanes.map(\.id))),
-                summaryInfo: kept.map { SummaryInfo(engine: $0.engine, at: $0.at, weekPct: nil) })
+                doc: kept?.doc, projects: Self.projects(d, branches: branches),
+                summaryInfo: kept.map { SummaryInfo(engine: $0.engine, at: $0.at, weekPct: nil, sources: ($0.doc.hosts ?? []).map(shown)) },
+                hostProjects: hostProjects)
         }
     }
 
@@ -420,6 +430,8 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
 
     /// The kept summary of a day or a period: one written by an AI over one made without, the newest of each.
     public func summary(_ key: String) -> KeptSummary? { read(nil) { try kept(key) } }
+
+    public func hostName(_ host: String) -> String { shown(host) }
 
     /// Free text from before counts as none, and so does a summary without cards: a server that had no sessions that
     /// day says nothing about this Mac's (read queue).

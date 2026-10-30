@@ -34,6 +34,8 @@ public struct DaySummary {
         /// Task key → title, for the tasks the sessions are linked to.
         public var tasks: [String: String] = [:]
         public var weekPct: Double?
+        /// The database hosts of the sessions (`SummaryDoc.hosts`).
+        public var hosts: [String] = []
     }
 
     public let store: Store
@@ -66,13 +68,17 @@ public struct DaySummary {
             WHERE kind = 'waiting' AND start < ?2 AND "end" > ?1 GROUP BY session_id
             """, [.real(s), .real(e)]) { waiting[$0.text(0) ?? ""] = $0.real(1) }
         for l in r.sessions where l.workingSec > 0 || l.tokens.total > 0 || waiting[l.id] != nil {
-            let cwd = try store.db.one("SELECT cwd FROM session WHERE id = ?", [.text(l.id)]) { $0.text(0) } ?? nil
+            let (cwd, host) = try store.db.one("SELECT cwd, coalesce(host, ?) FROM session WHERE id = ?", [.text(store.host), .text(l.id)]) {
+                ($0.text(0), $0.text(1) ?? store.host)
+            } ?? (nil, store.host)
+            if !f.hosts.contains(host) { f.hosts.append(host) }
             f.sessions.append(SessionFacts(id: l.id, tool: l.tool, project: l.project, title: l.title, cwd: cwd,
                                            branch: l.gitBranch.flatMap { $0.isEmpty || $0 == "HEAD" ? nil : $0 },
                                            workingSec: l.workingSec, waitingSec: waiting[l.id] ?? 0, tokens: l.tokens.total,
                                            cost: l.cost))
         }
         f.sessions.sort { ($0.workingSec, $0.tokens) > ($1.workingSec, $1.tokens) }
+        f.hosts.sort()
         let index = Dictionary(uniqueKeysWithValues: f.sessions.enumerated().map { ($1.id, $0) })
         try store.db.query("""
             SELECT ts.session_id, t.key, t.title FROM task_session ts JOIN task t ON t.id = ts.task_id
@@ -324,14 +330,11 @@ public struct DaySummary {
     /// or tools; `result` is claude's JSON answer (usage, cost, time), nil for codex. `what` names it in the log.
     public func complete(_ text: String, what: String = "summary") -> (text: String, engine: String, result: JValue?)? {
         let prompt = Array(text.utf8)
-        // A user service runs with systemd's PATH: the CLIs' own install places come after it.
-        let searchPath = ([searchPath] + [".local/bin", ".claude/local", ".npm-global/bin"].map { paths.home + "/" + $0 }
-                          + ["/usr/local/bin", "/opt/homebrew/bin"]).compactMap { $0 }.joined(separator: ":")
         let run = paths.dir + "/run"
         Sys.mkdirs(run)
         switch config.summaryEngine {
         case "claude":
-            guard let claude = Sys.which("claude", path: searchPath) else { log("\(what): claude CLI not found"); return nil }
+            guard let claude = engineCLI else { log("\(what): claude CLI not found"); return nil }
             // --safe-mode: no CLAUDE.md, hooks, plugins, MCP servers or skills of the user; auth works as usual.
             let r = runner([claude, "-p", "--safe-mode", "--model", config.summaryModel, "--tools", "", "--max-turns", "1",
                             "--no-session-persistence", "--output-format", "json"], prompt, run, config.summaryTimeout)
@@ -341,7 +344,7 @@ public struct DaySummary {
             }
             return (String(text), "claude", v)
         case "codex":
-            guard let codex = Sys.which("codex", path: searchPath) else { log("\(what): codex CLI not found"); return nil }
+            guard let codex = engineCLI else { log("\(what): codex CLI not found"); return nil }
             let file = run + "/\(what)-\(Int(Sys.now())).txt"
             defer { Sys.remove(file) }
             // Without the user's config.toml and hooks.
@@ -354,6 +357,26 @@ public struct DaySummary {
             return (String(String(decoding: out, as: UTF8.self).trimmingSpaces), "codex", nil)
         default: return nil
         }
+    }
+
+    /// Where the AI CLIs are looked up. A user service runs with systemd's PATH: the CLIs' own install places come
+    /// after it, nvm's node versions newest first.
+    var cliPath: String {
+        let nvm = paths.home + "/.nvm/versions/node"
+        func version(_ v: String) -> [Int] { v.dropFirst().split(separator: ".").map { Int($0) ?? 0 } }
+        let node = Sys.listDir(nvm).filter { $0.hasPrefix("v") }.sorted { version($1).lexicographicallyPrecedes(version($0)) }
+        return ([searchPath] + [".local/bin", ".claude/local", ".npm-global/bin"].map { paths.home + "/" + $0 }
+                + node.map { nvm + "/" + $0 + "/bin" } + ["/usr/local/bin", "/opt/homebrew/bin"]).compactMap { $0 }.joined(separator: ":")
+    }
+
+    /// The configured AI engine's CLI; nil when the engine is off or its CLI is not installed.
+    public var engineCLI: String? {
+        ["claude", "codex"].contains(config.summaryEngine) ? Sys.which(config.summaryEngine, path: cliPath) : nil
+    }
+
+    /// The engine whose CLI is not found (the summaries are made without AI then); nil when it is there or off.
+    public var missingCLI: String? {
+        ["claude", "codex"].contains(config.summaryEngine) && engineCLI == nil ? config.summaryEngine : nil
     }
 
     // MARK: kept summaries
@@ -391,24 +414,32 @@ public struct DaySummary {
         let f = try facts(day, now: now)
         var doc = DaySummary.plain(f, words), engine = "none"
         if let r = ai(f) { (doc, engine) = r }
+        doc.hosts = f.hosts
         try save(doc, engine: engine, now: now)
         if engine != "none" {
-            // One text per task and day: the points of its cards. It is also the task's worklog text in Jira (unless one
-            // was set by hand), so it is kept short.
             let tasks = Tasks(store: store)
-            var texts: [String: [String]] = [:], order: [String] = []
-            for i in doc.items {
-                guard let key = i.key else { continue }
-                if texts[key] == nil { order.append(key) }
-                texts[key, default: []].append(doc.taskText(i))
-            }
-            for key in order {
+            for (key, text) in DaySummary.taskTexts(doc) {
                 guard let t = try tasks.find(key) else { continue }
-                let text = texts[key]!.joined(separator: "; ")
-                try tasks.setDone(t.id, day: day, text: text.count > 300 ? String(text.prefix(299)) + "…" : text, source: "auto")
+                try tasks.setDone(t.id, day: day, text: text, source: "auto")
             }
         }
         return (f, doc, engine)
+    }
+
+    /// One text per task and day: the points of its cards. It is also the task's worklog text in Jira (unless one was
+    /// set by hand), so it is kept short; cards without points add nothing.
+    static func taskTexts(_ doc: SummaryDoc) -> [(key: String, text: String)] {
+        var texts: [String: [String]] = [:], order: [String] = []
+        for i in doc.items {
+            let t = doc.taskText(i)
+            guard let key = i.key, !t.isEmpty else { continue }
+            if texts[key] == nil { order.append(key) }
+            texts[key, default: []].append(t)
+        }
+        return order.map { k in
+            let t = texts[k]!.joined(separator: "; ")
+            return (k, t.count > 300 ? String(t.prefix(299)) + "…" : t)
+        }
     }
 
     /// The evening message: numbers, what was done, who waited longest, and the ribbon.

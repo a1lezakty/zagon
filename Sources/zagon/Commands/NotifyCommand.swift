@@ -24,9 +24,10 @@ struct NotifyCommand: ParsableCommand {
             store = try common.open()
             channels = config.channels(paths)
         }
-        func summary(_ common: Common, engine: String? = nil) -> DaySummary {
+        func summary(_ common: Common, engine: String? = nil, lang: NotifyLang? = nil) -> DaySummary {
             var s = DaySummary(store: store, config: config, paths: paths, claudeRoot: common.claudeDir)
             if let engine { s.config.summaryEngine = engine }
+            if let lang { s.config.lang = lang }
             s.log = { print($0) }
             return s
         }
@@ -105,13 +106,15 @@ struct SummaryCommand: ParsableCommand {
     @Flag(help: "Period: write the missing days' summaries first (one AI call each).") var yes = false
     @Flag(help: "Print JSON.") var json = false
     @Option(help: "claude | codex | none (default: [summary] engine).") var engine: String?
+    @Option(help: "ru | en: the language it is written in (default: [notify] lang).") var lang: String?
     @Option(help: "Day: write the ribbon PNG here.") var png: String?
     @Flag(help: "Day: also send it to the configured channels.") var send = false
     @Option(help: "Text put before the title when sending.") var titlePrefix = ""
-    @Option(help: "HH:MM or off: when the service writes the day summary ([summary] time in config.toml).") var at: String?
+    @Option(help: "HH:MM or off: when the service writes the day summary ([summary] time in config.toml); show prints it.") var at: String?
 
-    struct Kept: Encodable { var key: String, engine: String, created: Double, doc: SummaryDoc }
-    struct Plan: Encodable { var key: String, from: String, to: String, worked: [String], missing: [String], calls: Int }
+    /// `noCli`: the configured engine whose CLI is not installed here (written without AI).
+    struct Kept: Encodable { var key: String, engine: String, created: Double, doc: SummaryDoc, noCli: String? }
+    struct Plan: Encodable { var key: String, from: String, to: String, worked: [String], missing: [String], calls: Int, noCli: String? }
 
     var isPeriod: Bool { week || month || from != nil || to != nil }
 
@@ -119,7 +122,8 @@ struct SummaryCommand: ParsableCommand {
     static func isDay(_ s: String) -> Bool { Time.dayBounds(s).map { Time.dayString($0.start) == s } ?? false }
 
     func validate() throws {
-        if let at, at != "off", at.split(separator: ":").count != 2 { throw ValidationError("--at takes HH:MM or off") }
+        if let at, at != "off", at != "show", at.split(separator: ":").count != 2 { throw ValidationError("--at takes HH:MM, off or show") }
+        if let lang, !["ru", "en"].contains(lang) { throw ValidationError("--lang takes ru or en") }
         if month {
             if let date, DaySummary.month(date) == nil { throw ValidationError("with --month the date is YYYY-MM") }
         } else if let date, !Self.isDay(date) { throw ValidationError("date must be YYYY-MM-DD") }
@@ -137,23 +141,31 @@ struct SummaryCommand: ParsableCommand {
 
     func run() throws {
         let s = try NotifyCommand.Setup(common)
+        if at == "show" {
+            let now = s.config.summaryAt.map { m in (m < 600 ? "0" : "") + "\(m / 60):" + (m % 60 < 10 ? "0" : "") + "\(m % 60)" } ?? "off"
+            if json { try emit(["at": now]) } else { print("day summary: " + (now == "off" ? "off" : "at \(now)")) }
+            return
+        }
         if let at {
             do { try Settings.setSummaryTime(s.paths, at == "off" ? nil : at) } catch { throw ValidationError("\(error)") }
             if json { try emit(["at": at]) } else { print("day summary: " + (at == "off" ? "off" : "at \(at)")) }
             return
         }
-        let summary = s.summary(common, engine: engine)
+        let summary = s.summary(common, engine: engine, lang: lang.flatMap(NotifyLang.init(rawValue:)))
         let today = Time.dayString(Time.now())
         if !isPeriod {
             let day = date ?? today
             // One made without AI while an AI is configured is written again (the AI may answer now).
             let ai = summary.calls(missing: 0) > 0
-            if !refresh, png == nil, !send, let k = try summary.kept(day), !(ai && k.engine == "none") { return try show(day, k) }
+            if !refresh, png == nil, !send, let k = try summary.kept(day), !(ai && k.engine == "none") {
+                return try show(day, k, noCLI: summary.missingCLI)
+            }
             let t0 = Time.monotonic()
             var m = try summary.message(day)
-            if json { return try show(day, try summary.kept(day)) }
+            if json { return try show(day, try summary.kept(day), noCLI: summary.missingCLI) }
             print(m.text)
             let used = try summary.kept(day)?.engine ?? "?"
+            if used == "none", let e = summary.missingCLI { warn(Self.noCLI(e)) }
             print("\n(\(used), \(Int((Time.monotonic() - t0) * 1000)) ms, picture \(m.photo?.count ?? 0) bytes)")
             if let png, let p = m.photo, !Sys.writeFile(png, p) { throw ValidationError("cannot write \(png)") }
             guard send else { return }
@@ -168,11 +180,11 @@ struct SummaryCommand: ParsableCommand {
         let (worked, missing) = try summary.days(a, b)
         let calls = summary.calls(missing: missing.count)
         if plan {
-            if json { return try emit(Plan(key: key, from: a, to: b, worked: worked, missing: missing, calls: calls)) }
+            if json { return try emit(Plan(key: key, from: a, to: b, worked: worked, missing: missing, calls: calls, noCli: summary.missingCLI)) }
             print("\(a) to \(b): \(worked.count) days with sessions, \(missing.count) without a summary; \(calls) AI calls to write it")
             return
         }
-        if !refresh, let k = try summary.kept(key), !(calls > 0 && k.engine == "none") { return try show(key, k) }
+        if !refresh, let k = try summary.kept(key), !(calls > 0 && k.engine == "none") { return try show(key, k, noCLI: summary.missingCLI) }
         if !missing.isEmpty && calls > 0 && !yes {
             warn("\(missing.count) days have no summary yet: \(calls) AI calls in all. Run again with --yes, or see them with --plan.")
             throw ExitCode(3)
@@ -181,12 +193,16 @@ struct SummaryCommand: ParsableCommand {
         try summary.period(a, b, make: yes || calls == 0, progress: { n, of, day in
             warn("day \(n)/\(of): \(day)")
         })
-        try show(key, try summary.kept(key))
+        try show(key, try summary.kept(key), noCLI: summary.missingCLI)
     }
 
-    func show(_ key: String, _ k: DaySummary.Kept?) throws {
+    static func noCLI(_ engine: String) -> String { "\(engine) CLI not found on \(Ingest.hostName()): written without AI" }
+
+    func show(_ key: String, _ k: DaySummary.Kept?, noCLI: String? = nil) throws {
         guard let k else { throw ValidationError("nothing kept for \(key)") }
-        if json { return try emit(Kept(key: key, engine: k.engine, created: k.created, doc: k.doc)) }
+        let noCLI = k.engine == "none" ? noCLI : nil
+        if json { return try emit(Kept(key: key, engine: k.engine, created: k.created, doc: k.doc, noCli: noCLI)) }
+        if let noCLI { warn(Self.noCLI(noCLI)) }
         print(k.doc.text())
         var t = time_t(k.created.rounded(.down)), v = tm()
         localtime_r(&t, &v)

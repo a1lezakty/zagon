@@ -26,8 +26,8 @@ public struct SummaryVM: Sendable, Equatable {
     public var note: String
     public var markdown: String
 
-    /// `period`: the note gives the day it was written too.
-    public init(_ k: KeptSummary, period: Bool, _ f: Fmt) {
+    /// `period`: the note gives the day it was written too. `sources`: the machines it is made from, as shown.
+    public init(_ k: KeptSummary, period: Bool, sources: [String] = [], _ f: Fmt) {
         let d = k.doc
         let w = Fmt(lang: Lang(rawValue: d.lang) ?? f.lang, timeZone: f.calendar.timeZone, now: f.now)
         overview = d.overview
@@ -43,9 +43,17 @@ public struct SummaryVM: Sendable, Equatable {
         }
         mainLabel = w.t("sum.main"); wasLabel = w.t("sum.was"); doneLabel = w.t("sum.done"); leftLabel = w.t("sum.left")
         let day = f.shortDay(k.at), time = f.time(k.at), name = Self.engineName(k.engine)
-        note = k.engine == "none" ? f.t("sum.noteNone", period ? day + " " + time : time)
-            : period ? f.t("sum.notePeriod", name, day, time) : f.t("day.summaryNote.short", name, time)
+        note = (k.engine == "none" ? period ? f.t("sum.noteNonePeriod", day, time) : f.t("sum.noteNone", time)
+            : period ? f.t("sum.notePeriod", name, day, time) : f.t("day.summaryNote.short", name, time))
+            + (Self.source(sources, f).map { " " + $0 } ?? "")
         markdown = d.text(markdown: true)
+    }
+
+    /// "Based on the sessions of build-box."; nil when it does not say.
+    public static func source(_ sources: [String], _ f: Fmt) -> String? {
+        var names: [String] = []
+        for s in sources where !names.contains(s) { names.append(s) }
+        return names.isEmpty ? nil : f.t("sum.source", names.joined(separator: ", "))
     }
 
     /// claude → Claude, codex → Codex; other names as they are.
@@ -81,7 +89,8 @@ public struct SummaryAnswer: Decodable, Sendable {
     public var engine: String
     public var created: Double
     public var doc: SummaryDoc
-    public var kept: KeptSummary { KeptSummary(doc: doc, engine: engine, at: Date(timeIntervalSince1970: created)) }
+    public var noCli: String?
+    public var kept: KeptSummary { KeptSummary(doc: doc, engine: engine, at: Date(timeIntervalSince1970: created), noCli: noCli) }
 }
 
 /// `zagon summary <period> --plan --json`: the days with sessions, those without a summary, the AI calls it takes.
@@ -92,8 +101,11 @@ public struct SummaryPlan: Decodable, Sendable, Equatable {
     public var worked: [String]
     public var missing: [String]
     public var calls: Int
-    public init(key: String, from: String, to: String, worked: [String], missing: [String], calls: Int) {
+    /// The AI engine whose CLI the source does not have: no calls, the days are made without AI.
+    public var noCli: String?
+    public init(key: String, from: String, to: String, worked: [String], missing: [String], calls: Int, noCli: String? = nil) {
         self.key = key; self.from = from; self.to = to; self.worked = worked; self.missing = missing; self.calls = calls
+        self.noCli = noCli
     }
     /// Ask before the AI calls; without an AI engine (`calls` 0) nothing is asked.
     public var needsConfirm: Bool { !missing.isEmpty && calls > 0 }
@@ -104,6 +116,8 @@ public struct SummaryJob: Sendable {
     public var running = false
     public var progress: String?
     public var error: String?
+    /// What to know about the result (written without AI: no CLI on the source).
+    public var notice: String?
     /// A period's plan waiting for the yes.
     public var confirm: SummaryPlan?
     /// The last answer, shown until the store holds one as new (the next pull brings it).
@@ -125,7 +139,15 @@ public struct SummaryJob: Sendable {
 public struct SummaryState: Sendable {
     public var jobs: [String: SummaryJob] = [:]
     public var atMessage: String?
+    /// `[summary] time` of each checked server as it answered: "HH:MM" or "off".
+    public var serverAt: [String: String] = [:]
     public init() {}
+
+    /// The time all these servers have, "HH:MM" or "off"; nil when one is not known or they differ.
+    public func serverAt(_ hosts: [String]) -> String? {
+        let all = Set(hosts.map { serverAt[$0] })
+        return all.count == 1 ? all.first! : nil
+    }
 }
 
 extension TaskBackend {
@@ -138,9 +160,9 @@ extension TaskBackend {
     }
 
     /// The day's kept summary; written first when there is none (an AI call, up to a couple of minutes), or again
-    /// with `refresh`.
-    public func summary(day: String, refresh: Bool) throws -> KeptSummary {
-        try summaryAnswer(["summary", day, "--json"] + (refresh ? ["--refresh"] : []), timeout: 300).kept
+    /// with `refresh`, in `lang` (ru | en).
+    public func summary(day: String, refresh: Bool, lang: String) throws -> KeptSummary {
+        try summaryAnswer(["summary", day, "--json", "--lang", lang] + (refresh ? ["--refresh"] : []), timeout: 300).kept
     }
 
     public func summaryPlan(from: String, to: String) throws -> SummaryPlan {
@@ -148,11 +170,12 @@ extension TaskBackend {
     }
 
     /// The period written again from its days, after the days without a summary are written one by one.
-    public func writePeriod(_ plan: SummaryPlan, progress: @Sendable (SummaryStep) async -> Void = { _ in }) async throws -> KeptSummary {
+    public func writePeriod(_ plan: SummaryPlan, lang: String,
+                            progress: @Sendable (SummaryStep) async -> Void = { _ in }) async throws -> KeptSummary {
         for (i, d) in plan.missing.enumerated() {
             await progress(.day(i + 1, of: plan.missing.count))
             // A day kept without AI is in `missing` when an AI engine is set: written again.
-            _ = try summary(day: d, refresh: true)
+            _ = try summary(day: d, refresh: true, lang: lang)
         }
         await progress(.period)
         // Days the AI did not answer for stay without its summary: the period is written without writing them again
@@ -161,13 +184,20 @@ extension TaskBackend {
         guard left.isEmpty || plan.calls == 0 else {
             throw Failure(description: "the AI did not answer for \(left.joined(separator: ", ")): try again later")
         }
-        return try summaryAnswer(["summary", "--from", plan.from, "--to", plan.to, "--json", "--refresh"]
+        return try summaryAnswer(["summary", "--from", plan.from, "--to", plan.to, "--json", "--refresh", "--lang", lang]
                                  + (plan.calls == 0 ? ["--yes"] : []), timeout: 300).kept
     }
 
     /// `[summary] time` of the source's config.toml: "HH:MM", nil = off.
     public func setSummaryTime(_ at: String?) throws {
         _ = try call(["summary", "--at", at ?? "off", "--json"], timeout: 60)
+    }
+
+    /// The source's `[summary] time`: "HH:MM" or "off".
+    public func summaryTime() throws -> String {
+        struct At: Decodable { var at: String }
+        let (v, _): (At, String?) = try decode(["summary", "--at", "show", "--json"])
+        return v.at
     }
 }
 

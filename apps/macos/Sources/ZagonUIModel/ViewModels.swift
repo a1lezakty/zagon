@@ -233,6 +233,9 @@ public struct DayVM: Sendable {
     /// "What was done": the written summary as cards, or without one the day's projects from this Mac's data.
     public var summary: SummaryVM?
     public var projects: [DoneProjectVM]
+    /// "Not in the summary: …" and the day's projects of the machines a summary made elsewhere leaves out.
+    public var leftOutNote: String?
+    public var leftOut: [DoneProjectVM] = []
     let data: DayData
     let f: Fmt
 
@@ -260,12 +263,21 @@ public struct DayVM: Sendable {
             longestWait = f.t("day.longestWait", w.0, f.duration(w.1.end.timeIntervalSince(w.1.start)), f.time(w.1.start),
                               f.time(w.1.end))
         }
-        let doc = d.doc
-        summary = d.summaryInfo.flatMap { s in doc.map { SummaryVM(KeptSummary(doc: $0, engine: s.engine, at: s.at), period: false, f) } }
+        let doc = d.doc, sources = d.summaryInfo?.sources ?? []
+        summary = d.summaryInfo.flatMap { s in
+            doc.map { SummaryVM(KeptSummary(doc: $0, engine: s.engine, at: s.at), period: false, sources: sources, f) }
+        }
         summaryNote = d.summaryInfo.flatMap { s in
-            s.weekPct.map { f.t("day.summaryNote", SummaryVM.engineName(s.engine), f.time(s.at), f.decimal($0, digits: 1)) }
+            s.weekPct.map { f.t("day.summaryNote", SummaryVM.engineName(s.engine), f.time(s.at), f.decimal($0, digits: 1))
+                + (SummaryVM.source(sources, f).map { " " + $0 } ?? "") }
         } ?? summary?.note
         projects = d.projects.enumerated().map { DoneProjectVM($1, index: $0, f) }
+        // A summary from one machine says nothing of the sessions on the others (one that does not say: all of them).
+        let left = summary == nil || sources.isEmpty ? [] : d.hostProjects.keys.filter { !sources.contains($0) }.sorted()
+        if !left.isEmpty {
+            leftOutNote = f.t("sum.leftOut", left.joined(separator: ", "))
+            leftOut = left.flatMap { d.hostProjects[$0] ?? [] }.enumerated().map { DoneProjectVM($1, index: $0, f) }
+        }
         isEmpty = d.lanes.isEmpty && d.totals.sessionSec == 0 && d.totals.tokens == 0
     }
 
@@ -297,12 +309,15 @@ public struct DayVM: Sendable {
     public var markdown: String {
         var out = "# \(title)\n\n" + stats.map { "- \($0.label): \($0.value)" }.joined(separator: "\n") + "\n"
         for n in limitNotes { out += "- \(n.text)\n" }
+        func list(_ ps: [DoneProjectVM]) -> String {
+            ps.map { p in "### \(p.name) — \(p.numbers)\n\n" + p.sessions.map { "- " + $0 }.joined(separator: "\n") }
+                .joined(separator: "\n\n") + "\n"
+        }
         if let s = summary {
             out += "\n## \(f.t("day.done"))\n\n" + s.markdown + "\n"
+            if let n = leftOutNote { out += "\n" + n + "\n\n" + list(leftOut) }
         } else if !projects.isEmpty {
-            out += "\n## \(f.t("day.done"))\n\n" + projects.map { p in
-                "### \(p.name) — \(p.numbers)\n\n" + p.sessions.map { "- " + $0 }.joined(separator: "\n")
-            }.joined(separator: "\n\n") + "\n"
+            out += "\n## \(f.t("day.done"))\n\n" + list(projects)
         }
         return out
     }

@@ -48,16 +48,18 @@ extension DaySummary {
         guard !all.isEmpty else { return ([], []) }
         let hours = try Query(store: store).hours(from: from, count: all.count)
         let worked = zip(all, hours).filter { $0.1 > 0 }.map(\.0)
+        let ai = engineCLI != nil
         var missing: [String] = []
         for d in worked {
             let k = try kept(d)
-            if k == nil || (k!.engine == "none" && ["claude", "codex"].contains(config.summaryEngine)) { missing.append(d) }
+            if k == nil || (k!.engine == "none" && ai) { missing.append(d) }
         }
         return (worked, missing)
     }
 
-    /// AI calls `period(make: true)` would make: one per missing day and one for the period (none with the engine off).
-    public func calls(missing: Int) -> Int { ["claude", "codex"].contains(config.summaryEngine) ? missing + 1 : 0 }
+    /// AI calls `period(make: true)` would make: one per missing day and one for the period (none with the engine off
+    /// or its CLI not installed).
+    public func calls(missing: Int) -> Int { engineCLI != nil ? missing + 1 : 0 }
 
     /// The summary of `from...to` from its days' summaries: the missing ones are written first when `make` (one AI
     /// call each, `progress(n, of, day)` before each), else left out. One more AI call turns the days' cards into the
@@ -89,6 +91,8 @@ extension DaySummary {
                 (doc, engine) = (d, r.engine)
             } else { log("period summary: the \(r.engine) answer has no cards") }
         }
+        let hosts = Set(docs.flatMap { $0.hosts ?? [] })
+        doc.hosts = hosts.isEmpty ? nil : hosts.sorted()
         try save(doc, engine: engine, now: now)
         return (doc, engine)
     }

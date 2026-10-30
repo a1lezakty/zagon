@@ -21,11 +21,14 @@ public protocol ZagonDataProvider {
     func limitHistory(_ kind: LimitKind) -> [LimitPoint]
     /// The kept summary of a day or a period (`SummaryDoc.key`); nil = none.
     func summary(_ key: String) -> KeptSummary?
+    /// The name a database host is shown by (`SummaryDoc.hosts`): a server's ssh alias, else this Mac.
+    func hostName(_ host: String) -> String
 }
 
 extension ZagonDataProvider {
     public func limitHistory(_ kind: LimitKind) -> [LimitPoint] { [] }
     public func summary(_ key: String) -> KeptSummary? { nil }
+    public func hostName(_ host: String) -> String { host }
 }
 
 public enum Tool: String, Sendable { case claude, codex }
@@ -139,7 +142,11 @@ public struct KeptSummary: Sendable, Equatable {
     public var doc: SummaryDoc
     public var engine: String
     public var at: Date
-    public init(doc: SummaryDoc, engine: String, at: Date) { self.doc = doc; self.engine = engine; self.at = at }
+    /// The AI engine whose CLI the source does not have (written without AI); only in a CLI's answer.
+    public var noCli: String?
+    public init(doc: SummaryDoc, engine: String, at: Date, noCli: String? = nil) {
+        self.doc = doc; self.engine = engine; self.at = at; self.noCli = noCli
+    }
 }
 
 public struct SummaryInfo: Sendable {
@@ -147,7 +154,11 @@ public struct SummaryInfo: Sendable {
     public var at: Date
     /// Share of the weekly limit the summary cost; nil = unknown.
     public var weekPct: Double?
-    public init(engine: String, at: Date, weekPct: Double?) { self.engine = engine; self.at = at; self.weekPct = weekPct }
+    /// The machines whose sessions it is made from, as shown; empty = it does not say (written before).
+    public var sources: [String]
+    public init(engine: String, at: Date, weekPct: Double?, sources: [String] = []) {
+        self.engine = engine; self.at = at; self.weekPct = weekPct; self.sources = sources
+    }
 }
 
 public struct DayData: Sendable {
@@ -164,12 +175,15 @@ public struct DayData: Sendable {
     public var doc: SummaryDoc?
     public var projects: [DoneProject]
     public var summaryInfo: SummaryInfo?
+    /// `projects` by machine (as shown), for the sessions a summary from other machines leaves out.
+    public var hostProjects: [String: [DoneProject]]
     public init(day: Date, totals: Totals, limitHits: [Interval] = [], weekPctStart: Double? = nil,
                 weekPctEnd: Double? = nil, lanes: [Lane] = [], usage: [UsageDimension: [UsageRow]] = [:],
-                doc: SummaryDoc? = nil, projects: [DoneProject] = [], summaryInfo: SummaryInfo? = nil) {
+                doc: SummaryDoc? = nil, projects: [DoneProject] = [], summaryInfo: SummaryInfo? = nil,
+                hostProjects: [String: [DoneProject]] = [:]) {
         self.day = day; self.totals = totals; self.limitHits = limitHits; self.weekPctStart = weekPctStart
         self.weekPctEnd = weekPctEnd; self.lanes = lanes; self.usage = usage; self.doc = doc
-        self.projects = projects; self.summaryInfo = summaryInfo
+        self.projects = projects; self.summaryInfo = summaryInfo; self.hostProjects = hostProjects
     }
 }
 

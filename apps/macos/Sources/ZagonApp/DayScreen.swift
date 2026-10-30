@@ -58,12 +58,13 @@ struct DayScreen: View {
         }
     }
 
-    /// The day as the store has it, with the summary the CLI just answered when the pull has not brought it yet.
+    /// The day as the store has it, with the summary the CLI just answered when the pull has not brought it yet (one
+    /// without cards says nothing: the Mac's own list stays, as `SummaryJob.newest`).
     var dayData: DayData {
         var d = app.provider.day(app.day)
-        if let r = app.summaryJob(dayKey).result, r.at > d.summaryInfo?.at ?? .distantPast {
+        if let r = app.summaryJob(dayKey).result, !r.doc.items.isEmpty, r.at > d.summaryInfo?.at ?? .distantPast {
             d.doc = r.doc
-            d.summaryInfo = SummaryInfo(engine: r.engine, at: r.at, weekPct: nil)
+            d.summaryInfo = SummaryInfo(engine: r.engine, at: r.at, weekPct: nil, sources: (r.doc.hosts ?? []).map(app.provider.hostName))
         }
         return d
     }
@@ -76,29 +77,18 @@ struct DayScreen: View {
             HStack(alignment: .top, spacing: 10) {
                 H2(text: f.t("day.done"))
                 Spacer(minLength: 0)
-                SummaryButton(from: dayKey, to: dayKey, has: vm.hasSummary)
+                // Days that have not come yet have nothing to sum up.
+                if dayKey <= StoreDataProvider.day(f.now, app.zone) { SummaryButton(from: dayKey, to: dayKey, has: vm.hasSummary) }
             }
             if let s = vm.summary {
                 SummaryCards(vm: s, note: false).id(dayKey)
+                if let n = vm.leftOutNote {
+                    Text(n).font(.system(size: 12)).foregroundColor(Z.muted).fixedSize(horizontal: false, vertical: true)
+                    projects(vm.leftOut)
+                }
             } else {
                 Text(f.t("sum.fallback")).font(.system(size: 12)).foregroundColor(Z.muted)
-                ForEach(vm.projects.indices, id: \.self) { i in
-                    let p = vm.projects[i]
-                    HStack(alignment: .top, spacing: 10) {
-                        Dot(color: Color(hex: p.color)).padding(.top, 6)
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(p.name).font(.system(size: 13, weight: .semibold)).foregroundColor(Z.text)
-                                Spacer(minLength: 0)
-                                Text(p.numbers).font(mono(12)).foregroundColor(Z.secondary)
-                            }
-                            ForEach(p.sessions.indices, id: \.self) { j in
-                                Text(p.sessions[j]).font(.system(size: 13)).foregroundColor(Z.body).lineSpacing(2)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-                }
+                projects(vm.projects)
             }
             if let w = vm.longestWait {
                 Text(w).font(.system(size: 13)).foregroundColor(Color(hex: 0xF0D9D6)).lineSpacing(3)
@@ -111,6 +101,27 @@ struct DayScreen: View {
             }
             if let n = vm.summaryNote {
                 Text(n).font(.system(size: 12)).foregroundColor(Z.muted).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// The day's projects without a written summary: sessions with their time and branch.
+    func projects(_ ps: [DoneProjectVM]) -> some View {
+        ForEach(ps.indices, id: \.self) { i in
+            let p = ps[i]
+            HStack(alignment: .top, spacing: 10) {
+                Dot(color: Color(hex: p.color)).padding(.top, 6)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(p.name).font(.system(size: 13, weight: .semibold)).foregroundColor(Z.text)
+                        Spacer(minLength: 0)
+                        Text(p.numbers).font(mono(12)).foregroundColor(Z.secondary)
+                    }
+                    ForEach(p.sessions.indices, id: \.self) { j in
+                        Text(p.sessions[j]).font(.system(size: 13)).foregroundColor(Z.body).lineSpacing(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
         }
     }

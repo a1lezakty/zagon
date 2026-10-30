@@ -42,6 +42,9 @@ public struct SummaryDoc: Codable, Sendable, Equatable {
     /// The main points of a period; empty for a day.
     public var main: [String] = []
     public var items: [Item]
+    /// The database hosts whose sessions it is made from (a server knows only its own; a Mac also the servers' it
+    /// pulled). nil in summaries from before.
+    public var hosts: [String]?
 
     public init(lang: String, from: String, to: String, overview: String, main: [String] = [], items: [Item]) {
         self.lang = lang; self.from = from; self.to = to; self.overview = overview; self.main = main; self.items = items
@@ -68,7 +71,7 @@ public struct SummaryDoc: Codable, Sendable, Equatable {
 
     /// What a card did, for the task's day ("what was done" of the task, which is also its worklog text in Jira):
     /// the points only; what it was and what is left stay in the summary.
-    public func taskText(_ i: Item) -> String { i.done.joined(separator: "; ") }
+    public func taskText(_ i: Item) -> String { i.done.filter { !$0.isEmpty }.joined(separator: "; ") }
 
     /// The summary as text: `markdown` for files and the Mac's export, plain for messages and the terminal.
     public func text(markdown: Bool = false) -> String {

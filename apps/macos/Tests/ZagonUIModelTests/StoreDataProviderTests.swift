@@ -28,6 +28,8 @@ final class StoreDataProviderTests: XCTestCase {
         XCTAssertEqual(main.waiting.first?.command, "cd '/work/web-app' && claude --resume " + String(video.id.dropFirst(7)))
 
         let day = DayVM(p.day(p.now.addingTimeInterval(-86400)), f)
+        let data = p.day(p.now.addingTimeInterval(-86400))
+        XCTAssertEqual(data.hostProjects, ["laptop": data.projects])  // one machine: its list is the day's
         XCTAssertEqual(day.title, "Thursday, October 29")
         XCTAssertEqual(day.timeline.lanes.count, 7)
         XCTAssertEqual(day.timeline.ticks.first, "08")
