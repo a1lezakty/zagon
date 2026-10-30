@@ -160,11 +160,13 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                         guard self.readyLock.withLock({ self.remote.contains(h) }) else { return nil }
                         return try Remote.apply(data, alias: h, store: self.writer!, localHost: self.localHost, checked: hosts)
                     }) else { continue }
-                    self.readyLock.withLock {
+                    let hint = Remote.hint(server: n.version, app: Remote.appVersion)
+                    let hintChanged = self.readyLock.withLock {
                         for x in n.hosts { self.aliases[x] = h }
-                        self.remoteHints[h] = Remote.hint(server: n.version, app: Remote.appVersion)
+                        defer { self.remoteHints[h] = hint }
+                        return self.remoteHints[h] != hint
                     }
-                    changed = changed || n.sessions + n.days > 0
+                    changed = changed || hintChanged || n.sessions + n.days > 0
                     if n.old { error = Remote.oldZagon }
                 } catch let e {
                     error = Remote.brief(e)

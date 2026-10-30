@@ -7,9 +7,10 @@ version=${1:-0.1.0}
 build=${2:-1}
 
 # One build per architecture, then lipo: `--arch a --arch b` goes through XCBuild, which rejects swiftLanguageMode.
+# The rpath finds Sparkle.framework in Contents/Frameworks.
 slices=()
 for arch in arm64 x86_64; do
-  swift build -c release --product Zagon --triple "$arch-apple-macosx13.0"
+  swift build -c release --product Zagon --triple "$arch-apple-macosx13.0" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
   slices+=("$(swift build -c release --triple "$arch-apple-macosx13.0" --show-bin-path)/Zagon")
 done
 
@@ -19,13 +20,12 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 lipo -create "${slices[@]}" -output "$app/Contents/MacOS/Zagon"
 lipo -info "$app/Contents/MacOS/Zagon"
 
-# Sparkle (universal already) next to the build products → Contents/Frameworks, found there through the rpath. The app
-# is not sandboxed: Sparkle installs without its XPC services, so they are left out.
+# Sparkle (universal already) next to the build products → Contents/Frameworks. The app is not sandboxed: Sparkle
+# installs without its XPC services, so they are left out.
 fw=$app/Contents/Frameworks/Sparkle.framework
 mkdir -p "$app/Contents/Frameworks"
 ditto "$(dirname "${slices[0]}")/Sparkle.framework" "$fw"
 rm -rf "$fw/XPCServices" "$fw/Versions/B/XPCServices"
-install_name_tool -add_rpath @executable_path/../Frameworks "$app/Contents/MacOS/Zagon"
 
 # The CLI the app installs for Claude Code / Codex (hooks, status line, MCP): Contents/Helpers/zagon, universal too.
 cli=()
