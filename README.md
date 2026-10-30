@@ -133,7 +133,7 @@ the app updates itself, the `zagon` inside it included.
 ## Use
 
 ```sh
-zagon today                    # tokens, session time, your time, models, projects, tools, top sessions
+zagon today                    # tokens and $ at API prices, session time, your time, models, projects, tools, top sessions
 zagon day 2026-10-29           # any day
 zagon week --end 2026-10-29    # seven days vs the seven before
 zagon sessions --limit 10      # recent sessions; --day YYYY-MM-DD for one day
@@ -152,6 +152,10 @@ zagon update                   # the latest release (see Update above)
 ```
 
 - Every report takes `--json`.
+- `$` is at API list prices, for comparison: a subscription is billed differently.
+- Tokens and session time count for the directory each request and stretch was in; a session is listed under the one
+  it started in.
+- "You" is your own messages: one that another session types into a worker's terminal (`tmux send-keys`) is not yours.
 - Common options:
   - `--data-dir` (default `$ZAGON_DIR` or `~/.zagon`);
   - `--claude-dir` (default `~/.claude/projects`);

@@ -56,7 +56,8 @@ public struct TurnBuilder: Codable, Sendable {
     public struct Output {
         /// Intervals that will not change any more, with the directory they were worked in.
         public var closed: [(session: String, interval: Interval, cwd: String?)] = []
-        /// User actions: kind `msg` (typed) or `read` (end of the answer the user replied to).
+        /// User actions: kind `msg` (typed), `channel` (sent through a channel plugin) or `read` (end of the answer the
+        /// user replied to).
         public var actions: [(session: String, ts: Timestamp, kind: String)] = []
     }
 
@@ -67,7 +68,7 @@ public struct TurnBuilder: Codable, Sendable {
         cwd![session] = c
     }
 
-    public mutating func user(_ session: String, _ t: Timestamp, cwd c: String? = nil, idleGap: Double,
+    public mutating func user(_ session: String, _ t: Timestamp, cwd c: String? = nil, kind: String = "msg", idleGap: Double,
                               into out: inout Output) {
         // Records far older than the open interval are copies of history (resume/fork): not activity now.
         if let o = open[session], t < o.start - idleGap { return }
@@ -78,7 +79,7 @@ public struct TurnBuilder: Codable, Sendable {
         }
         open[session] = Interval(t, t)
         setCwd(session, c)
-        out.actions.append((session, t, "msg"))
+        out.actions.append((session, t, kind))
     }
 
     /// An agent event. A new directory inside a turn splits the interval at the last event in the old one.

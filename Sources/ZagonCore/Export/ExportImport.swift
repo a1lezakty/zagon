@@ -50,8 +50,8 @@ public final class ExportImport {
             // Its activity lines follow: they are the complete set.
             try db.run("DELETE FROM activity WHERE file_id = ? AND session_id = ?", [.int(file), .text(id)])
         case "activity":
-            try db.run("INSERT INTO activity(file_id, session_id, start, \"end\", kind) VALUES(?, ?, ?, ?, ?)",
-                       [.int(file), s("session_id"), d("start"), d("end"), s("kind")])
+            try db.run("INSERT INTO activity(file_id, session_id, start, \"end\", kind, cwd) VALUES(?, ?, ?, ?, ?, ?)",
+                       [.int(file), s("session_id"), d("start"), d("end"), s("kind"), s("cwd")])
         case "day":
             guard let day = v["day"]?.string, let host = v["host"]?.string, let start = v["start"]?.double,
                   let end = v["end"]?.double else { return }
@@ -63,20 +63,21 @@ public final class ExportImport {
                        [.int(file), .real(start), .real(end)])
             for r in v["rows"]?.array ?? [] {
                 try db.run("""
-                    INSERT INTO day_agg(day, host, tool, project, model, input, output, cache_read, cache_write, requests,
-                      tool_calls, session_sec, user_sec, seq) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    INSERT INTO day_agg(day, host, tool, project, model, input, output, cache_read, cache_write, cache_write_1h,
+                      requests, tool_calls, session_sec, user_sec, seq) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """, [.text(day), .text(host), .text(r["tool"]?.string ?? ""), .text(r["project"]?.string ?? ""),
                           .text(r["model"]?.string ?? ""), .int(i("input", r)), .int(i("output", r)), .int(i("cache_read", r)),
-                          .int(i("cache_write", r)), .int(i("requests", r)), .int(i("tool_calls", r)),
+                          .int(i("cache_write", r)), .int(i("cache_write_1h", r)), .int(i("requests", r)), .int(i("tool_calls", r)),
                           .real(r["session_sec"]?.double ?? 0), .real(r["user_sec"]?.double ?? 0), .int(i("seq"))])
             }
             for r in v["usage"]?.array ?? [] {
                 try db.run("""
-                    INSERT INTO usage_hour(file_id, session_id, agent, hour, model, input, output, cache_read, cache_write,
-                      requests, tool_calls) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                    INSERT INTO usage_hour(file_id, session_id, agent, hour, model, cwd, input, output, cache_read, cache_write,
+                      cache_write_1h, requests, tool_calls) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """, [.int(file), .text(r["session_id"]?.string ?? ""), .text(r["agent"]?.string ?? ""), .int(i("hour", r)),
-                          .text(r["model"]?.string ?? ""), .int(i("input", r)), .int(i("output", r)), .int(i("cache_read", r)),
-                          .int(i("cache_write", r)), .int(i("requests", r)), .int(i("tool_calls", r))])
+                          .text(r["model"]?.string ?? ""), .text(r["cwd"]?.string ?? ""), .int(i("input", r)),
+                          .int(i("output", r)), .int(i("cache_read", r)), .int(i("cache_write", r)),
+                          .int(i("cache_write_1h", r)), .int(i("requests", r)), .int(i("tool_calls", r))])
             }
             for r in v["tools"]?.array ?? [] {
                 try db.run("INSERT INTO tool_use(file_id, session_id, hour, name, n) VALUES(?,?,?,?,?)",

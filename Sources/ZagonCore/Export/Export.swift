@@ -26,12 +26,20 @@ public enum Export {
     }
     struct DayRow: Encodable {
         var tool: String, project: String, model: String
-        var input: Int, output: Int, cacheRead: Int, cacheWrite: Int, requests: Int, toolCalls: Int
+        var input: Int, output: Int, cacheRead: Int, cacheWrite: Int, cacheWrite1h: Int, requests: Int, toolCalls: Int
         var sessionSec: Double, userSec: Double
+        enum CodingKeys: String, CodingKey {
+            case tool, project, model, input, output, cacheRead, cacheWrite, cacheWrite1h = "cache_write_1h", requests, toolCalls
+            case sessionSec, userSec
+        }
     }
     struct UsageRow: Encodable {
-        var sessionId: String, agent: String, hour: Int, model: String
-        var input: Int, output: Int, cacheRead: Int, cacheWrite: Int, requests: Int, toolCalls: Int
+        var sessionId: String, agent: String, hour: Int, model: String, cwd: String
+        var input: Int, output: Int, cacheRead: Int, cacheWrite: Int, cacheWrite1h: Int, requests: Int, toolCalls: Int
+        enum CodingKeys: String, CodingKey {
+            case sessionId, agent, hour, model, cwd, input, output, cacheRead, cacheWrite, cacheWrite1h = "cache_write_1h"
+            case requests, toolCalls
+        }
     }
     struct ToolRow: Encodable { var sessionId: String, hour: Int, name: String, n: Int }
     struct Span: Encodable { var start: Double, end: Double }
@@ -39,7 +47,9 @@ public enum Export {
         var type = "day"; var day: String; var host: String; var seq: Int; var start: Double; var end: Double
         var rows: [DayRow]; var usage: [UsageRow]; var tools: [ToolRow]; var user: [Span]
     }
-    struct ActivityLine: Encodable { var type = "activity"; var sessionId: String, kind: String, start: Double, end: Double }
+    struct ActivityLine: Encodable {
+        var type = "activity"; var sessionId: String, kind: String, start: Double, end: Double, cwd: String?
+    }
     struct LimitLine: Encodable {
         var type = "limit"
         var tool: String, window: String, usedPct: Double, resetsAt: Double?, windowMinutes: Int?, ts: Double
@@ -73,11 +83,20 @@ public enum Export {
         }
         for s in sessions {
             try out(s)
-            var byKind: [String: [Interval]] = [:]
-            try db.query("SELECT kind, start, \"end\" FROM activity WHERE session_id = ? AND kind IN ('working', 'waiting')",
-                         [.text(s.id)]) { byKind[$0.text(0) ?? "", default: []].append(Interval($0.real(1), $0.real(2))) }
-            for (kind, xs) in byKind.sorted(by: { $0.key < $1.key }) {
-                for iv in Intervals.merge(xs) { try out(ActivityLine(sessionId: s.id, kind: kind, start: iv.start, end: iv.end)) }
+            struct KindDir: Hashable, Comparable {
+                var kind: String, cwd: String?
+                static func < (a: Self, b: Self) -> Bool { (a.kind, a.cwd ?? "") < (b.kind, b.cwd ?? "") }
+            }
+            var byKind: [KindDir: [Interval]] = [:]
+            try db.query("""
+                SELECT kind, start, "end", cwd FROM activity WHERE session_id = ? AND kind IN ('working', 'waiting')
+                """, [.text(s.id)]) {
+                byKind[KindDir(kind: $0.text(0) ?? "", cwd: $0.text(3)), default: []].append(Interval($0.real(1), $0.real(2)))
+            }
+            for (k, xs) in byKind.sorted(by: { $0.key < $1.key }) {
+                for iv in Intervals.merge(xs) {
+                    try out(ActivityLine(sessionId: s.id, kind: k.kind, start: iv.start, end: iv.end, cwd: k.cwd))
+                }
             }
         }
 
@@ -87,22 +106,24 @@ public enum Export {
         for (day, host, dseq) in days {
             var rows: [DayRow] = []
             try db.query("""
-                SELECT tool, project, model, input, output, cache_read, cache_write, requests, tool_calls, session_sec, user_sec
+                SELECT tool, project, model, input, output, cache_read, cache_write, cache_write_1h, requests, tool_calls,
+                       session_sec, user_sec
                 FROM day_agg WHERE day = ? AND host = ? ORDER BY tool, project, model
                 """, [.text(day), .text(host)]) { r in
                 rows.append(DayRow(tool: r.text(0) ?? "", project: r.text(1) ?? "", model: r.text(2) ?? "", input: r.int(3),
-                                   output: r.int(4), cacheRead: r.int(5), cacheWrite: r.int(6), requests: r.int(7),
-                                   toolCalls: r.int(8), sessionSec: r.real(9), userSec: r.real(10)))
+                                   output: r.int(4), cacheRead: r.int(5), cacheWrite: r.int(6), cacheWrite1h: r.int(7),
+                                   requests: r.int(8), toolCalls: r.int(9), sessionSec: r.real(10), userSec: r.real(11)))
             }
             guard let (start, end) = Time.dayBounds(day) else { continue }
             var usage: [UsageRow] = [], tools: [ToolRow] = [], user: [Span] = []
             try db.query("""
-                SELECT session_id, agent, hour, model, sum(input), sum(output), sum(cache_read), sum(cache_write), sum(requests),
-                       sum(tool_calls) FROM usage_hour WHERE hour >= ? AND hour < ? GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3, 4
+                SELECT session_id, agent, hour, model, cwd, sum(input), sum(output), sum(cache_read), sum(cache_write),
+                       sum(cache_write_1h), sum(requests), sum(tool_calls)
+                FROM usage_hour WHERE hour >= ? AND hour < ? GROUP BY 1, 2, 3, 4, 5 ORDER BY 1, 2, 3, 4, 5
                 """, [.real(start), .real(end)]) { r in
                 usage.append(UsageRow(sessionId: r.text(0) ?? "", agent: r.text(1) ?? "", hour: r.int(2), model: r.text(3) ?? "",
-                                      input: r.int(4), output: r.int(5), cacheRead: r.int(6), cacheWrite: r.int(7),
-                                      requests: r.int(8), toolCalls: r.int(9)))
+                                      cwd: r.text(4) ?? "", input: r.int(5), output: r.int(6), cacheRead: r.int(7),
+                                      cacheWrite: r.int(8), cacheWrite1h: r.int(9), requests: r.int(10), toolCalls: r.int(11)))
             }
             try db.query("""
                 SELECT session_id, hour, name, sum(n) FROM tool_use WHERE hour >= ? AND hour < ? GROUP BY 1, 2, 3 ORDER BY 1, 2, 3

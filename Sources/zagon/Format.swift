@@ -23,6 +23,9 @@ enum Fmt {
         return c >= w ? String(s.prefix(w)) : s + String(repeating: " ", count: w - c)
     }
     static func lpad(_ s: String, _ w: Int) -> String { s.count >= w ? s : String(repeating: " ", count: w - s.count) + s }
+    /// USD at API prices, as the Mac app shows it.
+    static func usd(_ x: Double) -> String { x > 0 && x < 1 ? "<$1" : "$\(Int(x.rounded()))" }
+    static let apiNote = "at API prices (for comparison; a subscription is billed differently)"
     static func pct(_ a: Int, _ b: Int) -> String { b == 0 ? "" : "\(Int((Double(a) / Double(b) * 100).rounded()))%" }
 
     static let bars: [Character] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
@@ -39,18 +42,21 @@ enum Fmt {
 
     static func day(_ r: DayReport) {
         print("\(r.day)   \(tokenLine(r.tokens))")
+        print("cost       \(usd(r.cost)) \(apiNote)")
         print("time       sessions \(dur(r.sessionSec)) · you \(dur(r.userSec)) · \(r.toolCalls) tool calls")
         print("hours      |\(spark(r.hours))|  0h…23h")
         if !r.models.isEmpty {
             print("models")
             for m in r.models.prefix(6) {
-                print("  \(pad(m.model, 32)) \(lpad(tokens(m.tokens.total), 7)) \(lpad(pct(m.tokens.total, r.tokens.total), 4))")
+                print("  \(pad(m.model, 32)) \(lpad(tokens(m.tokens.total), 7)) \(lpad(pct(m.tokens.total, r.tokens.total), 4))"
+                      + " \(lpad(usd(m.cost), 7))")
             }
         }
         if !r.projects.isEmpty {
             print("projects")
             for p in r.projects.prefix(8) {
-                print("  \(pad(p.project.isEmpty ? "?" : p.project, 32)) \(lpad(tokens(p.tokens.total), 7)) \(lpad(dur(p.sessionSec), 8))")
+                print("  \(pad(p.project.isEmpty ? "?" : p.project, 32)) \(lpad(tokens(p.tokens.total), 7)) \(lpad(dur(p.sessionSec), 8))"
+                      + " \(lpad(usd(p.cost), 7))")
             }
         }
         if !r.tools.isEmpty {
@@ -67,30 +73,33 @@ enum Fmt {
             let id = s.id.split(separator: ":").last.map { String($0.prefix(8)) } ?? s.id
             let title = s.title ?? s.project ?? "-"
             print("  \(id)  \(pad(title, 40)) \(pad(s.project ?? "", 16)) \(lpad(tokens(s.tokens.total), 7)) \(lpad(dur(s.workingSec), 8))"
-                  + (s.status.map { "  \($0)" } ?? "") + (s.statusDetail.map { " (\($0))" } ?? ""))
+                  + " \(lpad(usd(s.cost), 7))" + (s.status.map { "  \($0)" } ?? "") + (s.statusDetail.map { " (\($0))" } ?? ""))
         }
     }
 
     static func sessions(_ xs: [SessionLine]) {
         if xs.isEmpty { print("no sessions"); return }
-        print("  id        \(pad("title", 40)) \(pad("project", 16)) \(lpad("tokens", 7)) \(lpad("working", 8))")
+        print("  id        \(pad("title", 40)) \(pad("project", 16)) \(lpad("tokens", 7)) \(lpad("working", 8)) \(lpad("$", 7))")
         sessionRows(xs)
+        print("$ \(apiNote)")
     }
 
     static func week(_ r: WeekReport) {
         print("\(r.from) … \(r.to)   \(tokenLine(r.tokens))")
+        print("cost       \(usd(r.cost)) \(apiNote); previous 7 days \(usd(r.previousCost))")
         print("time       sessions \(dur(r.sessionSec)) · you \(dur(r.userSec))   (previous 7 days: \(tokens(r.previous.total)) tokens, "
               + "sessions \(dur(r.previousSessionSec)), you \(dur(r.previousUserSec)))")
         let m = r.days.map { $0.tokens.total }.max() ?? 0
         for d in r.days {
             let w = m == 0 ? 0 : Int((Double(d.tokens.total) / Double(m) * 30).rounded())
             print("  \(d.day)  \(pad(String(repeating: "█", count: w), 30)) \(lpad(tokens(d.tokens.total), 7))"
-                  + "  sessions \(lpad(dur(d.sessionSec), 7))  you \(lpad(dur(d.userSec), 7))")
+                  + "  sessions \(lpad(dur(d.sessionSec), 7))  you \(lpad(dur(d.userSec), 7))  \(lpad(usd(d.cost), 7))")
         }
         if !r.projects.isEmpty {
             print("top projects")
             for p in r.projects.prefix(5) {
-                print("  \(pad(p.project.isEmpty ? "?" : p.project, 32)) \(lpad(tokens(p.tokens.total), 7)) \(lpad(dur(p.sessionSec), 8))")
+                print("  \(pad(p.project.isEmpty ? "?" : p.project, 32)) \(lpad(tokens(p.tokens.total), 7)) \(lpad(dur(p.sessionSec), 8))"
+                      + " \(lpad(usd(p.cost), 7))")
             }
         }
     }

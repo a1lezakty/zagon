@@ -197,7 +197,8 @@ public struct CodexParser: LineParser {
         guard let u = inc, u[0] + u[3] + u[2] > 0 else { return }
         // OpenAI semantics: cached (and cache-write) tokens are part of input_tokens, reasoning part of output.
         out.usage.append(UsageRecord(sessionId: sessionId, agent: st.agent, ts: ts, model: st.model ?? "unknown",
-                                     input: max(0, u[0] - u[1] - u[2]), output: u[3], cacheRead: u[1], cacheWrite: u[2]))
+                                     input: max(0, u[0] - u[1] - u[2]), output: u[3], cacheRead: u[1], cacheWrite: u[2],
+                                     cwd: st.cwd))
     }
 
     mutating func limits(_ rl: JValue, _ ts: Timestamp, _ out: inout ParseOutput) {

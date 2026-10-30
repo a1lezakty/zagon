@@ -10,10 +10,11 @@ All timestamps are `Timestamp` = `Double` seconds since the Unix epoch (UTC). Se
 | Type | Meaning | Notes |
 |---|---|---|
 | `SessionMeta` | partial session description | `nil` = unknown here, never "clear". Title replaces the stored one only if `titleRank` >= stored (`TitleRank`: ai-title 1, agent-name 2, custom-title / external 3). `archived` (Codex `archived_sessions/`, `threads.archived`): archived sessions stay in history (days, weeks, ranges) but are left out of the live session list; `nil` keeps the stored value. |
-| `UsageRecord` | tokens of one API request | `messageId` set → dedup ledger: the **last** record with that id wins, a later copy of the id in another file is ignored. `messageId` nil → added as is (source emits per-request deltas, e.g. Codex `last_token_usage`). `agent` = sub-agent label, `""` for the main thread. |
+| `UsageRecord` | tokens of one API request | `messageId` set → dedup ledger: the **last** record with that id wins, a later copy of the id in another file is ignored. `messageId` nil → added as is (source emits per-request deltas, e.g. Codex `last_token_usage`). `agent` = sub-agent label, `""` for the main thread. `cacheWrite1h` = the part of `cacheWrite` kept for an hour (Claude `cache_creation.ephemeral_1h_input_tokens`; priced 2× input, the rest 1.25×). `cwd` = the directory of the request (Claude: the record's `cwd`; Codex: the turn's), the project its tokens count for. |
 | `ToolCall` | one tool invocation | `callId` (`toolu_…`) drops duplicates of rewritten records; counted per hour and name. |
 | `ActivityEvent` | the agent did something at `ts` | feeds `working` intervals; `cwd` = the record's working directory (Claude: every transcript line, so sub-agents get their own; Codex: `session_meta.cwd`, then `turn_context.cwd`) |
-| `UserMessage` | the human typed a message at `ts` | starts a turn, counts as a user action; `cwd` as for events; parsers always pass `text`: Ingest puts it into the contentless FTS index (only with `index_prompts`) and extracts task keys from it; it is never stored |
+| `UserMessage` | the human typed a message at `ts` | starts a turn, counts as a user action (unless a `Relay` says another session typed it, see Time rules); `cwd` as for events; parsers always pass `text`: Ingest puts it into the contentless FTS index (only with `index_prompts`) and extracts task keys from it; it is never stored. Claude: `user` records typed by the human, messages through a channel plugin (`origin.kind = channel`, Telegram…; `channel = true`: always the human's) and messages sent while the agent was working (`attachment` `queued_command`, `commandMode = prompt`, origin `human` / `channel`; they never become `user` records) |
+| `Relay` | the agent typed into a terminal at `ts` | Claude `Bash` tool calls with `tmux send-keys` / `paste-buffer`; `targets` = the session names of their `-t` (lower case, `=`, `:window`, `.pane` cut off), `""` = no `-t` or not a plain name (`$s`, `%3`). Only the targets are kept, never the command |
 | `LimitSnapshot` | subscription limit reading | Claude windows `five_hour` / `seven_day`. Codex: the main limit (`rate_limits.limit_id` absent or `codex`) as `primary` (300 min ≈ 5 h) / `secondary` (10 080 min = week); any other `limit_id` (e.g. `premium`) as `<limit_id>:primary` / `<limit_id>:secondary`. Ingest stores them as readings (`limit_snapshot`, key tool + window + ts), not as file contributions. |
 
 ## Parsers (`Model/Parsing.swift`)
@@ -59,15 +60,25 @@ hooks, status line and importers:
 
 Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIATE).
 
-## Tables (schema v4, `Store/Schema.swift`; migrations are append-only)
+## Tables (schema v5, `Store/Schema.swift`; migrations are append-only)
 
-- `source_file` — per-file tail state; `usage_hour`, `tool_use`, `activity`, `user_action`, `fts_doc`, `msg` carry
-  `file_id`, so one file's contribution can be retracted.
-- `msg` — dedup ledger (64-bit FNV-1a hash of `messageId` → owner file, hour, model, counted tokens, tool call ids);
-  pruned after `dedup_days` (default 40, longer than Claude Code's 30-day cleanup).
+- `source_file` — per-file tail state; `usage_hour`, `tool_use`, `activity`, `user_action`, `fts_doc`, `msg`,
+  `relay` carry `file_id`, so one file's contribution can be retracted. `recount` (v5) = 1: count the file again from
+  byte 0 (the v5 migration sets it on every file to fill `cwd` and the 1-hour split). Ingest does that when it next
+  reads the file; after a full pass, a due file whose original is gone is recounted from its archive copy
+  (`meta archive:file:<id>`, unpacked to `<database>.recount` and removed) when the copy holds at least the counted
+  offset, else its rows stay as they were (`cwd` '', no 1-hour split): history is never lost.
+- `usage_hour` (v5) — PK `(file_id, session_id, agent, hour, model, cwd)`; `cwd` '' = not known (rows from before v5
+  that could not be recounted, imports); `cache_write_1h` is part of `cache_write`.
+- `msg` — dedup ledger (64-bit FNV-1a hash of `messageId` → owner file, hour, model, cwd, counted tokens with
+  `cache_write_1h`, tool call ids); pruned after `dedup_days` (default 40, longer than Claude Code's 30-day cleanup).
 - `session` — rolled up from files; `status`/`status_at` belong to hooks and are never touched by ingest;
-  `archived` (v2) NULL = unknown, 0/1 from `SessionMeta.archived`.
-- `activity(kind = working | waiting)`, `user_action(kind = msg | read)`, `user_activity` (derived).
+  `archived` (v2) NULL = unknown, 0/1 from `SessionMeta.archived`. `cwd`/`project` = the directory the session
+  started in (its earliest `activity.cwd`; a later `cd` does not move it), else the last one a parser reported.
+  `user_msgs` = the human's messages (`msg` not relayed, plus `channel`).
+- `activity(kind = working | waiting)`, `user_action(kind = msg | channel | read)`, `user_activity` (derived: your
+  time, see Time rules).
+- `relay(file_id, session_id, ts, target)` (v5) — one row per `Relay` target.
   `activity.cwd` (v4): the directory the interval was worked in; a new directory inside a turn splits the interval
   at the last event in the old one (no time lost); hook `waiting` intervals take the hook's cwd; NULL = unknown.
 - `task_session(task_id, session_id, how, start, end)` (v4): the linked period of a session, `[start, end)`;
@@ -80,7 +91,10 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
 - `day_agg` — per local day and host, built only from sessions of that host (`coalesce(session.host, host)`), so
   usage, tool calls, activity and user actions imported from other machines never count twice: rows with `model <> ''` hold tokens; `model = ''` rows hold `session_sec` per
   (tool, project); the `tool = project = model = ''` row holds the day totals `session_sec` and `user_sec`. `seq`
-  = change counter.
+  = change counter. The project of tokens is the one of each request's `usage_hour.cwd`, of session time the one of
+  each interval's `activity.cwd` (union per session and project, so parallel sub-agents in two directories count in
+  both; the totals row stays the union per session); unknown → the session's project. Tool calls go to the session's
+  project. `cache_write_1h` (v5) as in `usage_hour`.
 - `limit_snapshot`, `task*`, `worklog_plan`, `summary`, `handoff`, `fts` (contentless FTS5) + `fts_doc`.
 
 ## Time rules
@@ -89,7 +103,18 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   message; a silence longer than `session_gap` (default 30 min) between agent events ends the interval. Computed
   per file, then merged per session (parallel sub-agents are not double counted).
 - user time: user actions (typed messages, plus the end of the answer the user replied to within `idle_gap`)
-  across all sessions, chained when the gap is at most `idle_gap` (default 20 min).
+  across all sessions, chained when the gap is at most `idle_gap` (default 20 min). A message one session sends to
+  another (a worker driven over `tmux send-keys`) is not yours (`UserTime.humanActions`): a typed `msg` in session W at
+  `t` is relayed when another session has a `relay` in [t − 30 s, t + 5 s] (on this server's 26–30.10 logs every
+  worker message came 0–26 s after the driver's call). When W has a name (a Claude title of rank ≥ agent name:
+  `claude --name`, `/rename`), only a relay whose target is that name counts (letters and digits, lower case; equal
+  or one a prefix of the other, so `-t docs` matches `docs site`); a relay without a plain target counts for any
+  session. The `read` before a relayed message goes with it; it still starts a turn (working time). Limits: a human
+  typing into a terminal within those 35 s after another session's unnamed (`$s`) or matching send-keys is taken for
+  a relay; a driver that types some other way (a wrapper script that hides `send-keys` from the Bash command, `screen`,
+  another program) or whose relay is longer than 30 s before the message (a long `sleep` first) is not seen, so its
+  messages stay yours; a worker renamed to something unlike its tmux target only matches relays without a target.
+  Channel messages are always yours.
 - days are local days in the top-level `timezone` of config.toml (the older `[notify] timezone` is still read),
   else `TZ` / `/etc/localtime`; every command applies it at start (`Settings.applyTimezone`). The zone the day rows
   were built in is kept in `meta.tz`; a scan in another zone rebuilds all days of the host
@@ -107,18 +132,20 @@ NDJSON on stdout, keys in snake_case, one consistent read snapshot; the Mac app 
   predates the releases (it has no `zagon update`);
 - `{"type":"session", id, tool, host, project, cwd, git_branch, title, model, started_at, last_at, status, status_at,
   status_detail, user_msgs, archived, seq}` for every session with `seq > since` (missing keys = NULL), each followed
-  by `{"type":"activity","session_id","kind","start","end"}` lines — the session's complete `working` / `waiting`
-  intervals, merged per kind (no overlaps inside a kind): on a `session` line the client drops every interval it
-  holds for that session and stores the ones that follow (none = the session has none);
+  by `{"type":"activity","session_id","kind","start","end","cwd"}` lines — the session's complete `working` /
+  `waiting` intervals, merged per kind and directory (no overlaps inside one; `cwd` missing = not known): on a
+  `session` line the client drops every interval it holds for that session and stores the ones that follow (none =
+  the session has none);
 - `{"type":"day","day","host","seq","start","end","rows":[…],"usage":[…],"tools":[…],"user":[…]}` for every
   (local day, host) with a `day_agg` row changed after `since`; `start`/`end` are the server's local day bounds in
   epoch seconds (use them, not the client's time zone). Everything in it replaces what the client holds for that
   day and host:
-  - `rows`: the complete `day_agg` rows `{tool, project, model, input, output, cache_read, cache_write, requests,
-    tool_calls, session_sec, user_sec}` (meaning as in `day_agg` above; a day emptied by a retraction comes with one
+  - `rows`: the complete `day_agg` rows `{tool, project, model, input, output, cache_read, cache_write, cache_write_1h,
+    requests, tool_calls, session_sec, user_sec}` (meaning as in `day_agg` above; a day emptied by a retraction comes with one
     all-zero totals row);
-  - `usage`: `usage_hour` of the day summed over files, one row per `{session_id, agent, hour, model}` with `input,
-    output, cache_read, cache_write, requests, tool_calls` (`hour` = UTC hour start, `agent` = "" for the main thread);
+  - `usage`: `usage_hour` of the day summed over files, one row per `{session_id, agent, hour, model, cwd}` with `input,
+    output, cache_read, cache_write, cache_write_1h, requests, tool_calls` (`hour` = UTC hour start, `agent` = "" for
+    the main thread, `cwd` "" = not known; an export from before schema v5 has neither key: read them as "" and 0);
   - `tools`: `tool_use` of the day, one row per `{session_id, hour, name}` with `n`;
   - `user`: your-time intervals `{start, end}` clipped to the day (a stretch over midnight comes in both days);
   - the day's totals by agent, tool, hour, session or model are sums over `usage` / `tools`; they equal `rows`;

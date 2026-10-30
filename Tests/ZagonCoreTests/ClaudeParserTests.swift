@@ -30,14 +30,16 @@ func js(_ s: String) -> String {
     return o + "\""
 }
 
+/// `command` = the shell command of every tool call (a Bash `input.command`).
 func assistantLine(_ t: Timestamp, id: String, model: String = "claude-opus-4-1", input: Int = 0, output: Int = 0,
-                   cacheRead: Int = 0, cacheWrite: Int = 0, tools: [(id: String, name: String)] = [], session: String = "S",
-                   cwd: String = "/w/alpha", branch: String = "main", usage: Bool = true) -> String {
+                   cacheRead: Int = 0, cacheWrite: Int = 0, cacheWrite1h: Int = 0, tools: [(id: String, name: String)] = [],
+                   command: String = "ls \"a b\" ]}", session: String = "S", cwd: String = "/w/alpha", branch: String = "main",
+                   usage: Bool = true) -> String {
     var content = [#"{"type":"text","text":"done {\"x\":[1,\"]\"]} \\ ok"}"#]
     for t in tools {
-        content.append(#"{"type":"tool_use","id":"\#(t.id)","name":"\#(t.name)","input":{"command":"ls \"a b\" ]}","opts":{"k":[1,{"z":"}"}]}}}"#)
+        content.append(#"{"type":"tool_use","id":"\#(t.id)","name":"\#(t.name)","input":{"command":\#(js(command)),"opts":{"k":[1,{"z":"}"}]}}}"#)
     }
-    let u = usage ? #","usage":{"input_tokens":\#(input),"cache_creation_input_tokens":\#(cacheWrite),"cache_read_input_tokens":\#(cacheRead),"cache_creation":{"ephemeral_5m_input_tokens":\#(cacheWrite),"ephemeral_1h_input_tokens":0},"output_tokens":\#(output),"service_tier":"standard","server_tool_use":{"web_search_requests":0}}"# : ""
+    let u = usage ? #","usage":{"input_tokens":\#(input),"cache_creation_input_tokens":\#(cacheWrite),"cache_read_input_tokens":\#(cacheRead),"cache_creation":{"ephemeral_5m_input_tokens":\#(cacheWrite - cacheWrite1h),"ephemeral_1h_input_tokens":\#(cacheWrite1h)},"output_tokens":\#(output),"service_tier":"standard","server_tool_use":{"web_search_requests":0}}"# : ""
     return #"{"parentUuid":"00000000-0000-4000-8000-000000000001","isSidechain":false,"userType":"external","cwd":\#(js(cwd)),"sessionId":"\#(session)","version":"2.0.14","gitBranch":\#(js(branch)),"message":{"id":"\#(id)","type":"message","role":"assistant","model":"\#(model)","content":[\#(content.joined(separator: ","))],"stop_reason":null,"stop_sequence":null\#(u)},"requestId":"req_1","type":"assistant","uuid":"00000000-0000-4000-8000-000000000002","timestamp":"\#(iso(t))"}"#
 }
 
@@ -70,7 +72,7 @@ func parse(_ lines: [String], agent: String = "", indexPrompts: Bool = true) -> 
                                        cacheWrite: 44, tools: [("toolu_a", "Bash"), ("toolu_b", "Read")])])
         #expect(out.badLines == 0)
         #expect(out.usage == [UsageRecord(sessionId: "claude:S", agent: "", ts: T0, model: "claude-sonnet-4-5", input: 11,
-                                          output: 22, cacheRead: 33, cacheWrite: 44, messageId: "msg_1")])
+                                          output: 22, cacheRead: 33, cacheWrite: 44, messageId: "msg_1", cwd: "/w/alpha")])
         #expect(out.tools == [ToolCall(sessionId: "claude:S", ts: T0, name: "Bash", callId: "toolu_a"),
                               ToolCall(sessionId: "claude:S", ts: T0, name: "Read", callId: "toolu_b")])
         #expect(out.events == [ActivityEvent(sessionId: "claude:S", ts: T0, cwd: "/w/alpha")])

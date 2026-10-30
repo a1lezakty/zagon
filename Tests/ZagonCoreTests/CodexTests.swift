@@ -95,7 +95,7 @@ private func byModel(_ u: [UsageRecord]) -> [String: Int] { u.reduce(into: [:]) 
         let (out, _) = parse(text)
         #expect(out.usage.map(\.total) == [100, 200])
         #expect(out.usage[0] == UsageRecord(sessionId: "codex:s1", ts: 1_793_354_402, model: "gpt-5", input: 50, output: 10,
-                                            cacheRead: 40))
+                                            cacheRead: 40, cwd: "/w"))
         #expect(out.meta == [SessionMeta(id: "codex:s1", tool: .codex, project: "w", cwd: "/w", gitBranch: "PROJ-1-x"),
                              SessionMeta(id: "codex:s1", tool: .codex, model: "gpt-5")])
     }

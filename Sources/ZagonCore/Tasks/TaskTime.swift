@@ -141,11 +141,12 @@ public enum TaskTime {
         }
         var toolWeight: [String: Double] = [:], taskToolWeight: [Int?: [String: Double]] = [:]
         try db.query("""
-            SELECT u.session_id, u.hour, sum(u.input), sum(u.output), sum(u.cache_read), sum(u.cache_write), sum(u.requests),
-                   coalesce(s.tool, '') FROM usage_hour u LEFT JOIN session s ON s.id = u.session_id
+            SELECT u.session_id, u.hour, sum(u.input), sum(u.output), sum(u.cache_read), sum(u.cache_write),
+                   sum(u.cache_write_1h), sum(u.requests), coalesce(s.tool, '') FROM usage_hour u
+            LEFT JOIN session s ON s.id = u.session_id
             WHERE u.hour >= ? AND u.hour < ? GROUP BY u.session_id, u.hour
             """, [.real(from), .real(to)]) { r in
-            let sid = r.text(0) ?? "", hour = r.real(1), tl = tool[sid] ?? r.text(7) ?? ""
+            let sid = r.text(0) ?? "", hour = r.real(1), tl = tool[sid] ?? r.text(8) ?? ""
             var tk = TokenTotals(); tk.add(r, from: 2)
             let inHour = (merged[sid] ?? []).compactMap { iv -> Interval? in
                 let x = Interval(max(hour, iv.start), min(hour + 3600, iv.end)); return x.end > x.start ? x : nil
@@ -181,6 +182,7 @@ public enum TaskTime {
         var o = TokenTotals()
         o.input = Int((Double(t.input) * x).rounded()); o.output = Int((Double(t.output) * x).rounded())
         o.cacheRead = Int((Double(t.cacheRead) * x).rounded()); o.cacheWrite = Int((Double(t.cacheWrite) * x).rounded())
+        o.cacheWrite1h = Int((Double(t.cacheWrite1h) * x).rounded())
         o.requests = Int((Double(t.requests) * x).rounded())
         return o
     }

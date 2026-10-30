@@ -1,6 +1,40 @@
 /// Schema migrations; `PRAGMA user_version` = number of applied entries. Append only, never edit a shipped entry.
 enum Schema {
-    static let migrations: [String] = [v1, v2, v3, v4]
+    static let migrations: [String] = [v1, v2, v3, v4, v5]
+
+    /// v5: cache writes kept for an hour (`cache_write_1h`, part of `cache_write`: priced 2x input instead of 1.25x);
+    /// usage by the working directory of each request; points where an agent typed into a terminal (`relay`). Every
+    /// tracked file is recounted once (`recount`) to fill them: from the original, else from its archive copy, else
+    /// its rows stay as they are (`cwd` '', no 1-hour split).
+    static let v5 = """
+    CREATE TABLE usage_hour_v5(
+      file_id INTEGER NOT NULL, session_id TEXT NOT NULL, agent TEXT NOT NULL, hour INTEGER NOT NULL, model TEXT NOT NULL,
+      cwd TEXT NOT NULL DEFAULT '',
+      input INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0, cache_read INTEGER NOT NULL DEFAULT 0,
+      cache_write INTEGER NOT NULL DEFAULT 0, cache_write_1h INTEGER NOT NULL DEFAULT 0,
+      requests INTEGER NOT NULL DEFAULT 0, tool_calls INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(file_id, session_id, agent, hour, model, cwd)) WITHOUT ROWID;
+    INSERT INTO usage_hour_v5(file_id, session_id, agent, hour, model, input, output, cache_read, cache_write, requests,
+      tool_calls)
+      SELECT file_id, session_id, agent, hour, model, input, output, cache_read, cache_write, requests, tool_calls
+      FROM usage_hour;
+    DROP TABLE usage_hour;
+    ALTER TABLE usage_hour_v5 RENAME TO usage_hour;
+    CREATE INDEX usage_hour_hour ON usage_hour(hour);
+
+    ALTER TABLE msg ADD COLUMN cache_write_1h INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE msg ADD COLUMN cwd TEXT;
+    ALTER TABLE day_agg ADD COLUMN cache_write_1h INTEGER NOT NULL DEFAULT 0;
+
+    -- An agent typed into a terminal at ts (`tmux send-keys` to target, '' = unknown target): a message in another
+    -- session right after it is not the human's.
+    CREATE TABLE relay(file_id INTEGER, session_id TEXT NOT NULL, ts REAL NOT NULL, target TEXT NOT NULL);
+    CREATE INDEX relay_ts ON relay(ts);
+    CREATE INDEX relay_file ON relay(file_id);
+
+    ALTER TABLE source_file ADD COLUMN recount INTEGER NOT NULL DEFAULT 0;
+    UPDATE source_file SET recount = 1 WHERE tool <> 'export';
+    """
 
     /// v4: working directory per activity interval; a task link can cover a period of a session; task keys from
     /// typed messages (key only, never the text).

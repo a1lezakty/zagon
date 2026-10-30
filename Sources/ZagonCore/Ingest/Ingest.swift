@@ -38,6 +38,8 @@ public struct IngestOptions: Sendable {
 
 public struct IngestStats: Sendable, Codable {
     public var filesSeen = 0, filesRead = 0, bytes = 0, lines = 0, badLines = 0, resets = 0, moves = 0, usageRecords = 0
+    /// Files recounted from their archive copy (the original is gone; schema v5 recount).
+    public var fromArchive = 0
     public var seconds = 0.0, parseSeconds = 0.0, applySeconds = 0.0, deriveSeconds = 0.0
 }
 
@@ -85,6 +87,7 @@ public final class Ingest {
                 }
             }
         }
+        try recountGone()
         try finish()
         stats.seconds = Time.monotonic() - t0
         return stats
@@ -122,6 +125,8 @@ public final class Ingest {
         var agent = ""
         var badLines = 0
         var resets = 0
+        /// Count the file again from byte 0 (schema v5: fills the request directory and the 1-hour cache split).
+        var recount = false
     }
 
     public func ingest(path: String, relative: String, source: SourceSpec) throws {
@@ -150,10 +155,9 @@ public final class Ingest {
             if let row = known {
                 f = row
                 let replaced = f.inode != ino || size < f.offset || !tailMatches(fd, f)
-                if replaced {
-                    try retract(f.id)
-                    f.offset = 0; f.tail = []; f.parserState = nil; f.activityState = nil; f.sessionId = nil
-                    f.agent = ""; f.resets += 1; stats.resets += 1
+                if replaced || f.recount {
+                    try restart(&f)
+                    if replaced { f.resets += 1; stats.resets += 1 }
                 } else if size == f.offset {
                     return
                 }
@@ -165,23 +169,73 @@ public final class Ingest {
             try read(fd: fd, file: &f, path: path, relative: relative, source: source)
             // A file quiet for an hour is read once (full pass, catch-up): drop it from the page cache.
             if mtime < Time.now() - 3600 { z_drop_cache(fd) }
-            try db.run("""
-                UPDATE source_file SET inode=?, size=?, offset=?, mtime=?, tail=?, parser_state=?, activity_state=?,
-                  session_id=?, agent=?, bad_lines=?, resets=? WHERE id=?
-                """, [.int(Int64(f.inode)), .int(Int64(f.size)), .int(Int64(f.offset)), .of(f.mtime), .blob(f.tail),
-                      .of(f.parserState), .of(f.activityState), .of(f.sessionId), .text(f.agent),
-                      .int(Int64(f.badLines)), .int(Int64(f.resets)), .int(f.id)])
+            try save(f)
+        }
+    }
+
+    func save(_ f: FileRow) throws {
+        try db.run("""
+            UPDATE source_file SET inode=?, size=?, offset=?, mtime=?, tail=?, parser_state=?, activity_state=?,
+              session_id=?, agent=?, bad_lines=?, resets=?, recount=0 WHERE id=?
+            """, [.int(Int64(f.inode)), .int(Int64(f.size)), .int(Int64(f.offset)), .of(f.mtime), .blob(f.tail),
+                  .of(f.parserState), .of(f.activityState), .of(f.sessionId), .text(f.agent),
+                  .int(Int64(f.badLines)), .int(Int64(f.resets)), .int(f.id)])
+    }
+
+    /// Takes back everything the file contributed; it is read again from byte 0.
+    func restart(_ f: inout FileRow) throws {
+        try retract(f.id)
+        f.offset = 0; f.tail = []; f.parserState = nil; f.activityState = nil; f.sessionId = nil; f.agent = ""
+        f.badLines = 0
+    }
+
+    /// Files still due for the v5 recount after a pass whose original is gone (Claude Code / Codex dropped it): counted
+    /// again from the archive copy when it holds at least what was counted, else their rows stay as they are. A file
+    /// that exists but was not walked (another root this time) waits for a pass that sees it.
+    func recountGone() throws {
+        var due: [(id: Int64, path: String)] = []
+        try db.query("SELECT id, path FROM source_file WHERE recount = 1") { if let p = $0.text(1) { due.append(($0.int64(0), p)) } }
+        for d in due where !Sys.exists(d.path) {
+            try db.transaction {
+                guard var f = try loadFile(d.path) else { return }
+                defer { _ = try? db.run("UPDATE source_file SET recount = 0 WHERE id = ?", [.int(f.id)]) }
+                guard let src = sources.first(where: { d.path.hasPrefix($0.root + "/") }),
+                      case let rel = String(d.path.dropFirst(src.root.count + 1)), src.accepts(rel),
+                      let copy = try db.one("SELECT value FROM meta WHERE key = ?", [.text("archive:file:\(f.id)")], { $0.text(0) }) ?? nil,
+                      let n = Archive.contentSize(copy), n >= f.offset else { return }
+                // Unpacked next to the database (the copy's protection, not /tmp), read like the original, dropped.
+                let tmp = (try db.one("SELECT file FROM pragma_database_list WHERE name = 'main'") { $0.text(0) } ?? nil)
+                    .flatMap { $0.isEmpty ? nil : $0 } .map { $0 + ".recount" } ?? copy + ".recount"
+                let out = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0o600)
+                guard out >= 0 else { return }
+                defer { unlink(tmp) }
+                do {
+                    try Archive.decompress(copy) { b in
+                        guard Sys.writeAll(fd: out, Array(b)) else { throw ArchiveError("cannot write \(tmp)") }
+                    }
+                    close(out)
+                } catch { close(out); return }
+                let fd = open(tmp, O_RDONLY | O_CLOEXEC)
+                guard fd >= 0 else { return }
+                defer { close(fd) }
+                try restart(&f)
+                f.size = n
+                try read(fd: fd, file: &f, path: d.path, relative: rel, source: src)
+                stats.fromArchive += 1
+                try save(f)
+            }
         }
     }
 
     func loadFile(_ path: String) throws -> FileRow? {
         try db.one("""
-            SELECT id, inode, size, offset, mtime, tail, parser_state, activity_state, session_id, agent, bad_lines, resets
+            SELECT id, inode, size, offset, mtime, tail, parser_state, activity_state, session_id, agent, bad_lines, resets,
+                   recount
             FROM source_file WHERE path=?
             """, [.text(path)]) { r in
             FileRow(id: r.int64(0), inode: r.int(1), size: r.int(2), offset: r.int(3), mtime: r.optReal(4), tail: r.blob(5),
                     parserState: r.text(6), activityState: r.text(7), sessionId: r.text(8), agent: r.text(9) ?? "",
-                    badLines: r.int(10), resets: r.int(11))
+                    badLines: r.int(10), resets: r.int(11), recount: r.int(12) != 0)
         }
     }
 
@@ -258,11 +312,11 @@ public final class Ingest {
 
     // MARK: apply parsed records
 
-    struct UsageKey: Hashable { var session: String; var agent: String; var hour: Int; var model: String }
-    struct Counts { var input = 0, output = 0, cacheRead = 0, cacheWrite = 0, requests = 0
+    struct UsageKey: Hashable { var session: String; var agent: String; var hour: Int; var model: String; var cwd: String }
+    struct Counts { var input = 0, output = 0, cacheRead = 0, cacheWrite = 0, cacheWrite1h = 0, requests = 0
         mutating func add(_ u: UsageRecord, _ sign: Int) {
             input += sign * u.input; output += sign * u.output; cacheRead += sign * u.cacheRead
-            cacheWrite += sign * u.cacheWrite; requests += sign
+            cacheWrite += sign * u.cacheWrite; cacheWrite1h += sign * u.cacheWrite1h; requests += sign
         }
     }
     struct ToolKey: Hashable { var session: String; var hour: Int; var name: String }
@@ -305,11 +359,12 @@ public final class Ingest {
         var dirty = Set<Int64>()
         func lookup(_ h: Int64) throws -> LedgerEntry? {
             if let e = ledger[h] { return e }
-            let e = try db.one("SELECT file_id, hour, model, input, output, cache_read, cache_write FROM msg WHERE id=?",
-                               [.int(h)]) { r in
+            let e = try db.one("""
+                SELECT file_id, hour, model, input, output, cache_read, cache_write, cache_write_1h, cwd FROM msg WHERE id=?
+                """, [.int(h)]) { r in
                 LedgerEntry(file: r.int64(0), hour: r.int(1), model: r.text(2) ?? "",
                             u: UsageRecord(sessionId: "", ts: 0, model: r.text(2) ?? "", input: r.int(3), output: r.int(4),
-                                           cacheRead: r.int(5), cacheWrite: r.int(6)))
+                                           cacheRead: r.int(5), cacheWrite: r.int(6), cacheWrite1h: r.int(7), cwd: r.text(8)))
             }
             ledger[h] = .some(e)
             return e
@@ -318,15 +373,17 @@ public final class Ingest {
             let hour = Time.hour(u.ts)
             touchedHours.insert(hour)
             guard let id = u.messageId else {
-                deltas[UsageKey(session: u.sessionId, agent: u.agent, hour: hour, model: u.model), default: Counts()].add(u, 1)
+                deltas[UsageKey(session: u.sessionId, agent: u.agent, hour: hour, model: u.model, cwd: u.cwd ?? ""),
+                       default: Counts()].add(u, 1)
                 continue
             }
             let h = fnv1a64(id)
-            let key = UsageKey(session: fileSession, agent: f.agent, hour: hour, model: u.model)
+            let key = UsageKey(session: fileSession, agent: f.agent, hour: hour, model: u.model, cwd: u.cwd ?? "")
             if let e = try lookup(h) {
                 guard e.file == f.id else { continue } // the same request copied into another file
                 // Last record wins: take back what was counted, count the new values.
-                deltas[UsageKey(session: fileSession, agent: f.agent, hour: e.hour, model: e.model), default: Counts()].add(e.u, -1)
+                deltas[UsageKey(session: fileSession, agent: f.agent, hour: e.hour, model: e.model, cwd: e.u.cwd ?? ""),
+                       default: Counts()].add(e.u, -1)
                 touchedHours.insert(e.hour)
             }
             deltas[key, default: Counts()].add(u, 1)
@@ -335,18 +392,24 @@ public final class Ingest {
         }
         for h in dirty {
             guard let e = ledger[h] ?? nil else { continue }
-            try db.run("INSERT OR REPLACE INTO msg(id, file_id, hour, model, input, output, cache_read, cache_write) VALUES(?,?,?,?,?,?,?,?)",
-                       [.int(h), .int(e.file), .int(Int64(e.hour)), .text(e.model), .int(Int64(e.u.input)),
-                        .int(Int64(e.u.output)), .int(Int64(e.u.cacheRead)), .int(Int64(e.u.cacheWrite))])
+            try db.run("""
+                INSERT OR REPLACE INTO msg(id, file_id, hour, model, input, output, cache_read, cache_write, cache_write_1h, cwd)
+                VALUES(?,?,?,?,?,?,?,?,?,?)
+                """, [.int(h), .int(e.file), .int(Int64(e.hour)), .text(e.model), .int(Int64(e.u.input)),
+                      .int(Int64(e.u.output)), .int(Int64(e.u.cacheRead)), .int(Int64(e.u.cacheWrite)),
+                      .int(Int64(e.u.cacheWrite1h)), .of(e.u.cwd)])
         }
         for (k, c) in deltas {
             try db.run("""
-                INSERT INTO usage_hour(file_id, session_id, agent, hour, model, input, output, cache_read, cache_write, requests)
-                VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO UPDATE SET input=input+excluded.input, output=output+excluded.output,
-                  cache_read=cache_read+excluded.cache_read, cache_write=cache_write+excluded.cache_write,
+                INSERT INTO usage_hour(file_id, session_id, agent, hour, model, cwd, input, output, cache_read, cache_write,
+                  cache_write_1h, requests)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO UPDATE SET input=input+excluded.input,
+                  output=output+excluded.output, cache_read=cache_read+excluded.cache_read,
+                  cache_write=cache_write+excluded.cache_write, cache_write_1h=cache_write_1h+excluded.cache_write_1h,
                   requests=requests+excluded.requests
-                """, [.int(f.id), .text(k.session), .text(k.agent), .int(Int64(k.hour)), .text(k.model), .int(Int64(c.input)),
-                      .int(Int64(c.output)), .int(Int64(c.cacheRead)), .int(Int64(c.cacheWrite)), .int(Int64(c.requests))])
+                """, [.int(f.id), .text(k.session), .text(k.agent), .int(Int64(k.hour)), .text(k.model), .text(k.cwd),
+                      .int(Int64(c.input)), .int(Int64(c.output)), .int(Int64(c.cacheRead)), .int(Int64(c.cacheWrite)),
+                      .int(Int64(c.cacheWrite1h)), .int(Int64(c.requests))])
         }
         if deltas.values.contains(where: { $0.requests < 0 }) {
             try db.run("DELETE FROM usage_hour WHERE file_id=? AND requests<=0", [.int(f.id)])
@@ -373,17 +436,28 @@ public final class Ingest {
                 """, [.int(f.id), .text(k.session), .int(Int64(k.hour)), .text(k.name), .int(Int64(n))])
         }
 
+        // Typing into a terminal: decides later whether a message in another session was the human's.
+        for r in out.relays {
+            for target in r.targets {
+                try db.run("INSERT INTO relay(file_id, session_id, ts, target) VALUES(?,?,?,?)",
+                           [.int(f.id), .text(r.sessionId), .real(r.ts), .text(target)])
+            }
+            touchedHours.insert(Time.hour(r.ts))
+            userActionsChanged = true
+        }
+
         // Working intervals and user actions, in time order.
-        var points: [(ts: Timestamp, session: String, user: Bool, text: String?, cwd: String?)] = []
+        var points: [(ts: Timestamp, session: String, user: Bool, text: String?, cwd: String?, channel: Bool)] = []
         points.reserveCapacity(out.events.count + out.userMessages.count)
-        for e in out.events { points.append((e.ts, e.sessionId, false, nil, e.cwd)) }
-        for m in out.userMessages { points.append((m.ts, m.sessionId, true, m.text, m.cwd)) }
+        for e in out.events { points.append((e.ts, e.sessionId, false, nil, e.cwd, false)) }
+        for m in out.userMessages { points.append((m.ts, m.sessionId, true, m.text, m.cwd, m.channel)) }
         points.sort { $0.ts < $1.ts }
         var t = TurnBuilder.Output()
         for p in points {
             if p.user {
                 let before = t.actions.count
-                turns.user(p.session, p.ts, cwd: p.cwd, idleGap: options.idleGap, into: &t)
+                turns.user(p.session, p.ts, cwd: p.cwd, kind: p.channel ? "channel" : "msg", idleGap: options.idleGap,
+                           into: &t)
                 // Only messages taken as actions: copies of history in a resumed or forked file are skipped.
                 guard t.actions.count > before, let text = p.text, !text.isEmpty else { continue }
                 if options.indexPrompts { try indexText(text, file: f.id, session: p.session, ts: p.ts, kind: "msg") }
@@ -453,7 +527,7 @@ public final class Ingest {
         var docs: [Int64] = []
         try db.query("SELECT rowid FROM fts_doc WHERE file_id=?", id) { docs.append($0.int64(0)) }
         for d in docs { try db.run("DELETE FROM fts WHERE rowid=?", [.int(d)]) }
-        for t in ["usage_hour", "tool_use", "msg", "activity", "user_action", "fts_doc", "task_key"] {
+        for t in ["usage_hour", "tool_use", "msg", "activity", "user_action", "fts_doc", "task_key", "relay"] {
             try db.run("DELETE FROM \(t) WHERE file_id=?", id)
         }
         userActionsChanged = true
@@ -476,22 +550,35 @@ public final class Ingest {
                                         UNION ALL SELECT min(ts) FROM user_action WHERE session_id=?1)),
                           last_at = (SELECT max(t) FROM (SELECT max("end") t FROM activity WHERE session_id=?1 AND file_id IS NOT NULL
                                      UNION ALL SELECT max(ts) FROM user_action WHERE session_id=?1)),
-                          user_msgs = (SELECT count(*) FROM user_action WHERE session_id=?1 AND kind='msg'),
                           seq = ?2
                         WHERE id=?1
                         """, [.text(s), .int(Int64(seq))])
+                    // Listed by the directory it started in, not the last one it visited.
+                    if let c = try db.one("""
+                        SELECT cwd FROM activity WHERE session_id = ? AND cwd IS NOT NULL AND file_id IS NOT NULL ORDER BY start LIMIT 1
+                        """, [.text(s)], { $0.text(0) }) ?? nil {
+                        try db.run("UPDATE session SET cwd = ?, project = ? WHERE id = ?",
+                                   [.text(c), .text(ClaudeParser.project(c)), .text(s)])
+                    }
                 }
             }
             if userActionsChanged {
-                var pts: [Timestamp] = []
-                // Own host only: actions imported from other machines have their own user time there.
-                try db.query("""
-                    SELECT a.ts FROM user_action a LEFT JOIN session s ON s.id = a.session_id
-                    WHERE coalesce(s.host, ?1) = ?1 ORDER BY a.ts
-                    """, [.text(host)]) { pts.append($0.real(0)) }
+                let human = try UserTime.humanActions(db, host: host)
                 try db.run("DELETE FROM user_activity")
-                for iv in Intervals.chain(pts, gap: options.idleGap) {
+                for iv in Intervals.chain(human.points, gap: options.idleGap) {
                     try db.run("INSERT INTO user_activity(start, \"end\") VALUES(?, ?)", [.real(iv.start), .real(iv.end)])
+                }
+                var stored: [String: Int] = [:]
+                try db.query("SELECT id, user_msgs FROM session WHERE coalesce(host, ?1) = ?1", [.text(host)]) {
+                    stored[$0.text(0) ?? ""] = $0.int(1)
+                }
+                let changed = stored.filter { human.messages[$0.key, default: 0] != $0.value }
+                if !changed.isEmpty {
+                    let seq = try store.nextSeq()
+                    for (id, _) in changed {
+                        try db.run("UPDATE session SET user_msgs = ?, seq = ? WHERE id = ?",
+                                   [.int(Int64(human.messages[id, default: 0])), .int(Int64(seq)), .text(id)])
+                    }
                 }
             }
             var days = Set<String>()

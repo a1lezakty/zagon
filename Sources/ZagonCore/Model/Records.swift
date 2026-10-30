@@ -45,16 +45,20 @@ public struct UsageRecord: Sendable, Equatable {
     public var input: Int
     public var output: Int
     public var cacheRead: Int
+    /// All cache writes; `cacheWrite1h` of them are kept for an hour (priced higher), the rest for 5 minutes.
     public var cacheWrite: Int
+    public var cacheWrite1h: Int
+    /// Working directory of the request (the project it counts for); nil = unknown.
+    public var cwd: String?
     /// When set, records with the same id are one request: the last one seen wins (dedup ledger).
     /// When nil, the record is added as is (the source already emits per-request deltas).
     public var messageId: String?
 
     public init(sessionId: String, agent: String = "", ts: Timestamp, model: String, input: Int = 0, output: Int = 0,
-                cacheRead: Int = 0, cacheWrite: Int = 0, messageId: String? = nil) {
+                cacheRead: Int = 0, cacheWrite: Int = 0, cacheWrite1h: Int = 0, messageId: String? = nil, cwd: String? = nil) {
         self.sessionId = sessionId; self.agent = agent; self.ts = ts; self.model = model
         self.input = input; self.output = output; self.cacheRead = cacheRead; self.cacheWrite = cacheWrite
-        self.messageId = messageId
+        self.cacheWrite1h = cacheWrite1h; self.messageId = messageId; self.cwd = cwd
     }
     public var total: Int { input + output + cacheRead + cacheWrite }
 }
@@ -84,15 +88,31 @@ public struct ActivityEvent: Sendable, Equatable {
     }
 }
 
-/// A message typed by the human. Starts a `working` turn and counts as a user action for user time.
-/// `text` only feeds the search index (if enabled) and task key extraction; it is never stored as plain text.
+/// A message typed by the human. Starts a `working` turn and counts as a user action for user time, unless another
+/// session typed it (see `Relay`). `text` only feeds the search index (if enabled) and task key extraction; it is
+/// never stored as plain text.
 public struct UserMessage: Sendable, Equatable {
     public var sessionId: String
     public var ts: Timestamp
     public var text: String?
     public var cwd: String?
-    public init(sessionId: String, ts: Timestamp, text: String? = nil, cwd: String? = nil) {
-        self.sessionId = sessionId; self.ts = ts; self.text = text; self.cwd = cwd
+    /// Sent through a channel plugin (Telegram…): always the human's, never taken for a relay.
+    public var channel: Bool
+    public init(sessionId: String, ts: Timestamp, text: String? = nil, cwd: String? = nil, channel: Bool = false) {
+        self.sessionId = sessionId; self.ts = ts; self.text = text; self.cwd = cwd; self.channel = channel
+    }
+}
+
+/// The agent typed into a terminal (`tmux send-keys` / `paste-buffer`): a message that shows up in another session
+/// right after is that session's driver talking, not the human.
+public struct Relay: Sendable, Equatable {
+    public var sessionId: String
+    public var ts: Timestamp
+    /// `-t` targets as tmux session names (lower case, window/pane cut off); "" = a target that is not a plain name
+    /// (`$var`, `%pane`) or none given.
+    public var targets: [String]
+    public init(sessionId: String, ts: Timestamp, targets: [String]) {
+        self.sessionId = sessionId; self.ts = ts; self.targets = targets
     }
 }
 

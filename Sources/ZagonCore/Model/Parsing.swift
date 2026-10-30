@@ -8,11 +8,12 @@ public struct ParseOutput: Sendable {
     public var events: [ActivityEvent] = []
     public var userMessages: [UserMessage] = []
     public var limits: [LimitSnapshot] = []
+    public var relays: [Relay] = []
     /// Lines that looked relevant but could not be parsed (for `doctor`); never fatal.
     public var badLines = 0
     public init() {}
     public var isEmpty: Bool {
-        meta.isEmpty && usage.isEmpty && tools.isEmpty && events.isEmpty && userMessages.isEmpty && limits.isEmpty
+        meta.isEmpty && usage.isEmpty && tools.isEmpty && events.isEmpty && userMessages.isEmpty && limits.isEmpty && relays.isEmpty
     }
 }
 

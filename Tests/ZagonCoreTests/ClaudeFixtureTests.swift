@@ -25,7 +25,7 @@ import Testing
             for line in text.split(separator: "\n") {
                 let o = try JSONSerialization.jsonObject(with: Data(line.utf8)) as! [String: Any]
                 let m = o["message"] as? [String: Any]
-                if !isSub, ["assistant", "user"].contains(o["type"] as? String), let c = o["cwd"] as? String { e.cwd = c }
+                if !isSub, ["assistant", "user"].contains(o["type"] as? String), e.cwd == nil, let c = o["cwd"] as? String { e.cwd = c }  // where it started
                 switch o["type"] as? String {
                 case "assistant":
                     if let id = m?["id"] as? String, let u = m?["usage"] as? [String: Any] {

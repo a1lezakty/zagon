@@ -111,7 +111,7 @@ import Testing
             try db.run("INSERT INTO activity(file_id, session_id, start, \"end\", kind) VALUES(1, 'claude:a', 1, 2, 'working')")
         }
         let s = try Store(path: dir + "/z.db")
-        #expect(s.userVersion == 4)
+        #expect(s.userVersion == Schema.migrations.count)
         #expect(try s.db.one("SELECT task_id, session_id, how, start, \"end\" FROM task_session") {
             "\($0.int(0)) \($0.text(1)!) \($0.text(2)!) \($0.real(3)) \($0.real(4))"
         } == "1 claude:a branch 0.0 1e+18")

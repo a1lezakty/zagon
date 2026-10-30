@@ -128,37 +128,49 @@ extension Query {
         func covered(_ merged: [Interval], _ r: (Timestamp, Timestamp)) -> Double {
             merged.reduce(0) { $0 + max(0, min($1.end, r.1) - max($1.start, r.0)) }
         }
+        // Tokens count for the project of the directory each request was made in (the session's when not known).
         try db.query("""
-            SELECT u.hour, coalesce(s.project,''), coalesce(s.host,''), u.agent, u.model, sum(u.input), sum(u.output),
-                   sum(u.cache_read), sum(u.cache_write), sum(u.requests)
-            FROM usage_hour u LEFT JOIN session s ON s.id = u.session_id WHERE u.hour >= ? AND u.hour < ? GROUP BY 1, 2, 3, 4, 5
+            SELECT u.hour, u.cwd, coalesce(s.project,''), coalesce(s.host,''), u.agent, u.model, sum(u.input), sum(u.output),
+                   sum(u.cache_read), sum(u.cache_write), sum(u.cache_write_1h), sum(u.requests)
+            FROM usage_hour u LEFT JOIN session s ON s.id = u.session_id WHERE u.hour >= ? AND u.hour < ?
+            GROUP BY 1, 2, 3, 4, 5, 6
             """, [.real(lo), .real(hi)]) { r in
             guard let i = index(r.real(0)) else { return }
-            let m = r.text(4) ?? "", t = r.int(5) + r.int(6) + r.int(7) + r.int(8)
-            let c = Pricing.cost(model: m, input: r.int(5), output: r.int(6), cacheRead: r.int(7), cacheWrite: r.int(8))
-            out[i].tokens.input += r.int(5); out[i].tokens.output += r.int(6); out[i].tokens.cacheRead += r.int(7)
-            out[i].tokens.cacheWrite += r.int(8); out[i].tokens.requests += r.int(9)
+            let m = r.text(5) ?? "", t = r.int(6) + r.int(7) + r.int(8) + r.int(9)
+            let c = Pricing.cost(model: m, input: r.int(6), output: r.int(7), cacheRead: r.int(8), cacheWrite: r.int(9),
+                                 cacheWrite1h: r.int(10))
+            out[i].tokens.input += r.int(6); out[i].tokens.output += r.int(7); out[i].tokens.cacheRead += r.int(8)
+            out[i].tokens.cacheWrite += r.int(9); out[i].tokens.cacheWrite1h += r.int(10); out[i].tokens.requests += r.int(11)
             out[i].cost += c
-            Self.add(&out[i].project, r.text(1) ?? "", t, c); Self.add(&out[i].host, r.text(2) ?? "", t, c)
-            Self.add(&out[i].agent, r.text(3) ?? "", t, c); Self.add(&out[i].model, m, t, c)
+            Self.add(&out[i].project, SessionTime.project(r.text(1), r.text(2) ?? ""), t, c)
+            Self.add(&out[i].host, r.text(3) ?? "", t, c)
+            Self.add(&out[i].agent, r.text(4) ?? "", t, c); Self.add(&out[i].model, m, t, c)
         }
         try db.query("SELECT hour, name, sum(n) FROM tool_use WHERE hour >= ? AND hour < ? GROUP BY 1, 2", [.real(lo), .real(hi)]) { r in
             if let i = index(r.real(0)) { out[i].tools[r.text(1) ?? "?", default: 0] += r.int(2) }
         }
-        var working: [String: (project: String, intervals: [Interval])] = [:]
+        // Session time: union per session; per project (the directory of each interval), union per session and project.
+        var working: [String: (all: [Interval], projects: [String: [Interval]])] = [:]
         try db.query("""
-            SELECT a.session_id, coalesce(s.project,''), a.start, a."end" FROM activity a LEFT JOIN session s ON s.id = a.session_id
+            SELECT a.session_id, coalesce(s.project,''), a.start, a."end", a.cwd FROM activity a
+            LEFT JOIN session s ON s.id = a.session_id
             WHERE a.kind = 'working' AND a.start < ?1 AND a.start > ?2 - \(Self.longestStretch) AND a."end" > ?2
             """, [.real(hi), .real(lo)]) { r in
-            working[r.text(0) ?? "", default: (r.text(1) ?? "", [])].intervals.append(Interval(r.real(2), r.real(3)))
+            let sid = r.text(0) ?? "", iv = Interval(r.real(2), r.real(3))
+            working[sid, default: ([], [:])].all.append(iv)
+            working[sid]!.projects[SessionTime.project(r.text(4), r.text(1) ?? ""), default: []].append(iv)
         }
         for e in working.values {
-            let merged = Intervals.merge(e.intervals)
+            let merged = Intervals.merge(e.all)
+            let byProject = e.projects.mapValues(Intervals.merge)
             for i in ranges.indices {
                 let sec = covered(merged, ranges[i])
                 guard sec > 0 else { continue }
                 out[i].sessionSec += sec
-                out[i].projectSec[e.project, default: 0] += sec
+                for (p, ivs) in byProject {
+                    let x = covered(ivs, ranges[i])
+                    if x > 0 { out[i].projectSec[p, default: 0] += x }
+                }
             }
         }
         // Your time on this Mac and on each server (`activity` kind 'user' under its export file) as one union: an

@@ -43,6 +43,7 @@ struct ClaudeRecord: Decodable {
     var agentName: String?
     var aiTitle: String?
     var message: Message?
+    var attachment: Attachment?
 
     struct Origin: Decodable {
         var kind: String?
@@ -53,8 +54,43 @@ struct ClaudeRecord: Decodable {
     }
     struct Usage: Decodable {
         var input_tokens: Int?, output_tokens: Int?, cache_read_input_tokens: Int?, cache_creation_input_tokens: Int?
+        var cache_creation: CacheCreation?
     }
-    struct Block: Decodable { var type: String?; var name: String?; var id: String?; var text: String? }
+    /// Cache writes by lifetime; their sum is `cache_creation_input_tokens`.
+    struct CacheCreation: Decodable { var ephemeral_1h_input_tokens: Int?, ephemeral_5m_input_tokens: Int? }
+    struct Block: Decodable {
+        var type: String?; var name: String?; var id: String?; var text: String?
+        /// `input.command` of a tool call, kept only when it types into a terminal (see `ClaudeParser.relayTargets`).
+        var command: String?
+        enum CodingKeys: String, CodingKey { case type, name, id, text, input }
+        struct Input: Decodable {
+            var command: String?
+            init(from d: Decoder) throws { command = try? d.container(keyedBy: K.self).decode(String.self, forKey: .command) }
+            enum K: String, CodingKey { case command }
+        }
+        init() {}
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            type = try? c.decodeIfPresent(String.self, forKey: .type); name = try? c.decodeIfPresent(String.self, forKey: .name)
+            id = try? c.decodeIfPresent(String.self, forKey: .id); text = try? c.decodeIfPresent(String.self, forKey: .text)
+            command = (try? c.decodeIfPresent(Input.self, forKey: .input))?.command.flatMap { ClaudeParser.typesKeys($0) ? $0 : nil }
+        }
+    }
+    /// `attachment` records; only `queued_command` is read (a message sent while the agent was working).
+    struct Attachment: Decodable {
+        var type: String?, commandMode: String?, origin: Origin?
+        var text: String?, blocks: [Block]?   // `prompt` as a plain string or as blocks
+        enum CodingKeys: String, CodingKey { case type, commandMode, origin, prompt }
+        init() {}
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            type = try? c.decodeIfPresent(String.self, forKey: .type)
+            commandMode = try? c.decodeIfPresent(String.self, forKey: .commandMode)
+            origin = try? c.decodeIfPresent(Origin.self, forKey: .origin)
+            if let s = try? c.decodeIfPresent(String.self, forKey: .prompt) { text = s }
+            else { blocks = try? c.decodeIfPresent([Block].self, forKey: .prompt) }
+        }
+    }
     struct Message: Decodable {
         var id: String?
         var model: String?
@@ -94,11 +130,12 @@ public struct ClaudeParser: LineParser {
         // Cheap prefilter: most lines (attachments, snapshots, api-request blobs) are irrelevant.
         let isAssistant = contains(line, "\"type\":\"assistant\"")
         let isUser = !isAssistant && contains(line, "\"type\":\"user\"")
-        let isTitle = !isAssistant && !isUser && !isSub &&
+        let isQueued = !isAssistant && !isUser && !isSub && contains(line, "\"queued_command\"")
+        let isTitle = !isAssistant && !isUser && !isQueued && !isSub &&
             (contains(line, "\"customTitle\"") || contains(line, "\"agentName\"") || contains(line, "\"aiTitle\""))
-        guard isAssistant || isUser || isTitle else { return }
+        guard isAssistant || isUser || isQueued || isTitle else { return }
         // The text is needed even without indexing: it tells notifications from typed messages.
-        let wantText = isUser && !isSub
+        let wantText = (isUser || isQueued) && !isSub
         guard let r = Self.scan(line, wantText: wantText) ?? Self.decode(line) else { out.badLines += 1; return }
         handle(r, into: &out)
     }
@@ -112,10 +149,14 @@ public struct ClaudeParser: LineParser {
             if let u = m.usage {
                 out.usage.append(UsageRecord(sessionId: sessionId, agent: agent, ts: ts, model: m.model ?? "?",
                     input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0,
-                    cacheWrite: u.cache_creation_input_tokens ?? 0, messageId: m.id))
+                    cacheWrite: u.cache_creation_input_tokens ?? 0, cacheWrite1h: u.cache_creation?.ephemeral_1h_input_tokens ?? 0,
+                    messageId: m.id, cwd: r.cwd))
             }
             for b in m.blocks ?? [] where b.type == "tool_use" {
                 out.tools.append(ToolCall(sessionId: sessionId, ts: ts, name: b.name ?? "?", callId: b.id))
+                if b.name == "Bash", let cmd = b.command {
+                    out.relays.append(Relay(sessionId: sessionId, ts: ts, targets: Self.relayTargets(cmd)))
+                }
             }
             out.events.append(ActivityEvent(sessionId: sessionId, ts: ts, cwd: r.cwd))
         case "user":
@@ -123,10 +164,22 @@ public struct ClaudeParser: LineParser {
             meta(r, model: nil, into: &out)
             if !isSub, let text = humanText(r) {
                 // The text also feeds task keys; Ingest indexes it only when prompts are indexed.
-                out.userMessages.append(UserMessage(sessionId: sessionId, ts: ts, text: text, cwd: r.cwd))
+                out.userMessages.append(UserMessage(sessionId: sessionId, ts: ts, text: text, cwd: r.cwd,
+                                                    channel: r.origin?.kind == "channel"))
             } else {
                 out.events.append(ActivityEvent(sessionId: sessionId, ts: ts, cwd: r.cwd))
             }
+        case "attachment":
+            // Sent while the agent was working: Claude Code queues it and hands it over mid-turn; it never becomes a
+            // `user` record of its own.
+            guard !isSub, let ts, let a = r.attachment, a.type == "queued_command", a.commandMode == "prompt" else { return }
+            let kind = a.origin?.kind
+            guard kind == "human" || kind == "channel" || kind == nil else { return }  // not `peer`, `task-notification`
+            var text = a.text ?? a.blocks?.first(where: { $0.type == "text" })?.text ?? ""
+            if kind == nil, Self.markers.contains(where: { text.hasPrefix($0) }) { return }
+            if kind == "channel" { text = Self.channelBody(text) }
+            out.userMessages.append(UserMessage(sessionId: sessionId, ts: ts, text: Self.clip(text), cwd: r.cwd,
+                                                channel: kind == "channel"))
         case "custom-title", "agent-name", "ai-title":
             guard !isSub else { return }
             let t: (String, Int)? = r.customTitle.map { ($0, TitleRank.customTitle) }
@@ -157,18 +210,55 @@ public struct ClaudeParser: LineParser {
             guard let t = bs.first(where: { $0.type == "text" }) else { return bs.isEmpty ? nil : "" }
             text = t.text ?? ""
         } else { return nil }
-        if r.turnOrigin == nil && !channel {
-            for p in ["<task-notification", "<local-command-stdout", "<local-command-caveat", "<system-reminder",
-                      "<channel"] where text.hasPrefix(p) { return nil }
-        }
-        if channel, text.hasPrefix("<channel"), let open = text.firstIndex(of: ">") {  // `<channel source=… user=…>text</channel>`
-            text = String(text[text.index(after: open)...])
-            if text.hasSuffix("</channel>") { text = String(text.dropLast(10)) }
-            if text.hasPrefix("\n") { text.removeFirst() }
-            if text.hasSuffix("\n") { text.removeLast() }
-        }
-        if text.utf8.count > Self.textLimit { text = String(decoding: text.utf8.prefix(Self.textLimit), as: UTF8.self) }
+        if r.turnOrigin == nil && !channel, Self.markers.contains(where: { text.hasPrefix($0) }) { return nil }
+        if channel { text = Self.channelBody(text) }
+        return Self.clip(text)
+    }
+
+    /// Prefixes of generated user records in versions that do not say who started the turn.
+    static let markers = ["<task-notification", "<local-command-stdout", "<local-command-caveat", "<system-reminder", "<channel"]
+
+    /// `<channel source=… user=…>text</channel>` -> `text`.
+    static func channelBody(_ s: String) -> String {
+        guard s.hasPrefix("<channel"), let open = s.firstIndex(of: ">") else { return s }
+        var text = String(s[s.index(after: open)...])
+        if text.hasSuffix("</channel>") { text = String(text.dropLast(10)) }
+        if text.hasPrefix("\n") { text.removeFirst() }
+        if text.hasSuffix("\n") { text.removeLast() }
         return text
+    }
+
+    static func clip(_ text: String) -> String {
+        text.utf8.count > textLimit ? String(decoding: text.utf8.prefix(textLimit), as: UTF8.self) : text
+    }
+
+    /// A shell command that types into a terminal pane.
+    static func typesKeys(_ cmd: String) -> Bool { cmd.contains("send-keys") || cmd.contains("paste-buffer") }
+
+    /// Targets of every `tmux send-keys` / `paste-buffer` in a shell command: the session name of `-t name`,
+    /// `-t =name`, `-t name:window.pane`, lower-cased; "" for a call without `-t` or with a target that is not a plain
+    /// name (`$s`, `%3`, `"$(…)"`).
+    static func relayTargets(_ cmd: String) -> [String] {
+        var out: [String] = []
+        for seg in cmd.split(whereSeparator: { ";|&\n".contains($0) }) where typesKeys(String(seg)) {
+            let words = seg.split(whereSeparator: { $0 == " " || $0 == "\t" }).map { w -> Substring in
+                var w = w
+                while let q = w.first, q == "'" || q == "\"" { w.removeFirst() }
+                while let q = w.last, q == "'" || q == "\"" { w.removeLast() }
+                return w
+            }
+            var target: Substring = ""
+            for (i, w) in words.enumerated() {
+                if w == "-t", i + 1 < words.count { target = words[i + 1]; break }
+                if w.hasPrefix("-t"), w.count > 2 { target = w.dropFirst(2); break }
+            }
+            if target.hasPrefix("=") { target.removeFirst() }
+            target = target.prefix { $0 != ":" && $0 != "." }
+            if target.contains(where: { "$%`(){}*?".contains($0) }) { target = "" }
+            let t = target.lowercased()
+            if !out.contains(t) { out.append(t) }
+        }
+        return out.isEmpty ? [""] : out
     }
 
     mutating func meta(_ r: ClaudeRecord, model: String?, into out: inout ParseOutput) {
@@ -224,6 +314,30 @@ public struct ClaudeParser: LineParser {
             else if keyIs(k, "customTitle") { r.customTitle = c.string() }
             else if keyIs(k, "agentName") { r.agentName = c.string() }
             else if keyIs(k, "aiTitle") { r.aiTitle = c.string() }
+            else if keyIs(k, "attachment") {
+                if c.peek != 0x7B { return false }
+                var a = ClaudeRecord.Attachment()
+                ok = ok && c.object { c, k in
+                    if keyIs(k, "type") { a.type = c.string() }
+                    else if keyIs(k, "commandMode") { a.commandMode = c.string() }
+                    else if keyIs(k, "origin") {
+                        if c.peek != 0x7B { return false }
+                        var kind: String?
+                        ok = ok && c.object { c, k in
+                            guard keyIs(k, "kind") else { return false }
+                            kind = c.string()
+                            return true
+                        }
+                        a.origin = ClaudeRecord.Origin(kind: kind)
+                    } else if keyIs(k, "prompt") {
+                        if c.peek == 0x22 { a.text = wantText ? c.string(limit: textLimit) : nil; return wantText }
+                        guard wantText, let bs = blocks(&c, wantText: true) else { return false }
+                        a.blocks = bs
+                    } else { return false }
+                    return true
+                }
+                r.attachment = a
+            }
             else if keyIs(k, "message") {
                 if c.peek != 0x7B { return false }
                 var m = ClaudeRecord.Message()
@@ -237,26 +351,23 @@ public struct ClaudeParser: LineParser {
                             else if keyIs(k, "output_tokens") { u.output_tokens = c.int() }
                             else if keyIs(k, "cache_read_input_tokens") { u.cache_read_input_tokens = c.int() }
                             else if keyIs(k, "cache_creation_input_tokens") { u.cache_creation_input_tokens = c.int() }
+                            else if keyIs(k, "cache_creation") {
+                                var cc = ClaudeRecord.CacheCreation()
+                                ok = ok && c.object { c, k in
+                                    if keyIs(k, "ephemeral_1h_input_tokens") { cc.ephemeral_1h_input_tokens = c.int() }
+                                    else if keyIs(k, "ephemeral_5m_input_tokens") { cc.ephemeral_5m_input_tokens = c.int() }
+                                    else { return false }
+                                    return true
+                                }
+                                u.cache_creation = cc
+                            }
                             else { return false }
                             return true
                         }
                         m.usage = u
                     } else if keyIs(k, "content") {
                         if c.peek == 0x22 { m.text = wantText ? c.string(limit: textLimit) : (c.rawString() != nil ? "" : nil); return true }
-                        var bs: [ClaudeRecord.Block] = []
-                        ok = ok && c.array { c in
-                            var b = ClaudeRecord.Block()
-                            let r = c.object { c, k in
-                                if keyIs(k, "type") { b.type = c.string() }
-                                else if keyIs(k, "name") { b.name = c.string() }
-                                else if keyIs(k, "id") { b.id = c.string() }
-                                else if keyIs(k, "text") { b.text = wantText ? c.string(limit: textLimit) : nil; if !wantText { return false } }
-                                else { return false }
-                                return true
-                            }
-                            bs.append(b)
-                            return r
-                        }
+                        guard let bs = blocks(&c, wantText: wantText) else { ok = false; return true }
                         m.blocks = bs
                     } else { return false }
                     return true
@@ -266,5 +377,37 @@ public struct ClaudeParser: LineParser {
             return true
         }
         return parsed && ok && c.atEnd ? r : nil
+    }
+
+    /// A content block array; nil on anything unexpected.
+    static func blocks(_ c: inout ByteScanner, wantText: Bool) -> [ClaudeRecord.Block]? {
+        var bs: [ClaudeRecord.Block] = []
+        var ok = true
+        let parsed = c.array { c in
+            var b = ClaudeRecord.Block()
+            let r = c.object { c, k in
+                if keyIs(k, "type") { b.type = c.string() }
+                else if keyIs(k, "name") { b.name = c.string() }
+                else if keyIs(k, "id") { b.id = c.string() }
+                else if keyIs(k, "text") { b.text = wantText ? c.string(limit: textLimit) : nil; if !wantText { return false } }
+                else if keyIs(k, "input") {
+                    if c.peek != 0x7B { return false }
+                    ok = ok && c.object { c, k in
+                        guard keyIs(k, "command"), let raw = c.rawString() else { return false }
+                        // Decoded only for the rare command that types into a terminal.
+                        if contains(raw, "send-keys") || contains(raw, "paste-buffer") {
+                            guard let s = ByteScanner.unescape(raw, limit: .max) else { ok = false; return true }
+                            b.command = s
+                        }
+                        return true
+                    }
+                }
+                else { return false }
+                return true
+            }
+            bs.append(b)
+            return r
+        }
+        return parsed && ok ? bs : nil
     }
 }
