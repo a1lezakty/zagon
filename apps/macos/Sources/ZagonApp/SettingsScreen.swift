@@ -147,22 +147,26 @@ struct SettingsScreen: View {
         }
     }
 
-    /// When the service writes the day summary: here (config.toml) and on the checked servers.
+    /// When the services of the checked servers write the day summary (the Mac has none): the servers' time when they
+    /// answered, else this Mac's config.toml for the switch and "as on the server" for the time.
     func summary(_ f: Fmt) -> some View {
-        let at = app.notify.summaryAt
-        let text = Binding(get: { summaryTime ?? at.map(NotifySettings.clock) ?? "" }, set: { summaryTime = $0; summaryTimeBad = false })
+        let servers = app.remoteHosts, known = app.summaries.sharedAt(servers)
+        let at = known.map { NotifySettings.minutes($0) } ?? app.notify.summaryAt
+        let text = Binding(get: { summaryTime ?? known.flatMap(NotifySettings.minutes).map(NotifySettings.clock) ?? "" },
+                           set: { summaryTime = $0; summaryTimeBad = false })
         return Card(spacing: 12) {
             Text(f.t("settings.summary")).font(.system(size: 15, weight: .semibold))
-            Text(f.t("settings.summary.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Text(f.t(servers.isEmpty ? "settings.summary.noServer" : "settings.summary.note")).font(.system(size: 13))
+                .foregroundColor(Z.secondary).fixedSize(horizontal: false, vertical: true)
             CheckRow(title: f.t("settings.summary.on"), on: at != nil) {
                 summaryTime = nil
                 app.setSummaryTime(at == nil ? 20 * 60 : nil)
             }
-            if at != nil {
+            .disabled(servers.isEmpty)
+            if at != nil && !servers.isEmpty {
                 HStack(spacing: 12) {
                     Text(f.t("settings.summary.time")).font(.system(size: 13)).foregroundColor(Z.body).frame(width: 90, alignment: .leading)
-                    Field(placeholder: "20:00", text: text, height: 30).frame(width: 80)
+                    Field(placeholder: known == nil ? f.t("settings.summary.asServer") : "20:00", text: text, height: 30).frame(width: 130)
                     PillButton(title: f.t("settings.summary.save"), height: 30, radius: 8, fontSize: 12) {
                         guard let m = NotifySettings.minutes(text.wrappedValue) else { summaryTimeBad = true; return }
                         summaryTime = nil
@@ -177,7 +181,9 @@ struct SettingsScreen: View {
                 Text(m).font(.system(size: 12)).foregroundColor(Z.muted).fixedSize(horizontal: false, vertical: true)
             }
         }
+        .opacity(servers.isEmpty ? 0.55 : 1)
         .frame(maxWidth: 640, alignment: .leading)
+        .task(id: servers) { app.loadSummaryTimes() }
     }
 
     struct CheckRow: View {

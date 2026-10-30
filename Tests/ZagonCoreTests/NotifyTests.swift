@@ -629,7 +629,7 @@ struct ChannelTests {
             return (0, Array(#"{"is_error":false,"result":"\#(answer)"}"#.utf8))
         }
         let r = try s.make("2026-10-30", now: day0 + 21 * 3600)
-        #expect(r.engine == "claude" && r.doc.items.first?.heading == "PROJ-1 Parser crash")
+        #expect(r.engine == "claude" && r.doc.items.first?.heading == "PROJ-1 Parser crash" && r.doc.hosts == [s.store.host])
         // The cards of the task are its "what was done" of the day, together.
         #expect(try tasks.done(t.id).map(\.text) == ["fixed; tested"])  // what was done only: it goes to the worklog
     }

@@ -15,20 +15,22 @@ extension AppState {
     /// written one by one with progress, then the period.
     func writeSummary(from: String, to: String, refresh: Bool) {
         if from == to {
-            runSummary(from) { b, _, _ in .kept(try b.summary(day: from, refresh: refresh)) }
+            runSummary(from) { b, f, _ in .kept(try b.summary(day: from, refresh: refresh, lang: f.lang.rawValue)) }
             return
         }
         runSummary(SummaryJob.key(from, to)) { b, f, say in
             let plan = try b.summaryPlan(from: from, to: to)
             if plan.needsConfirm { return .confirm(plan) }
-            return .kept(try await b.writePeriod(plan) { await say(Self.progress($0, f)) })
+            return .kept(try await b.writePeriod(plan, lang: f.lang.rawValue) { await say(Self.progress($0, f)) })
         }
     }
 
     /// The yes to "N days without a summary".
     func confirmSummary(_ plan: SummaryPlan) {
         summaries.jobs[plan.key]?.confirm = nil
-        runSummary(plan.key) { b, f, say in .kept(try await b.writePeriod(plan) { await say(Self.progress($0, f)) }) }
+        runSummary(plan.key) { b, f, say in
+            .kept(try await b.writePeriod(plan, lang: f.lang.rawValue) { await say(Self.progress($0, f)) })
+        }
     }
 
     func cancelSummary(_ key: String) { summaries.jobs[key]?.confirm = nil }
@@ -48,8 +50,10 @@ extension AppState {
             summaries.jobs[key, default: SummaryJob()].error = f.t("sum.noSource")
             return
         }
+        // "this Mac" / "server build-box", as the answers name it.
+        let source = s == .local ? f.t("sum.src.local") : f.t("sum.src.server", sourceName(s)), period = key.contains("..")
         var j = summaryJob(key)
-        j.running = true; j.error = nil; j.confirm = nil; j.progress = f.t("sum.writing")
+        j.running = true; j.error = nil; j.notice = nil; j.confirm = nil; j.progress = f.t("sum.writing")
         summaries.jobs[key] = j
         let store = provider as? StoreDataProvider
         Task.detached {
@@ -66,7 +70,8 @@ extension AppState {
                 switch outcome {
                 case .success(.kept(let k)):
                     j.result = k
-                    if k.doc.items.isEmpty { j.error = f.t("sum.noCards") }
+                    if k.doc.items.isEmpty { j.error = f.t(period ? "sum.noCards.period" : "sum.noCards", source) }
+                    if let e = k.noCli { j.notice = f.t("sum.noCLI", e, source) }
                 case .success(.confirm(let p)): j.confirm = p
                 case .failure(let e):
                     j.error = Remote.scrubHomes(String(describing: e))
@@ -91,7 +96,23 @@ extension AppState {
                 }
             }
             let message = ((sent.isEmpty ? [] : [f.t("settings.summary.sent", sent.joined(separator: ", "))]) + failed).joined(separator: "\n")
-            await MainActor.run { self.summaries.atMessage = message }
+            await MainActor.run {
+                self.summaries.atMessage = message
+                for h in sent { self.summaries.serverAt[h] = at ?? "off" }
+            }
+        }
+    }
+
+    /// `[summary] time` of every checked server not asked yet (the settings show it).
+    func loadSummaryTimes() {
+        guard let make = taskBackend else { return }
+        let ask = remoteHosts.filter { summaries.serverAt[$0] == nil }.map { ($0, make(.server($0))) }
+        guard !ask.isEmpty else { return }
+        Task.detached {
+            for (h, b) in ask {
+                guard let at = try? b.summaryTime() else { continue }
+                await MainActor.run { self.summaries.serverAt[h] = at }
+            }
         }
     }
 }
@@ -119,6 +140,9 @@ struct SummaryButton: View {
             }
             if let e = job.error {
                 Text(f.t("sum.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad).multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let n = job.notice {
+                Text(n).font(.system(size: 12)).foregroundColor(Z.muted).multilineTextAlignment(.trailing)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -223,7 +247,7 @@ struct PeriodSummaryCard<Extra: View>: View {
                 if from <= StoreDataProvider.day(f.now, app.zone) { SummaryButton(from: from, to: to, has: kept != nil) }
             }
             if let kept {
-                SummaryCards(vm: SummaryVM(kept, period: true, f)).id(key)
+                SummaryCards(vm: SummaryVM(kept, period: true, sources: (kept.doc.hosts ?? []).map(app.provider.hostName), f)).id(key)
             } else {
                 Text(f.t("sum.none")).font(.system(size: 13)).foregroundColor(Z.muted).fixedSize(horizontal: false, vertical: true)
             }

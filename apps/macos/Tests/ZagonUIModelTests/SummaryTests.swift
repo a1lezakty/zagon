@@ -34,7 +34,9 @@ final class SummaryTests: XCTestCase {
         XCTAssertEqual(vm.note, "Summary written by Claude at 20:00.")
         XCTAssertEqual(vm.markdown, doc.text(markdown: true))
         XCTAssertEqual(SummaryVM(KeptSummary(doc: doc, engine: "none", at: at), period: true, f).note,
-                       "Made without AI from the sessions' data, Oct 30 20:00.")
+                       "Made without AI from the sessions' data on Oct 30 at 20:00.")
+        XCTAssertEqual(SummaryVM(KeptSummary(doc: doc, engine: "none", at: at), period: false, sources: ["build-box", "mini", "build-box"], f).note,
+                       "Made without AI from the sessions' data at 20:00. Based on the sessions of build-box, mini.")
 
         // The cards keep the doc's language; the note follows the app's.
         var ru = doc
@@ -64,6 +66,23 @@ final class SummaryTests: XCTestCase {
         XCTAssertEqual(written.summary?.cards.count, 4)
         XCTAssertEqual(written.summaryNote, "Summary written by Claude at 20:00.")
         XCTAssertEqual(written.markdown.components(separatedBy: "## What was done\n\n").last, doc.text(markdown: true) + "\n")
+        // Written on a server: named, and the sessions of the other machines listed as without a summary.
+        let mac = [DoneProject("notes", sec: 900, cost: 1, sessions: [DoneSession("draft", sec: 900)])]
+        let server = DayVM(DayData(day: at, totals: Totals(sessionSec: 4320, tokens: 10, cost: 8), doc: doc, projects: projects + mac,
+                                   summaryInfo: SummaryInfo(engine: "claude", at: at, weekPct: nil, sources: ["build-box"]),
+                                   hostProjects: ["build-box": projects, "MacBook": mac]), f)
+        XCTAssertEqual(server.summaryNote, "Summary written by Claude at 20:00. Based on the sessions of build-box.")
+        XCTAssertEqual(server.leftOutNote, "Not in the summary: the sessions of MacBook:")
+        XCTAssertEqual(server.leftOut.map(\.name), ["notes"])
+        XCTAssertTrue(server.markdown.hasSuffix(doc.text(markdown: true) + "\n\nNot in the summary: the sessions of MacBook:\n\n### notes — 15m · $1\n\n- draft — 15m\n"))
+        // One made from every machine of the day, or one that does not say: nothing left out.
+        for sources in [["build-box", "MacBook"], []] {
+            let all = DayVM(DayData(day: at, totals: Totals(sessionSec: 1, tokens: 1, cost: 1), doc: doc, projects: projects + mac,
+                                    summaryInfo: SummaryInfo(engine: "claude", at: at, weekPct: nil, sources: sources),
+                                    hostProjects: ["build-box": projects, "MacBook": mac]), f)
+            XCTAssertNil(all.leftOutNote)
+            XCTAssertTrue(all.leftOut.isEmpty)
+        }
         XCTAssertEqual(CalendarVM.card(DayData(day: at, totals: Totals(sessionSec: 1, tokens: 1, cost: 1), doc: doc), f).bullets,
                        ["api-server: PROJ-12 Webhook retries", "api-server: Logs", "Notes"])
         XCTAssertEqual(CalendarVM.card(DayData(day: at, totals: Totals(sessionSec: 1, tokens: 1, cost: 1), projects: projects), f).bullets,
@@ -73,12 +92,13 @@ final class SummaryTests: XCTestCase {
     // MARK: the CLI
 
     /// The CLI's `--json` envelope, as `zagon summary` prints it.
-    func envelope(_ d: SummaryDoc, engine: String = "claude") -> String {
-        struct Kept: Encodable { var key: String, engine: String, created: Double, doc: SummaryDoc }
+    func envelope(_ d: SummaryDoc, engine: String = "claude", noCli: String? = nil) -> String {
+        struct Kept: Encodable { var key: String, engine: String, created: Double, doc: SummaryDoc, noCli: String? }
         let e = JSONEncoder()
         e.keyEncodingStrategy = .convertToSnakeCase
         e.outputFormatting = [.sortedKeys]
-        return String(decoding: try! e.encode(Kept(key: d.key, engine: engine, created: at.timeIntervalSince1970, doc: d)), as: UTF8.self)
+        return String(decoding: try! e.encode(Kept(key: d.key, engine: engine, created: at.timeIntervalSince1970, doc: d, noCli: noCli)),
+                      as: UTF8.self)
     }
 
     final class Calls: @unchecked Sendable {
@@ -110,9 +130,9 @@ final class SummaryTests: XCTestCase {
             }
             return Self.ok("Last login: a banner\n" + line + "\n")
         }
-        let k = try b.summary(day: "2026-10-30", refresh: false)
+        let k = try b.summary(day: "2026-10-30", refresh: false, lang: "en")
         XCTAssertEqual(k, KeptSummary(doc: doc, engine: "claude", at: at))
-        XCTAssertThrowsError(try b.summary(day: "2026-10-30", refresh: true)) {
+        XCTAssertThrowsError(try b.summary(day: "2026-10-30", refresh: true, lang: "ru")) {
             XCTAssertEqual(String(describing: $0), "cannot write ~/.zagon/zagon.db")
         }
         let plan = try b.summaryPlan(from: "2026-10-26", to: "2026-11-01")
@@ -120,17 +140,28 @@ final class SummaryTests: XCTestCase {
                                          worked: ["2026-10-26", "2026-10-27", "2026-10-28"], missing: ["2026-10-27", "2026-10-28"], calls: 3))
         XCTAssertTrue(plan.needsConfirm)
         XCTAssertFalse(SummaryPlan(key: "", from: "", to: "", worked: ["a"], missing: ["a"], calls: 0).needsConfirm)
-        XCTAssertEqual(calls.args, [["summary", "2026-10-30", "--json", "@300"], ["summary", "2026-10-30", "--json", "--refresh", "@300"],
+        XCTAssertEqual(calls.args, [["summary", "2026-10-30", "--json", "--lang", "en", "@300"],
+                                    ["summary", "2026-10-30", "--json", "--lang", "ru", "--refresh", "@300"],
                                     ["summary", "--from", "2026-10-26", "--to", "2026-11-01", "--plan", "--json", "@120"]])
 
         let old = backend(Calls()) { _ in Proc.Result(status: 64, out: Data(), err: Data("Error: Unknown option '--json'\nUsage: …\n".utf8)) }
-        XCTAssertThrowsError(try old.summary(day: "2026-10-30", refresh: false)) {
+        XCTAssertThrowsError(try old.summary(day: "2026-10-30", refresh: false, lang: "en")) {
             XCTAssertTrue(String(describing: $0).hasPrefix("zagon there is older than this app"))
         }
         let garbage = backend(Calls()) { _ in Self.ok("not json\n") }
-        XCTAssertThrowsError(try garbage.summary(day: "2026-10-30", refresh: false)) {
+        XCTAssertThrowsError(try garbage.summary(day: "2026-10-30", refresh: false, lang: "en")) {
             XCTAssertTrue(String(describing: $0).contains("in a form this app does not read"))
         }
+        // No AI CLI on the source: said in the answer and the plan (no calls, nothing to confirm).
+        let noCli = envelope(doc, engine: "none", noCli: "claude")
+        let bare = backend(Calls()) { args in
+            Self.ok(args.contains("--plan") ? #"{"calls":0,"from":"a","key":"a..b","missing":["a"],"no_cli":"claude","to":"b","worked":["a"]}"#
+                    : noCli)
+        }
+        XCTAssertEqual(try bare.summary(day: "2026-10-30", refresh: true, lang: "en").noCli, "claude")
+        let p = try bare.summaryPlan(from: "a", to: "b")
+        XCTAssertEqual(p.noCli, "claude")
+        XCTAssertFalse(p.needsConfirm)
     }
 
     static func planJSON(_ missing: String) -> String {
@@ -144,21 +175,30 @@ final class SummaryTests: XCTestCase {
         let b = backend(calls) { args in Self.ok(args.contains("--plan") ? Self.planJSON("") : args.contains("--from") ? whole : day) }
         let plan = SummaryPlan(key: period.key, from: "2026-10-26", to: "2026-11-01", worked: ["2026-10-27", "2026-10-28"],
                                missing: ["2026-10-27", "2026-10-28"], calls: 3)
-        let k = try await b.writePeriod(plan) { calls.step($0) }
+        let k = try await b.writePeriod(plan, lang: "en") { calls.step($0) }
         XCTAssertEqual(k.doc.key, "2026-10-26..2026-11-01")
         XCTAssertEqual(k.doc.main, ["The webhook"])
         XCTAssertEqual(calls.steps, [.day(1, of: 2), .day(2, of: 2), .period])
         // After the days the plan is asked again; the period itself is written without writing days again (no --yes).
-        XCTAssertEqual(calls.args, [["summary", "2026-10-27", "--json", "--refresh", "@300"], ["summary", "2026-10-28", "--json", "--refresh", "@300"],
+        XCTAssertEqual(calls.args, [["summary", "2026-10-27", "--json", "--lang", "en", "--refresh", "@300"],
+                                    ["summary", "2026-10-28", "--json", "--lang", "en", "--refresh", "@300"],
                                     ["summary", "--from", "2026-10-26", "--to", "2026-11-01", "--plan", "--json", "@120"],
-                                    ["summary", "--from", "2026-10-26", "--to", "2026-11-01", "--json", "--refresh", "@300"]])
+                                    ["summary", "--from", "2026-10-26", "--to", "2026-11-01", "--json", "--refresh", "--lang", "en", "@300"]])
         // A day the AI did not answer for is named, and the period is not written.
         let stuck = backend(Calls()) { args in Self.ok(args.contains("--plan") ? Self.planJSON(#""2026-10-28""#) : day) }
-        do { _ = try await stuck.writePeriod(plan); XCTFail("written") } catch {
+        do { _ = try await stuck.writePeriod(plan, lang: "en"); XCTFail("written") } catch {
             XCTAssertEqual(String(describing: error), "the AI did not answer for 2026-10-28: try again later")
         }
         _ = try backend(calls) { _ in Self.ok(#"{"at":"off"}"#) }.setSummaryTime(nil)
         XCTAssertEqual(calls.args.last, ["summary", "--at", "off", "--json", "@60"])
+        XCTAssertEqual(try backend(calls) { _ in Self.ok(#"{"at":"21:15"}"#) }.summaryTime(), "21:15")
+        XCTAssertEqual(calls.args.last, ["summary", "--at", "show", "--json", "@120"])
+        var st = SummaryState()
+        st.serverAt = ["a": "21:15", "b": "21:15", "c": "off"]
+        XCTAssertEqual(st.sharedAt(["a", "b"]), "21:15")
+        XCTAssertNil(st.sharedAt(["a", "c"]))
+        XCTAssertNil(st.sharedAt(["a", "d"]))  // d not asked yet
+        XCTAssertEqual(st.sharedAt(["c"]), "off")
     }
 
     func testNewestOfStoreAndAnswer() {

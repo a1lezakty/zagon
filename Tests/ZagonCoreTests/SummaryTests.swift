@@ -80,6 +80,7 @@ import Testing
         let dir = makeTempDir()
         var s = DaySummary(store: store, config: c, paths: ZagonPaths(home: dir, dir: dir + "/.zagon"), claudeRoot: dir + "/none")
         s.searchPath = "/usr/bin:/bin"
+        s.systemBins = []  // a claude installed on this machine is not the test's
         return s
     }
 
@@ -131,6 +132,39 @@ import Testing
         #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"is_error\":false,\"result\":\"ok\"}'\n"))
         s.searchPath = "/usr/bin:/bin"  // a user service's PATH
         #expect(s.complete("x")?.text == "ok")
+        // nvm's node versions, the newest first (v20 after v9 by name).
+        var n = summary(try Store(path: ":memory:"), engine: "claude")
+        #expect(n.engineCLI == nil && n.missingCLI == "claude" && n.calls(missing: 2) == 0)
+        for (v, answer) in [("v9.11.2", "old"), ("v20.1.0", "new"), ("v18.20.4", "mid")] {
+            let dir = n.paths.home + "/.nvm/versions/node/\(v)/bin"
+            Sys.mkdirs(dir)
+            #expect(writeScript(dir + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"is_error\":false,\"result\":\"\(answer)\"}'\n"))
+        }
+        #expect(n.complete("x")?.text == "new" && n.missingCLI == nil && n.calls(missing: 2) == 3)
+        n.config.summaryEngine = "none"
+        #expect(n.missingCLI == nil && n.engineCLI == nil)
+    }
+
+    @Test func hostsOfTheDaysSessions() throws {
+        let store = try Store(path: ":memory:"), (start, _) = Time.dayBounds("2026-10-30")!
+        try store.mergeSession(SessionMeta(id: "claude:a", tool: .claude, project: "alpha"))
+        try store.mergeSession(SessionMeta(id: "claude:b", tool: .claude, project: "beta"), host: "zz-box")
+        for id in ["claude:a", "claude:b"] {
+            try store.addActivity(sessionId: id, start: start + 9 * 3600, end: start + 10 * 3600, kind: "working")
+        }
+        #expect(try summary(store).facts("2026-10-30").hosts == [store.host, "zz-box"].sorted())
+        #expect(try summary(store).make("2026-10-31").doc.hosts == nil)  // no sessions: it does not say
+    }
+
+    @Test func taskTextsSkipCardsWithoutPoints() {
+        let d = doc("2026-10-30", [.init(project: "alpha", key: "PROJ-1", title: "a", done: ["fixed", ""]),
+                                   .init(project: "alpha", key: "PROJ-1", title: "b", done: []),
+                                   .init(project: "alpha", key: "PROJ-2", title: "c", done: [""]),
+                                   .init(project: "alpha", key: "PROJ-1", title: "d", done: ["tested"]),
+                                   .init(project: "beta", title: "e", done: ["x"])])
+        #expect(DaySummary.taskTexts(d).map { "\($0.key)=\($0.text)" } == ["PROJ-1=fixed; tested"])
+        let long = doc("2026-10-30", [.init(project: "alpha", key: "PROJ-1", title: "a", done: [String(repeating: "x", count: 400)])])
+        #expect(DaySummary.taskTexts(long).first?.text.count == 300)
     }
 
     @Test func writtenOnceAtItsTime() throws {
@@ -153,14 +187,23 @@ import Testing
             try store.addActivity(sessionId: "claude:s\(i)", start: start + 9 * 3600, end: start + 10 * 3600, kind: "working")
         }
         var s = summary(store, engine: "claude")
-        try s.save(doc("2026-10-26", [.init(project: "alpha", key: "PROJ-1", title: "Parser", was: "It crashed", done: ["fixed"], sec: 3600, cost: 2)]),
-                   engine: "claude", now: 1)
+        // claude is not installed: no AI calls, the days made without AI count as written.
+        #expect(s.calls(missing: 2) == 0 && s.missingCLI == "claude")
+        let bin = makeTempDir()
+        Sys.writeFile(bin + "/claude", [0], mode: 0o755)
+        s.searchPath = bin + ":/usr/bin:/bin"
+        var first = doc("2026-10-26", [.init(project: "alpha", key: "PROJ-1", title: "Parser", was: "It crashed", done: ["fixed"], sec: 3600, cost: 2)])
+        first.hosts = ["mini", "box"]
+        try s.save(first, engine: "claude", now: 1)
         try s.save(doc("2026-10-27", [.init(project: "alpha", key: "PROJ-1", title: "Parser", done: ["tests", "fixed"], left: "docs", sec: 1800, cost: 1),
                                       .init(project: "beta", title: "Docs", done: ["readme"], sec: 600),
                                       .init(project: "gamma", title: "Peek", done: ["looked"], sec: 60)]), engine: "none", now: 2)
         let (worked, missing) = try s.days("2026-10-26", "2026-11-01")
         #expect(worked == ["2026-10-26", "2026-10-27", "2026-10-28"] && missing == ["2026-10-27", "2026-10-28"])
         #expect(s.calls(missing: 2) == 3)
+        s.searchPath = "/usr/bin:/bin"
+        #expect(try s.days("2026-10-26", "2026-11-01").missing == ["2026-10-28"])
+        s.searchPath = bin + ":/usr/bin:/bin"
         // Without AI: the cards of one task are merged, nothing is written for the missing days.
         s.config.summaryEngine = "none"
         #expect(try s.days("2026-10-26", "2026-11-01").missing == ["2026-10-28"] && s.calls(missing: 1) == 0)
@@ -169,12 +212,9 @@ import Testing
         #expect(plain.items[0].sec == 5400 && plain.items[0].cost == 3 && plain.items[0].done == ["fixed", "tests"]
                 && plain.items[0].was == "It crashed" && plain.items[0].left == "docs")
         #expect(plain.main.first == "alpha · PROJ-1 Parser — 1 h 30 min" && plain.overview.hasPrefix("Days with work: 2"))
-        #expect(try s.kept(plain.key)?.engine == "none")
+        #expect(try s.kept(plain.key)?.engine == "none" && plain.hosts == ["box", "mini"])
         // With AI: one call over the days' cards, numbered across days.
         s.config.summaryEngine = "claude"
-        let bin = makeTempDir()
-        Sys.writeFile(bin + "/claude", [0], mode: 0o755)
-        s.searchPath = bin + ":/usr/bin:/bin"
         var prompts: [String] = []
         s.runner = { argv, input, _, _ in
             prompts.append(String(decoding: input, as: UTF8.self))
