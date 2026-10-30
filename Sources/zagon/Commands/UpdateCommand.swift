@@ -70,6 +70,7 @@ struct UpdateCommand: ParsableCommand {
         guard rename(tmp, exe) == 0 else { throw InstallError("cannot replace \(exe) (errno \(errno))") }
         print("zagon \(zagonVersion) -> \(new) (\(exe); the old one is \(Sys.basename(prev)))")
         Self.restartServices(exe)
+        Installer.updateNews(from: zagonVersion, to: new).forEach { print($0) }
         #else
         print(Sys.executablePath().contains(".app/Contents/")
               ? "Zagon.app updates itself (and the zagon inside it); see its settings."

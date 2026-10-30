@@ -209,6 +209,15 @@ import Testing
         #expect(Installer.keepPrevious(dir + "/missing") == nil && !Sys.exists(dir + "/missing.prev.new"))
     }
 
+    /// `zagon update` across 0.1.1 says what it turns on by itself; not within or past it, not for a build from source.
+    @Test func updateNewsOnlyWhenCrossing011() {
+        #expect(Installer.updateNews(from: "0.1.0", to: "0.1.1").count == 2)
+        #expect(!Installer.updateNews(from: "0.0.9", to: "0.2.0-rc1").isEmpty)
+        #expect(Installer.updateNews(from: "0.1.1", to: "0.1.2").isEmpty)
+        #expect(Installer.updateNews(from: "0.1.0", to: "0.1.0").isEmpty)
+        #expect(Installer.updateNews(from: "dev", to: "0.1.1").isEmpty)
+    }
+
     #if os(Linux)
     /// A --user service stops at ssh logout unless the account lingers: install says how to turn it on, never runs sudo.
     @Test func userServiceWithoutLingerIsAdvised() throws {

@@ -73,7 +73,15 @@ The macOS app (sample data): the menu bar, then the Day, Week and Calendar windo
   linked task's card (not what it was or what is left) become that task's text for the day, which is also its
   worklog text in Jira unless you set one by hand. A week,
   a month or a range is one more call over the days' summaries. With `[summary] engine = "none"` the summary is
-  built without AI.
+  built without AI; `[summary] time = ""` (or `zagon summary --at off`) stops the service writing it at all.
+- Evening task suggestions are a second AI call a day, the same way and on the same engine, at `[notify] worklog_at`
+  (19:00) when the service sends notifications. It gets the day's stretches of work no task key linked: project,
+  folder, session title, the first 100 characters of up to three typed messages (secrets redacted), edited file
+  names and commit subjects. With them go the candidate tasks and what Jira has on them: the start of the
+  description, the last two comments and your earlier worklogs; and samples of how you write in Jira (issues you
+  created, your worklogs and comments), so new tasks and worklog texts read like yours. `[tasks] evening_suggestions
+  = false` turns the evening call off (`zagon task suggest` still runs it when you ask); `[tasks] style_samples =
+  false` leaves the samples out.
 - Your typed messages go into a contentless full-text index used for search: the words can be searched, the text
   itself is not kept. Pass `--no-index-prompts` to `zagon scan` / `zagon daemon` to turn that off.
 - Data lives in `~/.zagon` (or `$ZAGON_DIR`): `zagon.db`, `spool/`, `archive/`, `logs/`, `config.toml`, `backup/`.

@@ -97,6 +97,12 @@ import Testing
         let n = try store("seven_day", [(0, 40, 50), (20, 41, 50)])
         try n.addLimitSnapshot(LimitSnapshot(tool: .claude, window: "seven_day", usedPct: 30, windowMinutes: 10080, ts: at + 10 * minute))
         #expect(try TaskTime.limitGrowth(n.db, tool: "claude", window: "seven_day", from: at - hour, to: at + hour) == 1)
+        // One taken after the period's end opens a new one from 0: 40 (resets at 11:00), then 5 and 7 without a reset = +7.
+        let e = try store("seven_day", [(0, 40, 1)])
+        for (m, pct) in [(90.0, 5.0), (100, 7)] {
+            try e.addLimitSnapshot(LimitSnapshot(tool: .claude, window: "seven_day", usedPct: pct, windowMinutes: 10080, ts: at + m * minute))
+        }
+        #expect(try TaskTime.limitGrowth(e.db, tool: "claude", window: "seven_day", from: at - hour, to: at + 2 * hour) == 7)  // old: 2
     }
 
     /// The Day screen: a re-sent lower reading neither ends a stretch at 100 % nor becomes the week's percent at the end of

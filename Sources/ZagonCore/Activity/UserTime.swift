@@ -90,6 +90,6 @@ enum UserTime {
         """
     }
 
-    /// Lower-case letters and digits: `LB-web` and `lbweb` are one name.
+    /// Lower-case letters and digits: `my-web` and `myweb` are one name.
     static func norm(_ s: String) -> String { String(s.lowercased().filter { $0.isLetter || $0.isNumber }) }
 }

@@ -126,6 +126,7 @@ struct LimitUsage {
             if r > cur + 120 { pct = v; resets = r; return true }
             pct = max(p, v)
         case let (nil, cur?) where ts < cur + 120: pct = max(p, v)
+        case (nil, _?): pct = v; resets = nil; return true  // taken after the period's end: a new one began
         default: pct = v; resets = r
         }
         return false
