@@ -390,7 +390,7 @@ func channelText(_ s: String) -> String {
         #expect(p(h + "/pub") == "proj-one" && p(h + "/pub/src") == "proj-one" && p(h + "/pub-wt/x") == "proj-one")
         #expect(p(h + "/ssh") == "proj-two" && p(h + "/plain") == "plain")
         #expect(p(h + "/crlf") == "proj-three" && p(h + "/dotgit") == "proj-four")
-        #expect(p("/private/var/tmp/x") == Projects.temp)
+        #expect(p("/private/var/tmp/x") == Projects.temp && p("/tmp/x") == Projects.temp)
         #expect(p(h + "/scratch/out", tmp: tmp) == Projects.temp && p(h + "/gone/away", tmp: tmp) == Projects.temp)
         #expect(p("/home/u/.claude/projects/-x") == Projects.temp && p("/var/folders/ab/T/x") == Projects.temp)
         #expect(p("/scratch/t/x", tmp: "/scratch/t/") == Projects.temp && p("/scratch/x", tmp: "/scratch/t") == "x")
