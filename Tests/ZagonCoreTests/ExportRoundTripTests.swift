@@ -45,8 +45,8 @@ import Testing
         return parts.joined(separator: "\n")
     }
 
-    /// `zoneChange`: the zone id changes before the second scan (`zagon tz`, or another test setting `TZ` for the whole
-    /// process), so the server rebuilds every day; a day left empty must still reach the client.
+    /// `zoneChange`: the zone changes before the second scan (`zagon tz`), so the server rebuilds every day; a day left
+    /// empty must still reach the client.
     @Test(arguments: [false, true]) func roundTripAndIncrementalWithoutDoubling(zoneChange: Bool) throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }

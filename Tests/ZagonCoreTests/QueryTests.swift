@@ -7,10 +7,9 @@ import Testing
 enum QueryFixture {
     static let now: Timestamp = 1_793_360_520
 
-    /// Scans a copy of the fixtures (spool retention would delete old files in place).
+    /// Scans a copy of the fixtures (spool retention would delete old files in place). Days are UTC: the test process
+    /// starts in UTC (Tests/CTestZone).
     static func store(root: String = Bundle.module.resourcePath! + "/Fixtures/scenario") throws -> Store {
-        setenv("TZ", "UTC", 1)
-        tzset()
         let dir = tempDir()
         try FileManager.default.copyItem(atPath: root, toPath: dir + "/claude")
         let store = try Store(path: ":memory:")
