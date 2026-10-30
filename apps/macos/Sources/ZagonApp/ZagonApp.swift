@@ -496,7 +496,8 @@ final class UpdateReminders: NSObject, SPUStandardUserDriverDelegate {
     func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) { found(nil) }
     func standardUserDriverWillFinishUpdateSession() { found(nil) }
 
-    private func found(_ version: String?) { Task { @MainActor in self.app?.updateFound = version } }
+    // Sparkle calls its user driver's delegate on the main thread.
+    private func found(_ version: String?) { MainActor.assumeIsolated { app?.updateFound = version } }
 }
 
 // MARK: - Menu bar panel

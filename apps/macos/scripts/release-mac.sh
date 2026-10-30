@@ -7,7 +7,8 @@
 set -euo pipefail
 version=${1:-}; build=${2:-}; notes=${3:+$(cd "$(dirname "$3")" && pwd)/$(basename "$3")}
 cd "$(dirname "$0")/.."
-[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && $build =~ ^[0-9]+$ ]] || { echo "usage: $0 <x.y.z> <build number> [notes.md]" >&2; exit 2; }
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && $build =~ ^[0-9]+$ && ( -z $notes || -f $notes ) ]] ||
+  { echo "usage: $0 <x.y.z> <build number> [notes.md]" >&2; exit 2; }
 [ -n "${SPARKLE_ED_PRIVATE_KEY:-}" ] || { echo "SPARKLE_ED_PRIVATE_KEY is not set" >&2; exit 2; }
 key=${SPARKLE_ED_PRIVATE_KEY//[$'\r\n\t ']/}
 repo=https://github.com/a1lezakty/zagon

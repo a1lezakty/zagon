@@ -33,10 +33,10 @@ jobs:
         run: swift test
       - name: Snapshots
         run: swift run Zagon --snapshots build/snapshots --fixtures ../../Tests/ZagonCoreTests/Fixtures/scenario
-      # Build 1: below every release (release.yml numbers them by its own runs), so a CI DMG updates to the latest one.
+      # Build 0: below every release (release.yml numbers them by its own runs), so a CI DMG updates to the latest one.
       # The signed update zip and the appcast come only from release.yml, the one workflow with the Sparkle key.
       - name: App and DMG
-        run: scripts/build-app.sh "0.1.0" "1"
+        run: scripts/build-app.sh "0.1.0" "0"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
