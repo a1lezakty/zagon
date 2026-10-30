@@ -29,13 +29,48 @@ public final class TaskTools: TaskService {
     public func suggestions(day: String, again: Bool) throws -> String {
         scan()
         let r = try mapErrors { try suggester().suggest(day, again: again, now: now()) }
-        return SuggestText.run(r, day: day, answer: "ask the user, then task_suggestions_answer with confirm: true")
+        return SuggestText.run(r, day: day, answer: "ask the user, then task_suggestions_answer with confirm: true; a new task (N…) "
+                               + "can be made in Jira instead with task_create_in_jira (preview first)")
     }
 
-    public func answerSuggestions(accept: [Int], reject: [Int]) throws -> String {
+    public func answerSuggestions(accept: [String], reject: [String]) throws -> String {
         let s = try suggester()
         // No outer transaction: accept refreshes the day's links (git) and must not hold the write lock meanwhile.
-        return try mapErrors { try s.accept(accept) + s.reject(reject) }.joined(separator: "\n")
+        return try mapErrors {
+            try s.accept(accept.compactMap(Int.init)) + accept.filter { Int($0) == nil }.map { try s.acceptNew($0) }
+                + s.reject(reject.compactMap(Int.init)) + reject.filter { Int($0) == nil }.map { try s.rejectNew($0) }
+        }.joined(separator: "\n")
+    }
+
+    public func createInJira(id: String, project: String?, title: String?, description: String?, confirm: Bool, token: String?) throws -> String {
+        let s = try suggester()
+        return try mapErrors {
+            // An earlier try that Jira answered: its issue is taken, nothing new is made.
+            if try s.jiraClaimKey(id) != nil {
+                return try s.createInJira(id, project: project ?? "", title: title, description: description, takeOnly: true)
+            }
+            let p: JiraCreatePlan
+            do { p = try s.jiraPlan(id, project: project, title: title, description: description) } catch {
+                // An earlier try may have made the issue: that one is taken; none is made without the plan shown.
+                guard try s.jiraClaim(id) else { throw error }
+                return try s.createInJira(id, project: project ?? "", title: title, description: description, takeOnly: true)
+            }
+            guard let proj = p.project else {
+                throw MCPToolError((project.map { "No Jira project \($0) you may create issues in. " } ?? "Choose a project. ")
+                                   + "Projects: " + p.projects.map { "\($0.key) (\($0.name))" }.joined(separator: ", ") + ". Nothing was created.")
+            }
+            // The token ties the confirmation to the values shown: no create without a preview of exactly these.
+            let want = String(UInt64(bitPattern: fnv1a64([id.uppercased(), proj, p.title, p.description].joined(separator: "\u{1}"))), radix: 36)
+            let preview = "Would create in Jira: a \(p.type ?? "Task") in \(proj), assigned to the user\ntitle: \(p.title)\ndescription:\n"
+                + "\(p.description)\nthen \(Txt.dur(p.draft.workedSec)) of work is linked to it.\nProjects: "
+                + p.projects.map(\.key).joined(separator: ", ") + "\ntoken: \(want)\nNothing was created. Show this to the user; only "
+                + "after they explicitly say to create it, call again with these values, confirm: true and token \(want)."
+            guard confirm, token == want else {
+                if confirm { throw MCPToolError("The token is not the one of these values; nothing was created. " + preview) }
+                return preview
+            }
+            return try s.createInJira(id, project: proj, title: p.title, description: p.description)
+        }
     }
 
     func scan() { if let refresh { do { try refresh() } catch { log("mcp: scan failed: \(error)") } } }
@@ -67,7 +102,9 @@ public final class TaskTools: TaskService {
     public func list(status: String?, all: Bool, limit: Int) throws -> String {
         let w = try fresh()
         let lines = try tasks.overview(status: try check(status), all: true, limit: .max, base: w.base, idleGap: w.idleGap, now: now())
-        return TaskText.list(lines, base: w.base, all: all, limit: limit, more: "task_list with all: true")
+        let drafts = (try? makeSuggester?().drafts(now: now()).count) ?? 0
+        return TaskText.list(lines, base: w.base, all: all, limit: limit, more: "task_list with all: true",
+                             drafts: (drafts, "task_suggestions"))
     }
 
     public func get(_ ref: String) throws -> String {
@@ -101,6 +138,7 @@ public final class TaskTools: TaskService {
 
     func mapErrors<T>(_ body: () throws -> T) throws -> T {
         do { return try body() } catch let e as TaskError { throw MCPToolError(e.description) }
+        catch let e as JiraError { throw MCPToolError("\(e)") }
     }
 
     /// Applies the fields inside the caller's transaction (all or nothing); returns what changed as "; …" pieces.

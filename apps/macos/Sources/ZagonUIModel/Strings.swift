@@ -143,6 +143,10 @@ enum Strings {
         "jira.allLogged": "All time is logged: {0}.", "jira.none": "Not in Jira, kept in Zagon only.",
         "filter.review": "In review · {0}", "filter.jira": "More in Jira · {0}",
         "tasks.noWork": "No tasks worked on in the last 7 days. Your other Jira issues are under “More in Jira”.",
+        "draft.caps": "Suggested", "draft.title": "New task: {0} · {1}", "draft.create": "Create",
+        "draft.createJira": "Create in Jira…", "draft.reject": "Not needed", "draft.jiraTitle": "Create a task in Jira",
+        "draft.project": "Project", "draft.type": "Type: Task", "draft.name": "Title", "draft.description": "Description",
+        "draft.links": "{0} of work gets linked to the new task.", "draft.creating": "Creating…",
 
         "worklog.title": "What to log — {0}", "worklog.yourTime": "your work time",
         "worklog.sessions": "sessions worked (in parallel)", "worklog.inJira": "already in Jira today",
@@ -332,6 +336,10 @@ enum Strings {
         "jira.allLogged": "Всё время залогировано: {0}.", "jira.none": "Задачи нет в Jira — она только в Zagon.",
         "filter.review": "На проверке · {0}", "filter.jira": "Ещё в Jira · {0}",
         "tasks.noWork": "За 7 дней работы ни по одной задаче. Остальные задачи Jira — в «Ещё в Jira».",
+        "draft.caps": "Предложено", "draft.title": "Новая задача: {0} · {1}", "draft.create": "Создать",
+        "draft.createJira": "Создать в Jira…", "draft.reject": "Не надо", "draft.jiraTitle": "Создать задачу в Jira",
+        "draft.project": "Проект", "draft.type": "Тип: Task", "draft.name": "Название", "draft.description": "Описание",
+        "draft.links": "К новой задаче привяжется {0} работы.", "draft.creating": "Создаю…",
 
         "worklog.title": "Что логировать — {0}", "worklog.yourTime": "твоё рабочее время",
         "worklog.sessions": "сессии работали (параллельно)", "worklog.inJira": "уже в Jira за сегодня",

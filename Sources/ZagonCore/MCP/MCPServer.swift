@@ -16,7 +16,8 @@ public final class MCPServer {
     static let instructions = """
         Zagon tracks the user's Claude Code and Codex CLI sessions on this machine: subscription limits, live \
         sessions, tokens and time per day, search over past sessions. Answers are short and carry numbers. Days \
-        are local YYYY-MM-DD. Call worklog_commit only when the user explicitly asks to write worklogs to Jira.
+        are local YYYY-MM-DD. Call worklog_commit only when the user explicitly asks to write worklogs to Jira, and \
+        task_create_in_jira with confirm only after the user explicitly said to create that issue.
         """
 
     /// Serves until end of input.

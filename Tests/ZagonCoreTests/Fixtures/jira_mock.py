@@ -1,11 +1,13 @@
 """Local stand-in for the Jira Cloud REST endpoints Zagon uses. Test-only: writes go to memory.
 
 usage: jira_mock.py <state.json> <port-file> <email> <token>
-state.json: {"me": "acc-me", "issues": {"KEY": {"summary", "status", "category", "assignee", "worklogs": [...]}}}
+state.json: {"me": "acc-me", "issues": {"KEY": {"summary", "status", "category", "assignee", "creator", "description",
+"comments": [{"author", "body"}], "worklogs": [...]}}, "projects": [{"key", "name"}]}; issues POSTed to /rest/api/2/issue
+are stored as KEY-<n> (status To Do, creator and assignee as sent) with their issue type id.
 Faults (optional): "lose_post_replies": N — the next N worklog POSTs are stored but get no answer (connection closed);
 "post_status": [500, 400] — the next POSTs get these codes and store nothing; "bad_post_bodies": N — the next N POSTs
 are stored but answered 201 with a body that is not JSON; "search_lag": true — worklogs added by POST do not show in
-the worklogAuthor search (its index lags).
+the worklogAuthor search (its index lags). The same post_status / lose_post_replies apply to issue POSTs.
 """
 import base64, json, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -53,9 +55,46 @@ class H(BaseHTTPRequestHandler):
         issues = state["issues"]
         if method == "GET" and u.path == "/rest/api/2/myself":
             return self.send(200, {"accountId": me})
-        if method == "POST" and u.path == "/rest/api/3/search/jql":
+        if method == "GET" and u.path == "/rest/api/3/project/search":
+            ps = state.get("projects", [])
+            at = int(q.get("startAt", 0))
+            return self.send(200, {"values": ps[at:at + 1], "isLast": at + 1 >= len(ps)})  # one per page
+        if method == "GET" and len(parts) == 7 and parts[:5] == ["rest", "api", "3", "issue", "createmeta"] and parts[6] == "issuetypes":
+            if parts[5] not in [p["key"] for p in state.get("projects", [])]:
+                return self.send(404, {"errorMessages": ["no project"]})
+            return self.send(200, {"issueTypes": [{"id": "1", "name": "Эпик", "untranslatedName": "Epic", "subtask": False},
+                                                  {"id": "2", "name": "Подзадача", "untranslatedName": "Sub-task", "subtask": True},
+                                                  {"id": "3", "name": "Задача", "untranslatedName": "Task", "subtask": False}]})
+        if method == "POST" and u.path == "/rest/api/2/issue":
+            if self.headers.get("Content-Type") != "application/json":
+                return self.send(415, {"errorMessages": ["content type"]})
+            f = self.body()["fields"]
+            with lock:
+                if state.get("post_status"):
+                    return self.send(state["post_status"].pop(0), {"errorMessages": ["fault"]})
+                proj = f["project"]["key"]
+                n = 1 + sum(1 for k in issues if k.startswith(proj + "-"))
+                key = f"{proj}-{100 + n}"
+                issues[key] = {"summary": f["summary"], "description": f.get("description", ""), "status": "To Do", "category": "new",
+                               "assignee": f.get("assignee", {}).get("id"), "creator": me, "type": f["issuetype"]["id"], "_created": True}
+                if state.get("lose_post_replies", 0) > 0:
+                    state["lose_post_replies"] -= 1
+                    self.close_connection = True
+                    return
+            return self.send(201, {"id": "9" + str(n), "key": key})
+        if method == "POST" and u.path in ("/rest/api/3/search/jql", "/rest/api/2/search/jql"):
             b = self.body()
             jql = b.get("jql", "")
+            if jql.startswith("creator = currentUser()"):
+                keys = [k for k, i in issues.items() if i.get("creator") == me]
+                if "project = " in jql:
+                    proj = jql.split('project = "')[1].split('"')[0]
+                    keys = [k for k in keys if k.startswith(proj + "-") and issues[k].get("_created")]
+                keys.sort(reverse=True)
+                out = {"issues": [{"key": k, "fields": {"summary": issues[k]["summary"], "description": issues[k].get("description"),
+                                                        "status": {"name": issues[k]["status"], "statusCategory": {"key": issues[k]["category"]}}}}
+                                  for k in keys[:b.get("maxResults", 100)]], "isLast": True}
+                return self.send(200, out)
             if "worklogAuthor" in jql:
                 keys = [k for k, i in issues.items() if any(w["author"] == me and not w.get("_new") for w in i.get("worklogs", []))]
             elif jql.startswith("key in ("):
@@ -81,6 +120,9 @@ class H(BaseHTTPRequestHandler):
             if len(parts) == 5 and method == "GET":
                 return self.send(200, {"key": key, "fields": {"summary": i["summary"], "status": {
                     "name": i["status"], "statusCategory": {"key": i["category"]}}}})
+            if len(parts) == 6 and parts[5] == "comment" and method == "GET":
+                cs = [{"author": {"accountId": c["author"]}, "body": c["body"]} for c in reversed(i.get("comments", []))]
+                return self.send(200, {"startAt": 0, "total": len(cs), "comments": cs})
             if len(parts) == 6 and parts[5] == "worklog" and method == "GET":
                 after = float(q.get("startedAfter", 0))
                 ws = [w for w in i.get("worklogs", []) if started_ms(w["started"]) >= after]

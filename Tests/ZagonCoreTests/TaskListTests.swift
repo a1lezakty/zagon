@@ -91,6 +91,7 @@ import Testing
         let full = TaskText.list(all, all: true)
         #expect(full.contains("\nIn Jira, no work here in the last 7 days:\n") && full.contains("OPS-9 ") && full.contains("(not a task here yet)"))
         #expect(TaskText.list([], all: false) == "No tasks worked on in the last 7 days.")
+        #expect(TaskText.list([], drafts: (2, "task drafts")).hasSuffix("+ 2 new tasks suggested for work no task fits: task drafts"))
 
         // An issue only in Jira is shown as is and becomes a task once changed.
         #expect(try t.find("OPS-9") == nil && t.jiraOnly("ops-9")?.title == "not a task")

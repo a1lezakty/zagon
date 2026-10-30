@@ -67,7 +67,7 @@ struct TaskCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "task", abstract: "Own task registry: sessions, time, TODO, notes, what was done.",
         subcommands: [Add.self, List.self, Show.self, Todo.self, Note.self, Done.self, Status.self, Link.self, Import.self,
-                       Suggest.self, Accept.self, Reject.self])
+                       Suggest.self, Drafts.self, Accept.self, Reject.self, JiraProjects.self])
 
     struct Add: ParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Create a task (own key ZAG-N unless --key).")
@@ -102,8 +102,9 @@ struct TaskCommand: ParsableCommand {
             try common.linker().linkSessions(store)
             let base = common.timeBase(time)
             let lines = try Tasks(store: store).overview(status: status, all: true, limit: .max, base: base, idleGap: common.idleGap * 60)
-            if report.json { try emit(all ? lines : lines.filter { $0.worked != false }) }
-            else { print(TaskText.list(lines, base: base, all: all)) }
+            if report.json { try emit(all ? lines : lines.filter { $0.worked != false }); return }
+            let drafts = (try? common.suggester(store).drafts().count) ?? 0
+            print(TaskText.list(lines, base: base, all: all, drafts: (drafts, "zagon task drafts")))
         }
     }
 
@@ -198,8 +199,10 @@ struct TaskCommand: ParsableCommand {
     struct Suggest: ParsableCommand {
         static let configuration = CommandConfiguration(
             abstract: "Suggest tasks for the day's work no key linked (one AI call per day; Jira read-only).",
-            discussion: "Suggestions count nowhere until accepted: `task accept <id…>` links the task for that time, "
-                + "`task reject <id…>` never suggests that task for that session again (its other links stay).")
+            discussion: "Work no task fits gets a new task suggested (N1, N2…: title, description and worklog text written "
+                + "the way you write in Jira). Suggestions count nowhere until accepted: `task accept <id…>` links the task for "
+                + "that time (a new one is made in Zagon; `--create-in-jira` makes it in Jira), `task reject <id…>` never "
+                + "suggests that task for that session again (its other links stay).")
         @Argument(help: "YYYY-MM-DD, default today.") var date: String?
         @Flag(help: "Drop the day's open suggestions and ask again.") var again = false
         @Flag(help: "Print what would be sent to the AI: no AI call, no suggestion stored (links are refreshed, Jira is read).")
@@ -215,21 +218,90 @@ struct TaskCommand: ParsableCommand {
         }
     }
 
+    struct Drafts: ParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "New tasks suggested for work no task fits, not answered yet.")
+        @OptionGroup var common: Common
+        @OptionGroup var report: ReportOptions
+        func run() throws {
+            let d = try common.suggester(try prepare(common, report)).drafts()
+            if report.json { try emit(d) } else { print(d.isEmpty ? "No suggested new tasks." : SuggestText.drafts(d)) }
+        }
+    }
+
     struct Accept: ParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Accept suggestions: link their task for that time.")
-        @Argument(help: "Suggestion ids (from `task suggest`).") var ids: [Int]
+        static let configuration = CommandConfiguration(
+            abstract: "Accept suggestions: link their task for that time; a suggested new task (N…) is made in Zagon.",
+            discussion: "With --create-in-jira the new task is made in Jira (a Task in the project, assigned to you) after "
+                + "you confirm what will be created; its work is then linked to the new issue.")
+        @Argument(help: "Suggestion ids (from `task suggest`): numbers, or N1… for new tasks.") var ids: [String]
+        @Option(help: "A new task's title (one N… id).") var title: String?
+        @Option(help: "A new task's description (one N… id).") var description: String?
+        @Flag(help: "Make the new task in Jira (one N… id).") var createInJira = false
+        @Option(help: "Jira project key (default: the last one used).") var project: String?
+        @Flag(help: "Do not ask before creating in Jira (scripts, the app after its own confirmation).") var yes = false
         @OptionGroup var common: Common
         func run() throws {
-            for l in try common.suggester(try common.open()).accept(ids) { print(l) }
+            let s = try common.suggester(try common.open())
+            let new = ids.filter { $0.uppercased().hasPrefix("N") }, old = ids.compactMap(Int.init)
+            guard new.count + old.count == ids.count else { throw ValidationError("ids are numbers or N1, N2…") }
+            if title != nil || description != nil || createInJira || project != nil {
+                guard ids.count == 1, new.count == 1 else { throw ValidationError("--title, --description, --create-in-jira: one N… id") }
+            }
+            if createInJira {
+                // An earlier try that Jira answered: its issue is taken, nothing new is made, nothing to confirm.
+                if try s.jiraClaimKey(new[0]) != nil {
+                    print(try s.createInJira(new[0], project: project ?? "", title: title, description: description, takeOnly: true))
+                    return
+                }
+                let p: JiraCreatePlan
+                do { p = try s.jiraPlan(new[0], project: project, title: title, description: description) } catch {
+                    // An earlier try may have made the issue: that one is taken; none is made without the plan shown.
+                    guard try s.jiraClaim(new[0]) else { throw error }
+                    print(try s.createInJira(new[0], project: project ?? "", title: title, description: description, takeOnly: true))
+                    return
+                }
+                guard let proj = p.project else {
+                    throw ValidationError(p.projects.isEmpty ? "no Jira project you may create issues in"
+                                          : "choose --project: " + p.projects.map(\.key).joined(separator: ", "))
+                }
+                print("Create in Jira: a Task in \(proj), assigned to you\n  title: \(p.title)\n  description:\n"
+                      + p.description.split(separator: "\n", omittingEmptySubsequences: false).map { "    " + $0 }.joined(separator: "\n")
+                      + "\n  then \(Fmt.dur(p.draft.workedSec)) of work is linked to it")
+                if !yes {
+                    guard isatty(0) == 1 else { throw ValidationError("nothing created: confirm with --yes") }
+                    print("Create it? [y/N] ", terminator: "")
+                    guard let a = readLine(), ["y", "yes"].contains(a.lowercased()) else { print("nothing created"); return }
+                }
+                print(try s.createInJira(new[0], project: proj, title: p.title, description: p.description))
+                return
+            }
+            for l in try s.accept(old) { print(l) }
+            for id in new { print(try s.acceptNew(id, title: title, description: description)) }
         }
     }
 
     struct Reject: ParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Reject suggestions: never suggest that task for that session.")
-        @Argument(help: "Suggestion ids (from `task suggest`).") var ids: [Int]
+        @Argument(help: "Suggestion ids (from `task suggest`): numbers, or N1… for new tasks.") var ids: [String]
         @OptionGroup var common: Common
         func run() throws {
-            for l in try common.suggester(try common.open()).reject(ids) { print(l) }
+            let s = try common.suggester(try common.open())
+            guard ids.allSatisfy({ Int($0) != nil || $0.uppercased().hasPrefix("N") }) else { throw ValidationError("ids are numbers or N1, N2…") }
+            for l in try s.reject(ids.compactMap(Int.init)) { print(l) }
+            for id in ids where Int(id) == nil { print(try s.rejectNew(id)) }
+        }
+    }
+
+    struct JiraProjects: ParsableCommand {
+        static let configuration = CommandConfiguration(commandName: "jira-projects",
+                                                        abstract: "Jira projects you may create issues in, and the default one.")
+        @OptionGroup var common: Common
+        @OptionGroup var report: ReportOptions
+        struct Out: Encodable { var `default`: String?; var projects: [JiraProject] }
+        func run() throws {
+            let (d, p) = try common.suggester(try common.open()).jiraProjects()
+            if report.json { try emit(Out(default: d, projects: p)); return }
+            for x in p { print("\(x.key == d ? "*" : " ") \(x.key)  \(x.name)") }
         }
     }
 

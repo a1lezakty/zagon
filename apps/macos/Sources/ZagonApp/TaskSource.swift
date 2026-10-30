@@ -20,7 +20,7 @@ extension AppState {
         return f.t("source.local")
     }
 
-    enum TaskLoad { case list, card(String), plan(String) }
+    enum TaskLoad { case list, card(String), plan(String), drafts }
 
     /// Loads what is not there yet (or again, with `force`).
     func loadTasks(_ what: TaskLoad, force: Bool = false) {
@@ -40,6 +40,32 @@ extension AppState {
         case .plan(let day):
             guard force || have.plans[day] == nil else { return }
             work(s, { try $0.plan(day) }) { $0.plans[day] = $1 }
+        case .drafts:
+            guard force || have.drafts == nil else { return }
+            work(s, { try $0.suggestions() }) { $0.drafts = $1.drafts; $0.jira = $1.jira; $0.draftNote = nil }
+        }
+    }
+
+    /// Accepts or drops suggestion `id` through `act` (the CLI's answer line), then the suggestions and the list again.
+    /// The answer, or the failure, goes under the suggestions; `done` gets the failure (nil: it worked).
+    func decideDraft(_ id: String, done: @escaping (String?) -> Void = { _ in }, _ act: @escaping (TaskBackend) throws -> String) {
+        guard let s = currentTaskSource else { return }
+        work(s, { b in
+            // A reload that fails keeps what is shown, less the answered suggestion.
+            (Result<String, Error> { try act(b) }, try? b.suggestions(), try? b.list().map(TaskBackend.item))
+        }) { cache, v in
+            switch v.0 {
+            case .success(let line):
+                cache.draftNote = line
+                cache.drafts?.removeAll { $0.id == id }
+                done(nil)
+            case .failure(let e):
+                let why = Remote.scrubHomes(String(describing: e))
+                cache.draftNote = why
+                done(why)
+            }
+            if let d = v.1 { cache.drafts = d.drafts; cache.jira = d.jira }
+            if let list = v.2 { cache.list = list }
         }
     }
 
@@ -121,6 +147,7 @@ extension AppState {
             }
         }
         c.plans[day] = try? b.plan(day)
+        c.drafts = (try? b.drafts()) ?? []
         taskCache[s] = c
     }
 }

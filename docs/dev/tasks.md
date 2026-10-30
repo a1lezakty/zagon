@@ -6,7 +6,13 @@
 ## Registry (`Tasks`)
 
 - Key: own `ZAG-N` (next free number) or external (`PROJ-123`); an external key is also the Jira key unless told
-  otherwise. Status `planned | in_progress | done` (a stored `open` reads as `planned`).
+  otherwise. Status `planned | in_progress | review | done` (a stored `open` reads as `planned`). In JSON `status`
+  keeps to the three values a zagon before 0.1.1 reads (`review` goes as `in_progress`) and `stage` says `review`.
+- The list is built from work (`Tasks.overview`): a line is `worked` when the task has time in the last 7 days, a link
+  whose period reaches into them, your Jira worklogs of those days (`JiraCache.logged`), TODO / notes / "what was done"
+  of those days or an open TODO, or is an own task (no Jira key) not done before them. `task list` shows those, most
+  time first; `--all` adds the rest and your open Jira issues that are no task here (id 0, from `JiraCache`). `task show`
+  of such an issue shows it; changing it (`todo`, `note`, `status`, `link`…) makes it a task (`findOrAdopt`).
 - TODO (numbered in creation order), notes, "what was done" per day: one text per (day, source), `source` =
   `auto` (summaries) | `manual`; manual wins as the worklog text.
 - `task_session` (schema v4): a link has a period `[start, end)` (default the whole session) and `how`:
@@ -35,7 +41,9 @@ is about (of the session and its sub-agents, by the folder of each interval, `ac
   an amended or squashed commit keeps its first author time, so work done before the amend is not covered by it.
 `linkSessions` rebuilds title/branch/message links, `linkDay` the day's commit/worktree links; manual links are
 never touched. `unknownKeys` lists keys in branches, titles and typed messages of the day that match no task (the
-plan suggests adding them). Nothing writes `task_done` with source `auto` yet (the summaries track will).
+plan suggests adding them). A key that is no task but one of your Jira issues (`JiraCache.mine`) becomes a task as its
+work is linked (`TaskLinker.Known`); keys of other issues stay unknown. `task_done` with source `auto` is written when a
+suggestion is accepted (the AI's worklog text for the day, if the day has none).
 
 ## Time (`TaskTime.compute`)
 
@@ -63,6 +71,20 @@ Rows: `planned` (rebuilt on every plan), `logged` (with `jira_worklog_id`), `ski
 worklog Jira shows counts as Jira has it (Zagon's own too, also when moved there); logged rows Jira does not show and
 skipped rows count as local rows.
 
+## Jira cache (`JiraCache`, Jira/JiraCache.swift)
+
+Jira is a reference, not the task list: `task import` no longer copies the backlog into the registry. `meta`
+`jira:issues` keeps your issues (assigned to you, open or updated in the last 30 days: `mine`), the registry's Jira
+keys (`key in (…)`, 100 per query; a refused query keeps their last read), and the issues with your worklogs of the
+last 7 days (`logged`, by `myWorklogs`: your account and those days only). Read again by `task import` (now: "read
+Jira"), and at most once an hour by `task list`, MCP task tools, the day plan and suggestions (`current`; a failed
+read is retried after 10 min, only its time is written). On a read, a task whose Jira status changed since the last
+read takes it (`TaskStatus(jira:review:)`); on the first read only a task still `planned` or with the status its
+category gives. Status mapping: a name with a part of `[jira] review_statuses` (default `review, qa, test, release,
+deploy` and Russian `ревью, провер, тест, релиз`; one-line TOML array) is `review` unless Jira counts it done; the rest
+by category (`new` → planned, `indeterminate` → in progress, `done` → done). Live 30.10: "Ready to release" and "Ready
+to test" are category `new` there, hence the name list.
+
 ## Jira (`JiraClient`)
 
 Config `[jira] url, email, token_file` (token = last non-empty line; `~/` expanded; `https` only; plain `http` only to `localhost`, `127.0.0.1` or `[::1]` exactly, for a local mock). curl subprocess, credentials in curl's config
@@ -73,6 +95,11 @@ Write: `addWorklog` (`POST /rest/api/2/issue/<key>/worklog`, `started` in UTC `+
 `zagon log commit`: it re-scans and re-plans against fresh Jira, shows the rows, asks (or `--yes`), checks each row
 against Jira once more and goes on after a failed row (exit 1 at the end). `log plan` / `task show` work without Jira
 when it fails (the error is printed); `commit` does not.
+Write: `createIssue` (`POST /rest/api/2/issue`: project, the project's Task type — `untranslatedName` "Task", else the
+first plain type, from `/rest/api/3/issue/createmeta/<project>/issuetypes` —, summary, description, assignee = you) —
+only from `TaskSuggester.createInJira` (below). Also read for that: `/rest/api/3/project/search?action=create`; for
+style samples `myTexts`: `/rest/api/2/search/jql` `creator = currentUser()` (plain-text description), your worklog
+comments, your comments (`/rest/api/2/issue/<key>/comment`, author = `myself`) on your 8 latest issues.
 
 ## Shared flow and MCP
 
@@ -102,14 +129,31 @@ first): updated in Jira on the day or the next, your Jira worklogs of the 14 day
 the days before (not of the day itself: work with a key is linked already), in progress, created or updated in those
 days. Jira is only read (`myWorklogs`, two searches, `issue?fields=description,comment`), once per day, cached in
 `meta` (`suggest:jira:<day>`, `suggest:jira-ctx:<day>`); a Jira failure drops only the Jira part.
+Your Jira issues with those signals that are no task here become tasks (hidden: no work) so they can be offered.
 One AI call per day with the summary's engine (`[summary] engine, model, timeout`; `DaySummary.complete`: `claude -p
---safe-mode --tools "" …` from `~/.zagon/run` with `ZAGON_INTERNAL=1`, or `codex exec`), digest ≤ 10 000 characters:
-tasks (key, title, status, clipped description, last comment, your earlier worklog texts) and stretches (time,
-project, folder, title, first words of up to 3 typed messages, edited file names, commits). The answer is a JSON array
-`{segment, key, confidence, reason}`; malformed items, keys or stretches not offered and confidence under
-`[tasks] suggest_min_confidence` (0.7) are dropped, per stretch the most confident is kept. Engine `none` (or a failed
-call): the task whose name shares the most words (6-letter stems of words of 4+) with the session's title, project and
-folder; 2+ words = 0.7.
+--safe-mode --tools "" …` from `~/.zagon/run` with `ZAGON_INTERNAL=1`, or `codex exec`), also when there is no
+candidate, digest ≤ 16 000 characters: samples of your style (`styleSamples`: issues you created — title and the start
+of the description —, your worklog comments, your comments; ≤ 3 000 characters, read once per day, `meta`
+`suggest:style` keeps the text and the counts), tasks (key, title, status, clipped description, last comment, your
+earlier worklog texts) and stretches (time, project, folder, title, first words of up to 3 typed messages, edited file
+names, commits). The answer is a JSON array of `{segment, key, confidence, reason, done}` (a task, only when sure) or
+`{segment, new, description, done, confidence}` (a new task: title ≤ 70, description ≤ 600 with its lines, worklog text
+≤ 300; written in your style, plain without samples); malformed items, keys or stretches not offered and confidence
+under `[tasks] suggest_min_confidence` (0.7) are dropped, per stretch the most confident key is kept, else its new
+task; new tasks with the same title (case, spaces aside) are one. Engine `none` (or a failed call): the task whose name
+shares the most words (6-letter stems of words of 4+) with the session's title, project and folder; 2+ words = 0.7; no
+new tasks.
+New tasks (`NewTaskDraft`, Tasks/Drafts.swift) are kept in `meta` `suggest:new` (ids `N<n>`, one counter
+`suggest:new-seq`), count nowhere and are not asked again (their stretches are asked periods). A stretch any link
+covers since is left out; a draft with none left is not shown. Accept (`acceptNew`) → an own task `ZAG-n` (title and
+description editable), its stretches linked `manual` for their periods, the worklog text as the day's `auto` "what was
+done"; all its time linked meanwhile → dropped. Reject → dropped. `createInJira` (CLI `task accept N3 --create-in-jira
+[--project P] [--title …] [--description …]` with y/N or `--yes`, MCP `task_create_in_jira` with `confirm: true`, the
+Mac app's sheet) shows the plan first (`jiraPlan`: projects, default = last used `jira:last-project`, else the project
+most of your issues are in), creates the issue, then accepts the draft under the new key. A create that may have
+reached Jira without an answer leaves `jira:create:N<n>`; the next try first searches your issues of the project made in
+the last two days for that exact title and takes it instead of creating a second one; a refused create (4xx, not sent)
+clears it. `--again` also drops the day's drafts.
 Stored as `task_session.how = 'suggested'` over the stretch (confidence and reason in `meta` `suggest:<day>`); it
 counts nowhere (time, plan, Jira keys, worklog text, handoff) until accepted. Accept → `manual` for that period,
 unless that time got a link since (links of the day are refreshed first; the suggestion is then dropped; `list` hides
@@ -119,18 +163,21 @@ keyed time). Per stretch the most confident task not rejected is kept. The AI is
 asked about yet (the asked periods are kept in `suggest:<day>`) that no open suggestion covers, so work going on after
 a call, stretches the size limit left out and the rest after a failed call come later; `--again` drops the open ones
 and asks about all. Open suggestions whose time got any link since are dropped before each run.
-`zagon task suggest [day] [--json] [--again] [--prompt]` (`--json`: the run with its items, engine, cost, note;
-`--prompt` prints what the next call would send: no AI call, nothing stored), `zagon task accept|reject <id…>`; MCP
-`task_suggestions`, `task_suggestions_answer` (`confirm: true`); the evening message at `[notify] worklog_at` lists them
-with Yes / No buttons (`sg:y|n:<id>:<task>` via `Bot.onCallback`; without the bot, the commands instead);
+`zagon task suggest [day] [--json] [--again] [--prompt]` (`--json`: the run with its items, drafts, engine, cost, note;
+`--prompt` prints what the next call would send: no AI call, nothing stored), `zagon task drafts [--json]`, `zagon task
+accept|reject <id…>` (numbers or `N…`), `zagon task jira-projects [--json]`; MCP `task_suggestions`,
+`task_suggestions_answer` (`confirm: true`; ids numbers or `"N3"`), `task_create_in_jira`; the evening message at
+`[notify] worklog_at` lists them with Yes / No buttons (`sg:y|n:<id>:<task>:<start>`, `sg:y|n:N<n>` for a new task, made
+here only, via `Bot.onCallback`; without the bot, the commands instead);
 `[tasks] evening_suggestions = false` turns that message off. Known limits: typed messages and edited files come from
-Claude transcripts only (Codex sessions: title, folder, commits); Jira issues that are not tasks here are not offered
-(the run's note counts them: `zagon task import`); the evening message takes `Notifier.worklogPlan`, so a later worklog
+Claude transcripts only (Codex sessions: title, folder, commits); your Jira issues not read into `JiraCache` yet are not
+offered (the run's note counts them: `zagon task import`); the worklog texts of work linked by keys stay the session
+titles (only suggestions carry AI texts); the evening message takes `Notifier.worklogPlan`, so a later worklog
 plan message has to be combined with it.
 
 ## CLI
 
-`zagon task add|list|show|todo|note|done|status|link|import|suggest|accept|reject`, `zagon log plan [day]`, `zagon log commit [day] [--yes]`,
+`zagon task add|list [--all]|show|todo|note|done|status|link|import|suggest|drafts|accept|reject|jira-projects`, `zagon log plan [day]`, `zagon log commit [day] [--yes]`,
 `zagon log skip <id…>`. `log plan --json` carries `commit_digest` (FNV-1a 64 of `jira_key|start|end|seconds|text`
 of the planned rows with a Jira key, by start); `log commit --yes --expect <digest>` re-plans and writes only if the
 rows to write give the same digest, else writes nothing and exits 3 ("plan changed"). Days are local (`TZ`).

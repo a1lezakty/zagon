@@ -120,8 +120,9 @@ public enum TaskText {
     static func pad(_ s: String, _ w: Int) -> String { s.count >= w ? String(s.prefix(w)) : s + String(repeating: " ", count: w - s.count) }
 
     /// `lines` as `overview(all: true)` gives them: without `all` only the worked ones, and how many more there are.
+    /// `drafts`: suggested new tasks not answered yet (`how` to see them).
     public static func list(_ lines: [TaskListLine], base: TaskTime.Base = .sessions, all: Bool = false, limit: Int = .max,
-                            more: String = "task list --all") -> String {
+                            more: String = "task list --all", drafts: (count: Int, how: String) = (0, "task drafts")) -> String {
         func line(_ l: TaskListLine) -> String {
             "\(pad(l.task.key, 10)) \(pad(l.task.status.rawValue, 11)) \(label(base)) 7d \(pad(Txt.dur(l.weekSec), 7)) "
                 + "\(l.sessions) sessions  \(Txt.oneLine(l.task.title, 70))" + (l.jiraStatus.map { "  · Jira \"\($0)\"" } ?? "")
@@ -130,6 +131,7 @@ public enum TaskText {
         let worked = lines.filter { $0.worked != false }, rest = lines.filter { $0.worked == false }
         let open = rest.filter { $0.task.status != .done }.count
         var out = worked.isEmpty ? ["No tasks worked on in the last 7 days."] : worked.prefix(limit).map(line)
+        if drafts.count > 0 { out.append("+ \(drafts.count) new tasks suggested for work no task fits: \(drafts.how)") }
         if all, !rest.isEmpty { out += ["In Jira, no work here in the last 7 days:"] + rest.prefix(limit).map(line) }
         else if !all, open > 0 { out.append("+ \(open) more open in Jira with no work here in the last 7 days: \(more)") }
         return out.joined(separator: "\n")
@@ -207,6 +209,14 @@ extension Txt {
 }
 
 public enum SuggestText {
+    /// Suggested new tasks: id, time, title, the worklog text.
+    public static func drafts(_ d: [NewTaskDraft]) -> String {
+        d.map { x in
+            "#\(TaskText.pad(x.id, 5)) new        \(TaskText.pad(Txt.dur(x.workedSec), 7)) \(x.day)  \(Txt.oneLine(x.title, 70))"
+                + (x.done.isEmpty ? "" : "\n       \(Txt.oneLine(x.done, 200))")
+        }.joined(separator: "\n")
+    }
+
     public static func items(_ items: [Suggestion]) -> String {
         items.map { s in
             "#\(TaskText.pad("\(s.id)", 5)) \(TaskText.pad(s.key, 10)) \(TaskText.pad(Txt.dur(s.workedSec), 7)) "
@@ -225,12 +235,11 @@ public enum SuggestText {
                     + (r.inputTokens.map { " · \(Txt.tokens($0)) in" } ?? "") + (r.outputTokens.map { " / \(Txt.tokens($0)) out" } ?? "")
             }
         } else { head += " · suggested earlier by \(r.engine) (--again asks again)" }
-        var out = [head + " · \(r.items.count) suggestions"]
+        var out = [head + " · \(r.items.count) suggestions" + (r.drafts.isEmpty ? "" : ", \(r.drafts.count) new tasks")]
         if let n = r.note { out.append("note: \(n)") }
-        if !r.items.isEmpty {
-            out.append(items(r.items))
-            out.append("Not counted until accepted: \(answer)")
-        }
+        if !r.items.isEmpty { out.append(items(r.items)) }
+        if !r.drafts.isEmpty { out.append(drafts(r.drafts)) }
+        if !r.items.isEmpty || !r.drafts.isEmpty { out.append("Not counted until accepted: \(answer)") }
         return out.joined(separator: "\n")
     }
 }
