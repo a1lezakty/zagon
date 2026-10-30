@@ -18,7 +18,7 @@ public protocol HandoffService: AnyObject {
 /// Fields of `task_create` / `task_update`; nil = not given.
 public struct TaskFields: Sendable, Equatable {
     public var title: String?, key: String?, description: String?, jiraKey: String?
-    /// `planned` | `in_progress` | `done`.
+    /// `planned` | `in_progress` | `review` | `done`.
     public var status: String?
     /// Appended: a note, a TODO item; `todoDone` = number (1-based) of a TODO item to check off.
     public var note: String?, todo: String?, todoDone: Int?

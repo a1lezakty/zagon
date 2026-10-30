@@ -205,8 +205,8 @@ extension TaskBackend {
         }
         return TaskItem(
             key: t.key, title: t.title, description: t.description ?? "", state: state(t.status),
-            // A zagon from before 0.1.1 sends no `jira_status`: then by the status category.
-            jira: c.jira.map { JiraInfo(status: $0.status, statusMatches: (c.jiraStatus ?? TaskStatus(jiraCategory: $0.statusCategory)) == t.status,
+            // A zagon from before 0.1.1 sends no `jira_status_here`: then by the status category.
+            jira: c.jira.map { JiraInfo(status: $0.status, statusMatches: (c.jiraStatusHere ?? TaskStatus(jiraCategory: $0.statusCategory)) == t.status,
                                         loggedSec: c.jiraLoggedSec ?? 0) },
             userSec: c.time.userSec, sessionSec: c.time.sessionSec, tokens: c.time.tokens.total,
             // Claude's and Codex's weekly limits are different limits: the larger share, not a sum.

@@ -50,10 +50,14 @@ extension Common {
 
 func warn(_ s: String) { _ = Sys.writeAll(fd: 2, Array((s + "\n").utf8)) }
 
-/// A task to change; one of your Jira issues (as last read) becomes a task here.
-func taskRef(_ tasks: Tasks, _ ref: String) throws -> TaskItem {
-    guard let t = try tasks.findOrAdopt(ref) else { throw ValidationError("no task \(ref)") }
-    return t
+/// A task to change; one of your Jira issues becomes a task here (Jira is read again when the key is not known).
+func taskRef(_ tasks: Tasks, _ ref: String, _ common: Common) throws -> TaskItem {
+    if let t = try tasks.findOrAdopt(ref) { return t }
+    if let jira = try? common.jira() {
+        do { try JiraCache.refresh(tasks.store, jira) } catch { warn("jira: \(error)") }
+        if let t = try tasks.findOrAdopt(ref) { return t }
+    }
+    throw ValidationError("no task \(ref)")
 }
 
 extension TaskStatus: ExpressibleByArgument {}
@@ -128,7 +132,7 @@ struct TaskCommand: ParsableCommand {
         @Option(help: "Mark TODO #N not done.") var uncheck: Int?
         @OptionGroup var common: Common
         func run() throws {
-            let tasks = Tasks(store: try common.open()), t = try taskRef(tasks, task)
+            let tasks = Tasks(store: try common.open()), t = try taskRef(tasks, task, common)
             if let n = check { try tasks.checkTodo(t.id, number: n) }
             if let n = uncheck { try tasks.checkTodo(t.id, number: n, done: false) }
             if !text.isEmpty { try tasks.addTodo(t.id, text.joined(separator: " ")) }
@@ -142,7 +146,7 @@ struct TaskCommand: ParsableCommand {
         @Argument(help: "Text.") var text: [String]
         @OptionGroup var common: Common
         func run() throws {
-            let tasks = Tasks(store: try common.open()), t = try taskRef(tasks, task)
+            let tasks = Tasks(store: try common.open()), t = try taskRef(tasks, task, common)
             try tasks.addNote(t.id, text.joined(separator: " "))
         }
     }
@@ -154,7 +158,7 @@ struct TaskCommand: ParsableCommand {
         @Option(help: "YYYY-MM-DD, default today.") var day: String?
         @OptionGroup var common: Common
         func run() throws {
-            let tasks = Tasks(store: try common.open()), t = try taskRef(tasks, task)
+            let tasks = Tasks(store: try common.open()), t = try taskRef(tasks, task, common)
             try tasks.setDone(t.id, day: day ?? Time.dayString(Time.now()), text: text.joined(separator: " "))
         }
     }
@@ -165,7 +169,7 @@ struct TaskCommand: ParsableCommand {
         @Argument var status: TaskStatus
         @OptionGroup var common: Common
         func run() throws {
-            let tasks = Tasks(store: try common.open()), t = try taskRef(tasks, task)
+            let tasks = Tasks(store: try common.open()), t = try taskRef(tasks, task, common)
             try tasks.setStatus(t.id, status)
         }
     }
@@ -177,7 +181,7 @@ struct TaskCommand: ParsableCommand {
         @Flag(help: "Not this task: removes the link and keeps automatic linking from adding it back.") var unlink = false
         @OptionGroup var common: Common
         func run() throws {
-            let store = try common.open(), tasks = Tasks(store: store), t = try taskRef(tasks, task)
+            let store = try common.open(), tasks = Tasks(store: store), t = try taskRef(tasks, task, common)
             var ids: [String] = []
             try store.db.query("SELECT id FROM session WHERE id = ?1 OR id LIKE '%:' || ?1 || '%' LIMIT 3", [.text(session)]) {
                 if let s = $0.text(0) { ids.append(s) }

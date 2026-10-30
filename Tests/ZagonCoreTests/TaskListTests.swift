@@ -14,6 +14,8 @@ import Testing
             ("QA", "indeterminate", .review), ("На проверке", "indeterminate", .review), ("Готово к релизу", "new", .review),
             ("В работе", "indeterminate", .inProgress), ("Tech Design", "indeterminate", .inProgress), ("Backlog", "new", .planned),
             ("Готово", "done", .done), ("Tested and closed", "done", .done), ("", "", .planned),
+            ("Ready for development", "new", .planned), ("Готово к разработке", "new", .planned), ("Ready for QA", "new", .review),
+            ("Waiting for release", "indeterminate", .review), ("Релиз", "indeterminate", .review),
         ]
         for (name, cat, want) in cases { #expect(TaskStatus(jira: Self.issue("P-1", name, cat)) == want, "\(name)") }
         let text = """
@@ -50,6 +52,8 @@ import Testing
         let noted = try t.add(title: "with a note", key: "PROJ-3")
         try t.addNote(noted.id, "remember")
         let old = try t.add(title: "worked long ago", key: "PROJ-4")
+        let oldNote = try t.add(title: "noted long ago", key: "PROJ-6")
+        try t.addNote(oldNote.id, "from spring", at: D0 - 60 * 86400)
         let logged = try t.add(title: "logged in Jira", key: "PROJ-5")
         try f.session("claude:a", branch: "PROJ-2-x", working: [(D0 + 9 * H, D0 + 11 * H)], actions: [D0 + 9 * H])
         try f.session("claude:b", branch: "PROJ-4", working: [(D0 - 10 * 86400, D0 - 10 * 86400 + H)])
@@ -64,7 +68,7 @@ import Testing
         #expect(Set(main.map(\.task.id)) == [worked.id, own.id, noted.id, logged.id])
         #expect(main.first?.task.id == worked.id && main.first!.weekSec == 2 * H)   // most time first
         let all = try t.overview(all: true, now: now)
-        #expect(Set(all.filter { $0.worked == false }.map(\.task.key)) == ["PROJ-1", "PROJ-4", "ZAG-2", "OPS-9"])
+        #expect(Set(all.filter { $0.worked == false }.map(\.task.key)) == ["PROJ-1", "PROJ-4", "PROJ-6", "ZAG-2", "OPS-9"])
         #expect(!all.contains { $0.task.key == "OPS-8" })   // done in Jira and no task here: not listed at all
         let ops = all.first { $0.task.key == "OPS-9" }!
         #expect(ops.task.id == 0 && ops.jiraStatus == "Backlog" && ops.task.title == "not a task")
@@ -72,8 +76,18 @@ import Testing
         #expect(try t.overview(status: .done, all: true, now: now).map(\.task.id) == [oldDone.id])
         _ = old
 
+        // JSON for a zagon before 0.1.1: `status` has three values, `stage` says review; unknown values read as planned.
+        let r = TaskItem(id: 1, key: "PROJ-1", title: "t", description: nil, status: .review, jiraKey: "PROJ-1", created: 0, updated: 0)
+        let json = String(decoding: try JSONEncoder().encode(r), as: UTF8.self)
+        #expect(json.contains(#""status":"in_progress""#) && json.contains(#""stage":"review""#))
+        #expect(try JSONDecoder().decode(TaskItem.self, from: Data(json.utf8)) == r)
+        struct Old: Decodable { enum S: String, Decodable { case planned, in_progress, done }; var status: S }
+        #expect(try JSONDecoder().decode(Old.self, from: Data(json.utf8)).status == .in_progress)
+        let odd = #"{"id":1,"key":"P-1","title":"t","status":"blocked","created":0,"updated":0}"#
+        #expect(try JSONDecoder().decode(TaskItem.self, from: Data(odd.utf8)).status == .planned)
+
         let text = TaskText.list(all, all: false)
-        #expect(text.contains("PROJ-2") && !text.contains("PROJ-1 ") && text.hasSuffix("+ 3 more open in Jira with no work here in the last 7 days: task list --all"))
+        #expect(text.contains("PROJ-2") && !text.contains("PROJ-1 ") && text.hasSuffix("+ 4 more open in Jira with no work here in the last 7 days: task list --all"))
         let full = TaskText.list(all, all: true)
         #expect(full.contains("\nIn Jira, no work here in the last 7 days:\n") && full.contains("OPS-9 ") && full.contains("(not a task here yet)"))
         #expect(TaskText.list([], all: false) == "No tasks worked on in the last 7 days.")
@@ -112,7 +126,9 @@ struct JiraCacheTests {
           "PROJ-1": {"summary": "Dialogs", "status": "Ready to release", "category": "new", "assignee": "acc-me",
                      "worklogs": [{"id": "1", "author": "acc-me", "started": "2026-10-29T08:00:00.000+0200", "seconds": 3600}]},
           "PROJ-2": {"summary": "Done one", "status": "Done", "category": "done", "assignee": "acc-me"},
-          "OPS-3": {"summary": "Not mine", "status": "In Progress", "category": "indeterminate", "assignee": "acc-other"},
+          "OPS-3": {"summary": "Not mine", "status": "In Progress", "category": "indeterminate", "assignee": "acc-other",
+                    "worklogs": [{"id": "5", "author": "acc-me", "started": "2026-09-20T08:00:00.000+0200", "seconds": 600},
+                                 {"id": "6", "author": "acc-other", "started": "2026-10-28T08:00:00.000+0200", "seconds": 600}]},
           "OPS-4": {"summary": "Stand", "status": "To Do", "category": "new", "assignee": "acc-me"}}}
         """
 
@@ -122,20 +138,24 @@ struct JiraCacheTests {
         let p1 = try t.add(title: "dialogs", key: "PROJ-1")            // imported earlier as planned
         let o3 = try t.add(title: "colleague's", key: "OPS-3")
         let own = try t.add(title: "own")
-        let c = try JiraCache.refresh(f.store, j, now: D0)
+        let o4 = try t.add(title: "stand", key: "OPS-4", status: .done)      // set by hand before Zagon read Jira
+        let now = D0 + 20 * H
+        let c = try JiraCache.refresh(f.store, j, now: now)
+        // OPS-3 has your worklog of September and a colleague's of this week: not yours this week.
         #expect(c.mine == ["PROJ-1", "OPS-4"] && Set(c.issues.keys) == ["PROJ-1", "OPS-4", "OPS-3"] && c.logged == ["PROJ-1"])
         #expect(JiraCache.load(f.store) == c)
-        // First read: Jira's status is taken.
+        // First read: Jira's status is taken where the status is the default or what an import set, not where set by hand.
         #expect(try t.get(p1.id)?.status == .review && t.get(o3.id)?.status == .inProgress && t.get(own.id)?.status == .planned)
+        #expect(try t.get(o4.id)?.status == .done)
         // Set by hand: stays while Jira's status does not change...
         try t.setStatus(p1.id, .done)
-        try JiraCache.refresh(f.store, j, now: D0 + 1)
+        try JiraCache.refresh(f.store, j, now: now + 1)
         #expect(try t.get(p1.id)?.status == .done)
         // ...and follows Jira when it does.
         var old = JiraCache.load(f.store)
         old.issues["PROJ-1"]!.status = "In Progress"
-        try old.save(f.store, tried: D0 + 1)
-        try JiraCache.refresh(f.store, j, now: D0 + 2)
+        try old.save(f.store, tried: now + 1)
+        try JiraCache.refresh(f.store, j, now: now + 2)
         #expect(try t.get(p1.id)?.status == .review)
     }
 

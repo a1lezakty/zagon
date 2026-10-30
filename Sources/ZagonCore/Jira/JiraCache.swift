@@ -18,7 +18,6 @@ public struct JiraCache: Sendable, Equatable {
     /// How long a read is used before the task commands read Jira again; a failed read is retried after `retry`.
     public static let ttl: Double = 3600, retry: Double = 600
     public static let mineJQL = "assignee = currentUser() AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC"
-    static let loggedJQL = "worklogAuthor = currentUser() AND worklogDate >= -7d"
 
     public static func load(_ store: Store) -> JiraCache { stored(store).cache }
 
@@ -52,8 +51,9 @@ public struct JiraCache: Sendable, Equatable {
                          [.text(Self.metaKey), .text(v.compact)])
     }
 
-    /// Reads Jira and keeps the result. A task whose Jira status changed since the last read (or is read for the first
-    /// time) takes it as its status here (`TaskStatus(jira:)`); a status set here by hand stays until Jira's changes.
+    /// Reads Jira and keeps the result. A task whose Jira status changed since the last read takes it as its status
+    /// here (`TaskStatus(jira:)`); read for the first time, only if its status is `planned` (the default) or what its
+    /// status category gives (as an import set it). A status set here by hand stays until Jira's changes.
     @discardableResult
     public static func refresh(_ store: Store, _ jira: JiraClient, jql: String = mineJQL, now: Timestamp = Time.now()) throws -> JiraCache {
         let old = stored(store).cache, tasks = Tasks(store: store)
@@ -62,12 +62,17 @@ public struct JiraCache: Sendable, Equatable {
         for i in try jira.search(jql) { c.issues[i.key] = i; c.mine.insert(i.key) }
         let rest = try tasks.list().compactMap(\.jiraKey).filter { c.issues[$0] == nil }
         for i in stride(from: 0, to: rest.count, by: 100) {
-            for x in try jira.search("key in (\(rest[i..<min(i + 100, rest.count)].joined(separator: ", ")))") { c.issues[x.key] = x }
+            let chunk = rest[i..<min(i + 100, rest.count)]
+            // Jira skips keys it does not show; should it refuse the query, those tasks keep their last read.
+            do { for x in try jira.search("key in (\(chunk.joined(separator: ", ")))") { c.issues[x.key] = x } }
+            catch { for k in chunk { c.issues[k] = old.issues[k] } }
         }
-        c.logged = Set(try jira.search(loggedJQL).map(\.key))
+        // Your worklogs only: the search also finds issues where you logged long ago and someone else this week.
+        c.logged = Set(try jira.myWorklogs(from: now - 7 * 86400, to: now).map(\.issueKey))
         try store.db.transaction {
             for t in try tasks.list() {
                 guard let k = t.jiraKey, let i = c.issues[k], old.issues[k]?.status != i.status else { continue }
+                if old.issues[k] == nil, t.status != .planned, t.status != TaskStatus(jiraCategory: i.statusCategory) { continue }
                 let s = TaskStatus(jira: i, review: c.review)
                 if s != t.status { try tasks.setStatus(t.id, s, at: now) }
             }
@@ -84,7 +89,9 @@ public struct JiraCache: Sendable, Equatable {
         guard let jira, now - c.at >= ttl, now - tried >= retry else { return c }
         do { return try refresh(store, jira, now: now) } catch {
             log("jira: \(error)")
-            try? c.save(store, tried: now)
+            // Only the time of the try: a read another process saved meanwhile stays.
+            try? store.db.run("UPDATE meta SET value = json_set(value, '$.tried', ?) WHERE key = ?", [.real(now), .text(metaKey)])
+            if tried == 0 && c.at == 0 { try? c.save(store, tried: now) }
             return c
         }
     }

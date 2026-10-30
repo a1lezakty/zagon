@@ -14,9 +14,9 @@ public struct TaskListLine: Codable, Sendable {
     /// Worked time (on the chosen base) and session time over the last 7 days.
     public var weekSec: Double
     public var weekSessionSec: Double
-    /// In the main list: worked on in the last 7 days (time, a linked session active then, your Jira worklogs) or
-    /// with TODO / notes / what was done, or an own task that is not done since before then. False: in Jira, no work
-    /// here then. nil (a zagon before 0.1.1) = true.
+    /// In the main list: worked on in the last 7 days (time, a link reaching into them, your Jira worklogs, TODO /
+    /// notes / what was done of those days, an open TODO), or an own task that is not done since before then. False:
+    /// in Jira, no work here then. nil (a zagon before 0.1.1) = true.
     public var worked: Bool?
     /// The issue's Jira status as last read (`JiraCache`).
     public var jiraStatus: String?
@@ -32,7 +32,7 @@ public struct TaskCard: Codable, Sendable {
     public var sessions: [TaskLink]
     public var jira: JiraIssue?
     /// That Jira status as a status here (`[jira] review_statuses`).
-    public var jiraStatus: TaskStatus?
+    public var jiraStatusHere: TaskStatus?
     /// Your worklogs on the Jira issue, all time.
     public var jiraLoggedSec: Double?
     /// Jira is configured but failed (or the issue was not found: then `jira` is nil and this says so).
@@ -52,8 +52,9 @@ extension Tasks {
         try db.query("""
             SELECT ts.task_id FROM task_session ts JOIN session s ON s.id = ts.session_id
             WHERE ts.how NOT IN ('unlinked', 'suggested') AND s.last_at >= ?1 AND ts."end" > ?1
-            UNION SELECT task_id FROM task_todo UNION SELECT task_id FROM task_note UNION SELECT task_id FROM task_done
-            """, [.real(from)]) { busy.insert($0.int(0)) }
+            UNION SELECT task_id FROM task_todo WHERE created >= ?1 OR done = 0 UNION SELECT task_id FROM task_note WHERE created >= ?1
+            UNION SELECT task_id FROM task_done WHERE day >= ?2
+            """, [.real(from), .text(Time.dayString(from))]) { busy.insert($0.int(0)) }
         var lines = try list().map { t in
             let sec = time.lines[t.id]?.userSec ?? 0, sessionSec = time.lines[t.id]?.sessionSec ?? 0
             let worked = sec > 0 || sessionSec > 0 || busy.contains(t.id) || t.jiraKey.map(cache.logged.contains) == true
@@ -82,11 +83,11 @@ extension Tasks {
         return TaskItem(id: 0, key: k, title: i.summary, status: TaskStatus(jira: i, review: cache.review), jiraKey: k, created: 0, updated: 0)
     }
 
-    /// A task to change: the task, or one of your Jira issues (as last read) made a task now.
-    public func findOrAdopt(_ ref: String) throws -> TaskItem? {
+    /// A task to change: the task, or one of your Jira issues (as last read) made a task (at `at`).
+    public func findOrAdopt(_ ref: String, at: Timestamp = Time.now()) throws -> TaskItem? {
         if let t = try find(ref) { return t }
         guard let j = jiraOnly(ref) else { return nil }
-        return try add(title: j.title.isEmpty ? j.key : j.title, key: j.key, status: j.status)
+        return try add(title: j.title.isEmpty ? j.key : j.title, key: j.key, status: j.status, at: at)
     }
 
     /// Everything about one task; Jira (if given) adds its status and your logged time, its failure is reported in
@@ -105,7 +106,7 @@ extension Tasks {
             do {
                 let me = try jira.accountId()
                 c.jira = try jira.issue(k)
-                c.jiraStatus = c.jira.map { TaskStatus(jira: $0, review: jira.config.reviewStatuses) }
+                c.jiraStatusHere = c.jira.map { TaskStatus(jira: $0, review: jira.config.reviewStatuses) }
                 if c.jira == nil { c.jiraError = "issue \(k) not found in Jira" }
                 else { c.jiraLoggedSec = Double(try jira.worklogs(issue: k, startedAfter: 0).filter { $0.accountId == me }.reduce(0) { $0 + $1.seconds }) }
             } catch { c.jiraError = "\(error)" }
@@ -143,7 +144,7 @@ public enum TaskText {
                    + c.time.weekPct.sorted { $0.key < $1.key }.map { " · \($0.key) week \(Txt.pct($0.value))" }.joined())
         if let k = t.jiraKey {
             if let i = c.jira {
-                out.append("jira: \(k) \"\(i.status)\"" + (c.jiraStatus.map { $0 == t.status } ?? true ? "" : " (here \(t.status.rawValue))")
+                out.append("jira: \(k) \"\(i.status)\"" + (c.jiraStatusHere.map { $0 == t.status } ?? true ? "" : " (here \(t.status.rawValue))")
                            + (c.jiraLoggedSec.map { " · you logged \(Txt.dur($0)) of \(Txt.dur(c.time.userSec)) worked" } ?? ""))
             } else if let e = c.jiraError { out.append("jira: \(k): \(e)") }
             else { out.append("jira: \(k)" + (jiraConnected ? "" : " (Jira not connected)")) }

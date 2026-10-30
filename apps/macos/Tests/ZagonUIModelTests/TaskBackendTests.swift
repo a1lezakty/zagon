@@ -77,8 +77,8 @@ final class TaskBackendTests: XCTestCase {
         XCTAssertEqual(main.state, .active)
         XCTAssertEqual(main.jiraKey, "PROJ-12")
         XCTAssertNil(list.first { $0.key == "ZAG-1" }?.jiraKey)
-        // PROJ-14 is a session's title, the own done task has a note: all three are in the main list.
-        XCTAssertTrue(list.allSatisfy(\.worked))
+        // PROJ-14 is a session's title; the own task was done (and its note written) before the last 7 days.
+        XCTAssertEqual(list.filter { !$0.worked }.map(\.key), ["ZAG-1"])
         XCTAssertEqual(calls.last, "task|list|--all|--json|")
         // A zagon from before `--all` gets the plain list.
         FileManager.default.createFile(atPath: home + "/old", contents: nil)
