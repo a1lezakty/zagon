@@ -34,10 +34,10 @@ import Testing
         let s = try Reports(store: env.store).sessions(from: T0 - hour, to: T0 + hour, now: T0 + 23 * minute)
         #expect(s.first { $0.id == "claude:W" }?.drivenBy == "lead" && s.first { $0.id == "claude:L" }?.drivenBy == nil)
         func by(_ now: Timestamp = T0 + 23 * minute) throws -> String? {
-            try Query(store: env.store).liveSessions(now: now).first { $0.id == "claude:W" }?.drivenBy
+            try Query(store: env.store).liveSessions(now: now, window: 86400).first { $0.id == "claude:W" }?.drivenBy
         }
-        // A driver silent for over 2 hours (killed without SessionEnd, or left alone) drives no more.
-        #expect(try by(T0 + 2 * hour + 21 * minute) == "lead" && by(T0 + 2 * hour + 23 * minute) == nil)
+        // A driver silent for over 12 hours (killed without SessionEnd) drives no more.
+        #expect(try by(T0 + 12 * hour + 21 * minute) == "lead" && by(T0 + 12 * hour + 23 * minute) == nil)
         // An untitled driver goes by its project; one that ended leaves the worker waiting for you.
         try env.store.db.run("UPDATE session SET title = NULL WHERE id = 'claude:L'")
         #expect(try by() == "root")

@@ -75,8 +75,9 @@ enum UserTime {
                 drivers.filter { $0.value.named || messages[$0.key, default: 0] == 0 }.mapValues(\.by))
     }
 
-    /// A driver silent for this long (killed without its `SessionEnd`, or left alone) drives no more.
-    static let driverIdle: Double = 2 * 3600
+    /// A driver silent for this long (killed without its `SessionEnd`) drives no more. Long: a leader waits for its
+    /// workers on background watchers that write nothing to its transcript.
+    static let driverIdle: Double = 12 * 3600
 
     /// SQL for the name of the session that typed the last typed message of session `s` (`session.driver`): its title,
     /// else its project, '' = neither. NULL = the human, also when that session has ended, is archived or has been

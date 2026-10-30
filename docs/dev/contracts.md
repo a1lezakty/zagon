@@ -87,8 +87,8 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   its last typed message (the sender of the relay that made it relayed, see Time rules), NULL = the human; set
   with `user_msgs`, only from a relay aimed at exactly the session's name, or from any relay when the session has no
   human messages at all (a looser match would hide a session that waits for you). A session waiting for input whose
-  driver is live (not `ended`, not archived, active within the last 2 hours: one killed without `SessionEnd` stops
-  counting then) waits for that session, not for you: the live list
+  driver is live (not `ended`, not archived, active within the last 12 hours: one killed without `SessionEnd` stops
+  counting then; `UserTime.driverIdle`) waits for that session, not for you: the live list
   (`LiveSessionInfo.drivenBy`) and `sessions` (`SessionLine.drivenBy`, JSON `driven_by`) carry the driver's title,
   else its project ("" = neither; `UserTime.driverSQL`); the CLI, the bot and MCP say "waits for session <name>",
   the Mac lists it with the idle ones, and no "waiting for you" or "finished" notification is sent for it (its

@@ -201,6 +201,16 @@ let day0 = Time.dayBounds("2026-10-30")!.start
         try session(s, "claude:lead", status: "working", at: t, lastAt: t)
         try s.db.run("UPDATE session SET driver = 'claude:lead' WHERE id = 'claude:a'")
         #expect(try n.tick(now: t + 101) == ["done:claude:b"])
+        #expect(try n.tick(now: t + 11 * 60).isEmpty)  // and no waiting alert later either
+    }
+
+    @Test func aWorkerWhoseDriverWentSilentIsYoursAgain() throws {
+        let (s, n, _) = try setUp()
+        let t = day0 + 12 * 3600
+        try stopped(s, "claude:a", file: 1, minutes: 20, at: t)
+        try session(s, "claude:lead", status: "working", at: t - 12 * 3600 - 60, lastAt: t - 12 * 3600 - 60)
+        try s.db.run("UPDATE session SET driver = 'claude:lead' WHERE id = 'claude:a'")
+        #expect(try n.tick(now: t + 101) == ["done:claude:a"])
     }
 
     @Test func doneWaitsForTheSessionsOwnSubAgent() throws {
