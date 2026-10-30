@@ -38,26 +38,37 @@ import Testing
         let s = try Store(path: ":memory:")
         try add(s, 90, at: T0, resets: T0 + minute)
         try add(s, 3, at: T0 + 2 * minute, resets: T0 + 5 * hour)
-        // A late report of the period that has already reset, written last (seen in Codex rollouts).
-        try add(s, 76, at: T0 + 3 * minute, resets: T0 + minute)
         // Codex reset times drift by seconds between readings of one period.
-        try add(s, 4, at: T0 + 4 * minute, resets: T0 + 5 * hour - 7)
-        let r = try #require(try five(s, now: T0 + 5 * minute))
-        #expect(r.usedPct == 4 && r.ts == T0 + 4 * minute)
+        try add(s, 4, at: T0 + 3 * minute, resets: T0 + 5 * hour - 7)
+        // A late report of the period that has already reset, written last (seen in Codex rollouts).
+        try add(s, 76, at: T0 + 4 * minute, resets: T0 + minute)
+        var r = try #require(try five(s, now: T0 + 5 * minute))
+        #expect(r.usedPct == 4 && r.ts == T0 + 3 * minute)
+        // A reading without a reset time does not hide newer ones of a known period...
+        try s.addLimitSnapshot(LimitSnapshot(tool: .claude, window: "five_hour", usedPct: 50, windowMinutes: 300, ts: T0 + 5 * minute))
+        try add(s, 5, at: T0 + 6 * minute, resets: T0 + 5 * hour)
+        r = try #require(try five(s, now: T0 + 7 * minute))
+        #expect(r.usedPct == 5)
+        // ...and is current once newer than that period's end; its pace starts within the last hour only.
+        try s.addLimitSnapshot(LimitSnapshot(tool: .claude, window: "five_hour", usedPct: 1, windowMinutes: 300, ts: T0 + 6 * hour))
+        try s.addLimitSnapshot(LimitSnapshot(tool: .claude, window: "five_hour", usedPct: 2, windowMinutes: 300,
+                                             ts: T0 + 6 * hour + 20 * minute))
+        r = try #require(try five(s, now: T0 + 6 * hour + 20 * minute))
+        #expect(r.usedPct == 2 && abs((r.pctPerHour ?? 0) - 3) < 1e-9)  // from 1 %, not from the 50 % hours before
     }
 
     /// A pace starts from the usage at its first reading, not from that reading when it is an older one re-sent.
     @Test func paceIgnoresAnOldReadingReSentAtItsStart() throws {
-        let s = try Store(path: ":memory:"), resets = T0 + 8 * hour
-        try add(s, 20, at: T0 - 4000, resets: resets)
-        try add(s, 12, at: T0 - 3000, resets: resets)  // re-sent by an idle session
-        try add(s, 25, at: T0, resets: resets)
+        let s = try Store(path: ":memory:"), resets = T0 + 150 * minute
+        try add(s, 65, at: T0 - 4000, resets: resets)
+        try add(s, 40, at: T0 - 3000, resets: resets)  // re-sent by an idle session
+        try add(s, 70, at: T0, resets: resets)
         let r = try #require(try five(s, now: T0))
-        #expect(abs((r.pctPerHour ?? 0) - 6) < 1e-9)  // (25 - 20) over 50 minutes, not (25 - 12)
+        #expect(abs((r.pctPerHour ?? 0) - 6) < 1e-9)  // (70 - 65) over 50 minutes, not (70 - 40)
         let base = try #require(try Store.paceBase(s.db, s.latestLimits()[0], from: T0 - 3600, to: T0 - 900))
-        #expect(base.pct == 20 && base.ts == T0 - 3000)
-        // Alerts take the same start: at 6 %/h the 75 % left last past the reset in 8 hours (from the re-sent 12 %
-        // it would be 15.6 %/h, out in under 5 hours).
+        #expect(base.pct == 65 && base.ts == T0 - 3000)
+        // Alerts take the same start: at 6 %/h the 30 % left last past the reset in 2.5 hours (from the re-sent 40 %
+        // it would be 36 %/h, out in 50 minutes).
         let n = Notifier(store: s, config: NotifyConfig(), channels: [])
         #expect(try n.forecast(s.latestLimits()[0]) == nil)
     }

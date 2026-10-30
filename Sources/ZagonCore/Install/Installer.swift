@@ -251,11 +251,14 @@ public struct Installer {
     }
 
     /// systemd stops an account's --user services when its last login ends (ssh logout) unless it lingers; turning
-    /// that on needs root, so it is only advised.
+    /// that on needs root, so it is only advised. loginctl knows nothing of an account with no login (root installing
+    /// for another one): then the flag file `enable-linger` writes decides.
     func lingerNote() -> String? {
         guard let lc = Sys.which("loginctl", path: o.searchPath) else { return nil }
         let r = Sys.capture([lc, "show-user", userName, "-p", "Linger", "--value"], timeout: 10)
-        guard r.status == 0, String(decoding: r.out, as: UTF8.self).split(whereSeparator: \.isWhitespace) == ["no"] else { return nil }
+        let no = r.status == 0 ? String(decoding: r.out, as: UTF8.self).split(whereSeparator: \.isWhitespace) == ["no"]
+            : !Sys.exists("/var/lib/systemd/linger/" + userName)
+        guard no else { return nil }
         return "service: it stops when you log out of ssh; to keep it running: sudo loginctl enable-linger \(userName)"
     }
 

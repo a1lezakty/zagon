@@ -225,9 +225,11 @@ import Testing
             try i.install()
             return lines
         }
-        let no = try run(linger: "no")
-        #expect(no.contains { $0.hasSuffix("sudo loginctl enable-linger \(Installer(o).userName)") })
+        let advice = "sudo loginctl enable-linger \(Installer(o).userName)"
+        #expect(try run(linger: "no").contains { $0.hasSuffix(advice) })
         #expect(try !run(linger: "yes").contains { $0.contains("linger") })
+        // An account with no login: loginctl fails, and no flag file says it lingers.
+        #expect(try run(linger: "x; exit 1").contains { $0.hasSuffix(advice) } == !Sys.exists("/var/lib/systemd/linger/root"))
     }
     #endif
 

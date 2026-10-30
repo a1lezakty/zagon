@@ -57,15 +57,15 @@ extension Store {
     /// Not simply the newest row: `ts` is when a reading was written, not when it was measured. A Claude Code status
     /// line left open re-sends its last reading every minute with a fresh time (on a busy server one in five rows is
     /// below the current usage), and a Codex rollout may still report a period that has already reset. Usage only grows
-    /// within a period, so its highest reading is the latest. A reading without `resets_at` counts as a period ending
-    /// `window_minutes` after it.
-    /// ponytail: one account assumed. Readings carry no account, so two accounts (e.g. one per machine) mix: the higher
-    /// usage wins; split by an account id once the status line or Codex reports one.
+    /// within a period, so its highest reading is the latest. A reading without `resets_at` counts as a period of its
+    /// own ending at its `ts`: it wins only when newer than the end of every known period.
+    /// ponytail: one account assumed. Readings carry no account, so two accounts (e.g. one per machine) mix: the one
+    /// whose window resets last is shown; split by an account id once the status line or Codex reports one.
     static func latestLimits(_ db: SQLite) throws -> [LimitSnapshot] {
         var out: [LimitSnapshot] = []
         try db.query("""
             WITH s AS (SELECT tool, window, used_pct, resets_at, window_minutes, ts,
-                              coalesce(resets_at, ts + coalesce(window_minutes, 0) * 60) AS period FROM limit_snapshot),
+                              coalesce(resets_at, ts) AS period FROM limit_snapshot),
                  p AS (SELECT tool, window, max(period) AS period FROM s GROUP BY tool, window)
             SELECT tool, window, used_pct, resets_at, window_minutes, ts FROM (
               SELECT s.*, row_number() OVER (PARTITION BY s.tool, s.window ORDER BY s.used_pct DESC, s.ts DESC) AS n
@@ -81,14 +81,17 @@ extension Store {
 
     /// Where a pace up to reading `s` starts: the earliest reading of its window period between `from` and `to`, with
     /// the usage at that moment, the highest percent of the period so far (that reading itself may be an older one
-    /// re-sent, see `latestLimits`).
+    /// re-sent, see `latestLimits`). The period starts `window_minutes` before its reset; without either, at `from`.
     static func paceBase(_ db: SQLite, _ s: LimitSnapshot, from: Timestamp, to: Timestamp) throws -> (pct: Double, ts: Timestamp)? {
         try db.one("""
             WITH w AS (SELECT used_pct, ts FROM limit_snapshot
-                       WHERE tool = ?1 AND window = ?2 AND abs(coalesce(resets_at, 0) - coalesce(?3, 0)) < 120)
+                       WHERE tool = ?1 AND window = ?2 AND abs(coalesce(resets_at, 0) - coalesce(?3, 0)) < 120
+                         AND ts >= coalesce(?3 - ?6 * 60, ?4))
             SELECT (SELECT max(used_pct) FROM w WHERE ts <= f.ts), f.ts
             FROM (SELECT min(ts) AS ts FROM w WHERE ts >= ?4 AND ts <= ?5) f WHERE f.ts IS NOT NULL
-            """, [.text(s.tool.rawValue), .text(s.window), .of(s.resetsAt), .real(from), .real(to)]) { ($0.real(0), $0.real(1)) }
+            """, [.text(s.tool.rawValue), .text(s.window), .of(s.resetsAt), .real(from), .real(to), .of(s.windowMinutes)]) {
+            ($0.real(0), $0.real(1))
+        }
     }
 }
 

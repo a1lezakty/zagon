@@ -57,8 +57,8 @@ The macOS app (sample data): the menu bar, then the Day, Week and Calendar windo
   and it does not call any usage API. So it shows the 5-hour and weekly windows, and the last reading when no
   session is running. The current reading is the highest one of the newest window, from any session or connected
   server: a session left open keeps re-sending its older, lower reading. Readings carry no account, so two accounts
-  (say, a personal one on the Mac and a work one on a server) mix and the higher usage is shown. The Mac does not
-  yet say which server a reading came from.
+  (say, a personal one on the Mac and a work one on a server) mix: the one whose window resets last is shown. The Mac
+  does not yet say which server a reading came from.
 - The database does not hold the text of your conversations. It holds numbers, times, project names, git branches
   and session titles: the ones Claude Code generates or you set, and Codex thread names (never your first prompt).
   Hooks record ids, paths, event names and numbers only, never prompts or tool input.
