@@ -59,6 +59,8 @@ func channelText(_ s: String) -> String {
         let env = ClaudeEnv()
         env.write(mainFile, lines: [typed(T0),
                                     assistantLine(T0 + minute, id: "m1", output: 100),
+                                    // inside the folder it started in: still its project
+                                    assistantLine(T0 + 1.5 * minute, id: "m1b", output: 1, cwd: "/w/alpha/src"),
                                     assistantLine(T0 + 2 * minute, id: "m2", output: 50, cwd: "/w/beta"),
                                     assistantLine(T0 + 3 * minute, id: "m3", output: 5, cwd: "/w/beta")])
         env.scan()
@@ -66,19 +68,19 @@ func channelText(_ s: String) -> String {
         #expect(try env.store.db.one("SELECT project || ' ' || cwd FROM session") { $0.text(0) } == "alpha /w/alpha")
         let r = try Reports(store: env.store).day("2026-10-20")
         let p = Dictionary(uniqueKeysWithValues: r.projects.map { ($0.project, $0) })
-        #expect(p["alpha"]?.tokens.output == 100 && p["beta"]?.tokens.output == 55)
-        #expect(p["alpha"]?.sessionSec == minute && p["beta"]?.sessionSec == 2 * minute && r.sessionSec == 3 * minute)
+        #expect(p.count == 2 && p["alpha"]?.tokens.output == 101 && p["beta"]?.tokens.output == 55)
+        #expect(p["alpha"]?.sessionSec == 1.5 * minute && p["beta"]?.sessionSec == 1.5 * minute && r.sessionSec == 3 * minute)
         let q = try Query(store: env.store).day("2026-10-20")
-        #expect(Dictionary(uniqueKeysWithValues: q.byProject.map { ($0.name, $0.tokens) }) == ["alpha": 100, "beta": 55])
+        #expect(Dictionary(uniqueKeysWithValues: q.byProject.map { ($0.name, $0.tokens) }) == ["alpha": 101, "beta": 55])
         let w = try Query(store: env.store).week(from: "2026-10-20")
         #expect(Dictionary(uniqueKeysWithValues: w.projects[0].map { ($0.project, $0.sessionSec) })
-                == ["alpha": minute, "beta": 2 * minute])
+                == ["alpha": 1.5 * minute, "beta": 1.5 * minute])
 
         // A later `cd` moves nothing that was counted.
         env.append(mainFile, assistantLine(T0 + 4 * minute, id: "m4", output: 1, cwd: "/w/gamma") + "\n")
         env.scan()
         let r2 = try Reports(store: env.store).day("2026-10-20")
-        #expect(r2.projects.first { $0.project == "alpha" }?.tokens.output == 100)
+        #expect(r2.projects.first { $0.project == "alpha" }?.tokens.output == 101)
         #expect(try env.store.db.one("SELECT project FROM session") { $0.text(0) } == "alpha")
     }
 
@@ -113,12 +115,18 @@ func channelText(_ s: String) -> String {
         #expect(ClaudeParser.relayTargets("tmux send-keys -t %3 x") == [""])
         #expect(ClaudeParser.relayTargets("tmux send-keys x Enter") == [""])
         #expect(ClaudeParser.relayTargets("tmux -L sock send-keys -tfoo Enter") == ["foo"])
+        #expect(ClaudeParser.relayTargets("/usr/bin/tmux send -lt w6 'x' Enter") == ["w6"])
+        // Typed text is not read as options; a command that only mentions send-keys is no relay.
+        #expect(ClaudeParser.relayTargets(#"tmux send-keys "use -test now" Enter"#) == [""])
+        #expect(ClaudeParser.relayTargets("rg -n send-keys Sources; git log -S paste-buffer").isEmpty)
+        #expect(ClaudeParser.relayTargets("tmux capture-pane -p -t w").isEmpty)
         #expect(ClaudeParser.relayTargets("tmux load-buffer /tmp/b && tmux paste-buffer -t 'w3'") == ["w3"])
         #expect(ClaudeParser.relayTargets("tmux new-session -d -s w4 claude\ntmux send-keys -t w4 'read it' Enter") == ["w4"])
         // Only Bash calls that type into a terminal make a relay; the command itself is not kept.
         let out = parse([assistantLine(T0, id: "m1", tools: [("toolu_1", "Bash")], command: "tmux send-keys -t w 'x' Enter"),
                          assistantLine(T0 + 1, id: "m2", tools: [("toolu_2", "Bash")], command: "tmux capture-pane -p -t w"),
-                         assistantLine(T0 + 2, id: "m3", tools: [("toolu_3", "Grep")], command: "send-keys")])
+                         assistantLine(T0 + 2, id: "m3", tools: [("toolu_3", "Grep")], command: "send-keys"),
+                         assistantLine(T0 + 3, id: "m4", tools: [("toolu_4", "Bash")], command: "grep -rn send-keys .")])
         #expect(out.relays == [Relay(sessionId: "claude:S", ts: T0, targets: ["w"])])
     }
 
@@ -162,9 +170,14 @@ func channelText(_ s: String) -> String {
         // Channel messages are always the human's, even right after a relay.
         env.write("-w-c/C.jsonl", lines: [userLine(T0 + 10 * minute + 3, content: channelText("hi"),
                                                    extra: #","isMeta":true,"origin":\#(channelOrigin),"turnOrigin":"peer""#)])
+        // An unnamed session: a relay aimed at a named session is not for it, one aimed at `$w` is.
+        env.write("-w-o/O.jsonl", lines: [#"{"type":"agent-name","agentName":"Other","sessionId":"O"}"#])
+        env.write("-w-u/U.jsonl", lines: [typed(T0 + 3, session: "U"), typed(T0 + 10 * minute + 4, session: "U"),
+                                          typed(T0 + 20 * minute + 3, session: "U")])
         env.scan()
-        // Aimed elsewhere: yours; `docs` names it (prefix of "docs site"); `$w` could be anyone: not yours.
-        #expect(userMsgs(env, "W") == 1 && userMsgs(env, "C") == 1)
+        // W: aimed elsewhere: yours; `docs` names it (prefix of "docs site"); `$w` could be anyone: not yours.
+        // U: `other` names O, `docs` names W: yours; `$w`: not yours.
+        #expect(userMsgs(env, "W") == 1 && userMsgs(env, "C") == 1 && userMsgs(env, "U") == 2)
         // A relay of the session itself does not count (it typed into some other pane).
         let env2 = ClaudeEnv()
         env2.write(mainFile, lines: [assistantLine(T0, id: "a1", tools: [("toolu_1", "Bash")], command: "tmux send-keys -t x y"),
@@ -248,6 +261,62 @@ func channelText(_ s: String) -> String {
         #expect(env.int("SELECT user_msgs FROM session WHERE id = 'claude:S'") == 1)
         let copy = try env.store.db.one("SELECT value FROM meta WHERE key LIKE 'archive:file:%'") { $0.text(0) ?? "" } ?? ""
         #expect(FileManager.default.fileExists(atPath: copy) && !FileManager.default.fileExists(atPath: copy + ".recount"))
+    }
+
+    @Test func aRecountThatWouldCountOldCopiesAgainKeepsTheOldRows() throws {
+        let env = ClaudeEnv()
+        env.write(mainFile, lines: [typed(T0), assistantLine(T0 + minute, id: "m1", output: 7)])
+        env.scan()
+        // A resumed session's file, read after the original but sorting before it, holds a copy of m1 and its own m2.
+        env.write("-w-alpha/0.jsonl", lines: [typed(T0, session: "0"), assistantLine(T0 + minute, id: "m1", output: 7, session: "0"),
+                                              assistantLine(T0 + 2 * minute, id: "m2", output: 5, session: "0")])
+        env.scan()
+        func perSession() -> String? {
+            try! env.store.db.one("""
+                SELECT group_concat(s) FROM (SELECT session_id || '=' || sum(output) s FROM usage_hour GROUP BY session_id
+                ORDER BY session_id)
+                """) { $0.text(0) } ?? nil
+        }
+        #expect(perSession() == "claude:0=5,claude:S=7")
+        // Request ids older than `dedup_days` have left the ledger.
+        try env.store.db.run("DELETE FROM msg WHERE model <> ''")
+        try asBeforeV5(env)
+        let st = env.scan()
+        // 0 would claim m1 again: its recount is rolled back; S's recount reproduces its rows and is kept.
+        #expect(st.recountsKept == 1 && perSession() == "claude:0=5,claude:S=7")
+        #expect(split(env) == "/w/alpha:7:0,:5:0")
+        #expect(env.int("SELECT sum(recount) FROM source_file") == 0)
+
+        // The original gone without a copy: its rows stay, and the copy still does not count m1 again.
+        try env.store.db.run("DELETE FROM msg WHERE model <> ''")
+        try asBeforeV5(env)
+        try FileManager.default.removeItem(atPath: env.path(mainFile))
+        #expect(env.scan().recountsKept == 1 && perSession() == "claude:0=5,claude:S=7")
+    }
+
+    @Test func exportKeepsTheOldUsageShapeAndAddsTheSplit() throws {
+        let env = ClaudeEnv()
+        env.write(mainFile, lines: [typed(T0), assistantLine(T0 + minute, id: "m1", output: 4, cacheWrite: 10, cacheWrite1h: 6),
+                                    assistantLine(T0 + 2 * minute, id: "m2", output: 3, cwd: "/w/beta")])
+        env.scan()
+        var lines: [String] = []
+        try Export.run(store: env.store, since: 0) { lines.append($0) }
+        let day = try #require(lines.compactMap { JValue.parse($0) }.first { $0["type"]?.string == "day" })
+        let usage = day["usage"]?.array ?? [], split = day["usage_cwd"]?.array ?? []
+        #expect(usage.count == 1 && usage.first?["cwd"] == nil && usage.first?["output"]?.double == 7)
+        #expect(usage.first?["cache_write_1h"]?.double == 6)
+        #expect(split.compactMap { $0["cwd"]?.string } == ["/w/alpha", "/w/beta"])
+        #expect(day["rows"]?.array?.contains { $0["cache_write_1h"]?.double == 6 } == true)
+        // A new client stores the split; one fed an export without it (an older server) still gets every token.
+        for keepSplit in [true, false] {
+            let dst = try Store(path: ":memory:")
+            let feed = lines.map { keepSplit ? $0 : $0.replacingOccurrences(of: #""usage_cwd":["#, with: #""old_usage_cwd":["#) }
+            try ExportImport(store: dst, source: "box").apply(feed)
+            let q = try Query(store: dst).day("2026-10-20")
+            #expect(q.tokens.output == 7 && q.tokens.cacheWrite1h == 6)
+            #expect(Dictionary(uniqueKeysWithValues: q.byProject.map { ($0.name, $0.tokens) })
+                    == (keepSplit ? ["alpha": 14, "beta": 3] : ["alpha": 17]))
+        }
     }
 
     @Test func aCopyShorterThanWhatWasCountedIsNotUsed() throws {

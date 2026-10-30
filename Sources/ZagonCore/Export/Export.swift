@@ -33,8 +33,9 @@ public enum Export {
             case sessionSec, userSec
         }
     }
+    /// `cwd` nil: a `usage` row (summed over directories, the shape clients before v5 import); set: a `usage_cwd` row.
     struct UsageRow: Encodable {
-        var sessionId: String, agent: String, hour: Int, model: String, cwd: String
+        var sessionId: String, agent: String, hour: Int, model: String, cwd: String?
         var input: Int, output: Int, cacheRead: Int, cacheWrite: Int, cacheWrite1h: Int, requests: Int, toolCalls: Int
         enum CodingKeys: String, CodingKey {
             case sessionId, agent, hour, model, cwd, input, output, cacheRead, cacheWrite, cacheWrite1h = "cache_write_1h"
@@ -45,7 +46,7 @@ public enum Export {
     struct Span: Encodable { var start: Double, end: Double }
     struct DayLine: Encodable {
         var type = "day"; var day: String; var host: String; var seq: Int; var start: Double; var end: Double
-        var rows: [DayRow]; var usage: [UsageRow]; var tools: [ToolRow]; var user: [Span]
+        var rows: [DayRow]; var usage: [UsageRow]; var usageCwd: [UsageRow]; var tools: [ToolRow]; var user: [Span]
     }
     struct ActivityLine: Encodable {
         var type = "activity"; var sessionId: String, kind: String, start: Double, end: Double, cwd: String?
@@ -115,23 +116,31 @@ public enum Export {
                                    requests: r.int(8), toolCalls: r.int(9), sessionSec: r.real(10), userSec: r.real(11)))
             }
             guard let (start, end) = Time.dayBounds(day) else { continue }
-            var usage: [UsageRow] = [], tools: [ToolRow] = [], user: [Span] = []
+            var usage: [UsageRow] = [], usageCwd: [UsageRow] = [], tools: [ToolRow] = [], user: [Span] = []
             try db.query("""
                 SELECT session_id, agent, hour, model, cwd, sum(input), sum(output), sum(cache_read), sum(cache_write),
                        sum(cache_write_1h), sum(requests), sum(tool_calls)
                 FROM usage_hour WHERE hour >= ? AND hour < ? GROUP BY 1, 2, 3, 4, 5 ORDER BY 1, 2, 3, 4, 5
                 """, [.real(start), .real(end)]) { r in
-                usage.append(UsageRow(sessionId: r.text(0) ?? "", agent: r.text(1) ?? "", hour: r.int(2), model: r.text(3) ?? "",
-                                      cwd: r.text(4) ?? "", input: r.int(5), output: r.int(6), cacheRead: r.int(7),
-                                      cacheWrite: r.int(8), cacheWrite1h: r.int(9), requests: r.int(10), toolCalls: r.int(11)))
+                var u = UsageRow(sessionId: r.text(0) ?? "", agent: r.text(1) ?? "", hour: r.int(2), model: r.text(3) ?? "",
+                                 cwd: r.text(4) ?? "", input: r.int(5), output: r.int(6), cacheRead: r.int(7),
+                                 cacheWrite: r.int(8), cacheWrite1h: r.int(9), requests: r.int(10), toolCalls: r.int(11))
+                usageCwd.append(u)
+                u.cwd = nil
+                if let l = usage.last, (l.sessionId, l.agent, l.hour, l.model) == (u.sessionId, u.agent, u.hour, u.model) {
+                    usage[usage.count - 1].input += u.input; usage[usage.count - 1].output += u.output
+                    usage[usage.count - 1].cacheRead += u.cacheRead; usage[usage.count - 1].cacheWrite += u.cacheWrite
+                    usage[usage.count - 1].cacheWrite1h += u.cacheWrite1h; usage[usage.count - 1].requests += u.requests
+                    usage[usage.count - 1].toolCalls += u.toolCalls
+                } else { usage.append(u) }
             }
             try db.query("""
                 SELECT session_id, hour, name, sum(n) FROM tool_use WHERE hour >= ? AND hour < ? GROUP BY 1, 2, 3 ORDER BY 1, 2, 3
                 """, [.real(start), .real(end)]) { tools.append(ToolRow(sessionId: $0.text(0) ?? "", hour: $0.int(1), name: $0.text(2) ?? "", n: $0.int(3))) }
             try db.query("SELECT start, \"end\" FROM user_activity WHERE start < ? AND \"end\" > ? ORDER BY start",
                          [.real(end), .real(start)]) { user.append(Span(start: max(start, $0.real(0)), end: min(end, $0.real(1)))) }
-            try out(DayLine(day: day, host: host, seq: dseq, start: start, end: end, rows: rows, usage: usage, tools: tools,
-                            user: user))
+            try out(DayLine(day: day, host: host, seq: dseq, start: start, end: end, rows: rows, usage: usage,
+                            usageCwd: usageCwd, tools: tools, user: user))
         }
 
         for l in try store.latestLimits() {

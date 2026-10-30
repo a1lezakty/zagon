@@ -131,9 +131,9 @@ extension Query {
         // Tokens count for the project of the directory each request was made in (the session's when not known).
         try db.query("""
             SELECT u.hour, u.cwd, coalesce(s.project,''), coalesce(s.host,''), u.agent, u.model, sum(u.input), sum(u.output),
-                   sum(u.cache_read), sum(u.cache_write), sum(u.cache_write_1h), sum(u.requests)
+                   sum(u.cache_read), sum(u.cache_write), sum(u.cache_write_1h), sum(u.requests), s.cwd
             FROM usage_hour u LEFT JOIN session s ON s.id = u.session_id WHERE u.hour >= ? AND u.hour < ?
-            GROUP BY 1, 2, 3, 4, 5, 6
+            GROUP BY 1, 2, 3, 4, 5, 6, 13
             """, [.real(lo), .real(hi)]) { r in
             guard let i = index(r.real(0)) else { return }
             let m = r.text(5) ?? "", t = r.int(6) + r.int(7) + r.int(8) + r.int(9)
@@ -142,7 +142,7 @@ extension Query {
             out[i].tokens.input += r.int(6); out[i].tokens.output += r.int(7); out[i].tokens.cacheRead += r.int(8)
             out[i].tokens.cacheWrite += r.int(9); out[i].tokens.cacheWrite1h += r.int(10); out[i].tokens.requests += r.int(11)
             out[i].cost += c
-            Self.add(&out[i].project, SessionTime.project(r.text(1), r.text(2) ?? ""), t, c)
+            Self.add(&out[i].project, SessionTime.project(r.text(1), session: r.text(2) ?? "", started: r.text(12)), t, c)
             Self.add(&out[i].host, r.text(3) ?? "", t, c)
             Self.add(&out[i].agent, r.text(4) ?? "", t, c); Self.add(&out[i].model, m, t, c)
         }
@@ -152,13 +152,14 @@ extension Query {
         // Session time: union per session; per project (the directory of each interval), union per session and project.
         var working: [String: (all: [Interval], projects: [String: [Interval]])] = [:]
         try db.query("""
-            SELECT a.session_id, coalesce(s.project,''), a.start, a."end", a.cwd FROM activity a
+            SELECT a.session_id, coalesce(s.project,''), a.start, a."end", a.cwd, s.cwd FROM activity a
             LEFT JOIN session s ON s.id = a.session_id
             WHERE a.kind = 'working' AND a.start < ?1 AND a.start > ?2 - \(Self.longestStretch) AND a."end" > ?2
             """, [.real(hi), .real(lo)]) { r in
             let sid = r.text(0) ?? "", iv = Interval(r.real(2), r.real(3))
             working[sid, default: ([], [:])].all.append(iv)
-            working[sid]!.projects[SessionTime.project(r.text(4), r.text(1) ?? ""), default: []].append(iv)
+            working[sid]!.projects[SessionTime.project(r.text(4), session: r.text(1) ?? "", started: r.text(5)), default: []]
+                .append(iv)
         }
         for e in working.values {
             let merged = Intervals.merge(e.all)

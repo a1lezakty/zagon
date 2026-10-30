@@ -3,8 +3,9 @@
 /// driven over `tmux send-keys` look exactly like a human at the keyboard in their transcripts, and their messages land
 /// 0–26 s after the driver's call. When W has a name (`claude --name`, `/rename`: a Claude title of rank >= agent
 /// name) only a relay aimed at it counts (its `-t` target equals W's name or one is a prefix of the other, letters and
-/// digits compared); a relay with no plain target (`$s`, `%3`, none) counts for any session. Channel messages
-/// (Telegram…) are always the human's. The `read` action before a relayed message goes with it.
+/// digits compared). Without a name, a relay counts unless its target names another session. A relay with no plain
+/// target (`$s`, `%3`, none) counts for any session. Channel messages (Telegram…) are always the human's. The `read`
+/// action before a relayed message goes with it.
 enum UserTime {
     static let relayBefore = 30.0, relayAfter = 5.0
 
@@ -21,6 +22,7 @@ enum UserTime {
                 if let id = $0.text(0), let n = $0.text(1).map(norm), !n.isEmpty { names[id] = n }
             }
         }
+        func same(_ name: String, _ target: String) -> Bool { name.hasPrefix(target) || target.hasPrefix(name) }
         func relayed(_ session: String, _ t: Timestamp) -> Bool {
             var lo = 0, hi = relays.count
             while lo < hi { let m = (lo + hi) / 2; if relays[m].ts < t - relayBefore { lo = m + 1 } else { hi = m } }
@@ -28,8 +30,9 @@ enum UserTime {
             while lo < relays.count, relays[lo].ts <= t + relayAfter {
                 let r = relays[lo]; lo += 1
                 guard r.session != session else { continue }
-                guard let name, !r.target.isEmpty else { return true }
-                if name.hasPrefix(r.target) || r.target.hasPrefix(name) { return true }
+                guard !r.target.isEmpty else { return true }
+                if let name { if same(name, r.target) { return true } else { continue } }
+                if !names.contains(where: { $0.key != session && same($0.value, r.target) }) { return true }
             }
             return false
         }

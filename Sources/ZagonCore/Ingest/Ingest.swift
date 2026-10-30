@@ -40,6 +40,8 @@ public struct IngestStats: Sendable, Codable {
     public var filesSeen = 0, filesRead = 0, bytes = 0, lines = 0, badLines = 0, resets = 0, moves = 0, usageRecords = 0
     /// Files recounted from their archive copy (the original is gone; schema v5 recount).
     public var fromArchive = 0
+    /// v5 recounts that came out with other totals, so the file kept its old rows (see `Ingest.recount`).
+    public var recountsKept = 0
     public var seconds = 0.0, parseSeconds = 0.0, applySeconds = 0.0, deriveSeconds = 0.0
 }
 
@@ -155,9 +157,11 @@ public final class Ingest {
             if let row = known {
                 f = row
                 let replaced = f.inode != ino || size < f.offset || !tailMatches(fd, f)
-                if replaced || f.recount {
+                if replaced {
                     try restart(&f)
-                    if replaced { f.resets += 1; stats.resets += 1 }
+                    f.resets += 1; stats.resets += 1
+                } else if f.recount {
+                    try recount(&f, fd: fd, path: path, relative: relative, source: source)
                 } else if size == f.offset {
                     return
                 }
@@ -186,41 +190,97 @@ public final class Ingest {
     func restart(_ f: inout FileRow) throws {
         try retract(f.id)
         f.offset = 0; f.tail = []; f.parserState = nil; f.activityState = nil; f.sessionId = nil; f.agent = ""
-        f.badLines = 0
+    }
+
+    /// What a file counted: usage per (session, agent, hour, model) without the v5 detail, and tool calls.
+    struct Counted: Equatable { var usage: [String: [Int]] = [:], tools: [String: Int] = [:] }
+    func counted(_ file: Int64) throws -> Counted {
+        var c = Counted()
+        try db.query("""
+            SELECT session_id, agent, hour, model, sum(input), sum(output), sum(cache_read), sum(cache_write), sum(requests)
+            FROM usage_hour WHERE file_id = ? GROUP BY 1, 2, 3, 4
+            """, [.int(file)]) { r in
+            c.usage["\(r.text(0) ?? "") \(r.text(1) ?? "") \(r.int(2)) \(r.text(3) ?? "")"] = (4...8).map { r.int(Int32($0)) }
+        }
+        try db.query("SELECT session_id, hour, name, sum(n) FROM tool_use WHERE file_id = ? GROUP BY 1, 2, 3", [.int(file)]) { r in
+            c.tools["\(r.text(0) ?? "") \(r.int(1)) \(r.text(2) ?? "")"] = r.int(3)
+        }
+        return c
+    }
+
+    /// The v5 recount of what a file counted (up to its offset; the rest is tailed as usual): it only adds detail
+    /// (request directory, 1-hour split, queued and channel messages), so when the tokens or tool calls come out
+    /// different, the old rows stay. That happens when the dedup ledger no longer holds request ids older than
+    /// `dedup_days` that another file also has (a resumed session's copy of history): counting them again here would
+    /// count them twice, or move them to the other session.
+    func recount(_ f: inout FileRow, fd: Int32, path: String, relative: String, source: SourceSpec) throws {
+        let old = f, before = try counted(f.id)
+        try db.exec("SAVEPOINT recount")
+        do {
+            try restart(&f)
+            f.badLines = 0
+            try read(fd: fd, file: &f, path: path, relative: relative, source: source, upTo: old.offset)
+            if f.offset == old.offset, try counted(f.id) == before {
+                try db.exec("RELEASE recount")
+                f.recount = false
+                return
+            }
+        } catch {
+            try? db.exec("ROLLBACK TO recount"); try? db.exec("RELEASE recount")
+            throw error
+        }
+        try db.exec("ROLLBACK TO recount"); try db.exec("RELEASE recount")
+        stats.recountsKept += 1
+        f = old
+        f.recount = false
     }
 
     /// Files still due for the v5 recount after a pass whose original is gone (Claude Code / Codex dropped it): counted
-    /// again from the archive copy when it holds at least what was counted, else their rows stay as they are. A file
-    /// that exists but was not walked (another root this time) waits for a pass that sees it.
+    /// again from the archive copy when it holds the counted bytes (size and the tail before the offset), else their
+    /// rows stay as they are. A file that exists but was not walked (another root this time), or whose copy cannot be
+    /// unpacked now (disk full), waits for a later pass.
     func recountGone() throws {
         var due: [(id: Int64, path: String)] = []
         try db.query("SELECT id, path FROM source_file WHERE recount = 1") { if let p = $0.text(1) { due.append(($0.int64(0), p)) } }
-        for d in due where !Sys.exists(d.path) {
+        due = due.filter { !Sys.exists($0.path) }
+        guard !due.isEmpty else { return }
+        // Unpacked next to the database (the copy's protection, not /tmp), read like the original, removed; a copy left
+        // by a crash is removed first.
+        let dbFile = (try db.one("SELECT file FROM pragma_database_list WHERE name = 'main'") { $0.text(0) } ?? nil) ?? ""
+        for d in due {
             try db.transaction {
-                guard var f = try loadFile(d.path) else { return }
-                defer { _ = try? db.run("UPDATE source_file SET recount = 0 WHERE id = ?", [.int(f.id)]) }
-                guard let src = sources.first(where: { d.path.hasPrefix($0.root + "/") }),
-                      case let rel = String(d.path.dropFirst(src.root.count + 1)), src.accepts(rel),
+                guard var f = try loadFile(d.path), f.recount else { return }  // another process may have done it
+                func done() throws { try db.run("UPDATE source_file SET recount = 0 WHERE id = ?", [.int(f.id)]) }
+                guard let src = sources.first(where: { d.path.hasPrefix($0.root + "/") }) else { return }
+                let rel = String(d.path.dropFirst(src.root.count + 1))
+                guard src.accepts(rel),
                       let copy = try db.one("SELECT value FROM meta WHERE key = ?", [.text("archive:file:\(f.id)")], { $0.text(0) }) ?? nil,
-                      let n = Archive.contentSize(copy), n >= f.offset else { return }
-                // Unpacked next to the database (the copy's protection, not /tmp), read like the original, dropped.
-                let tmp = (try db.one("SELECT file FROM pragma_database_list WHERE name = 'main'") { $0.text(0) } ?? nil)
-                    .flatMap { $0.isEmpty ? nil : $0 } .map { $0 + ".recount" } ?? copy + ".recount"
-                let out = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0o600)
+                      let n = Archive.contentSize(copy), n >= f.offset else { return try done() }
+                let tmp = (dbFile.isEmpty ? copy : dbFile) + ".recount"
+                unlink(tmp)
+                let out = Sys.createExclusive(tmp)
                 guard out >= 0 else { return }
                 defer { unlink(tmp) }
+                var writeFailed = false
                 do {
                     try Archive.decompress(copy) { b in
-                        guard Sys.writeAll(fd: out, Array(b)) else { throw ArchiveError("cannot write \(tmp)") }
+                        guard Sys.writeAll(fd: out, Array(b)) else { writeFailed = true; throw ArchiveError("cannot write \(tmp)") }
                     }
                     close(out)
-                } catch { close(out); return }
+                } catch {
+                    close(out)
+                    if !writeFailed { try done() }  // a damaged copy stays damaged; a full disk may not
+                    return
+                }
                 let fd = open(tmp, O_RDONLY | O_CLOEXEC)
                 guard fd >= 0 else { return }
                 defer { close(fd) }
-                try restart(&f)
-                f.size = n
-                try read(fd: fd, file: &f, path: d.path, relative: rel, source: src)
+                guard tailMatches(fd, f) else { return try done() }  // a copy of another version of the file
+                try recount(&f, fd: fd, path: d.path, relative: rel, source: src)
+                if f.offset < n {  // lines written after the last pass, before the original went
+                    f.size = n
+                    try read(fd: fd, file: &f, path: d.path, relative: rel, source: src)
+                }
                 stats.fromArchive += 1
                 try save(f)
             }
@@ -265,7 +325,8 @@ public final class Ingest {
         return n == k && b == f.tail
     }
 
-    func read(fd: Int32, file f: inout FileRow, path: String, relative: String, source: SourceSpec) throws {
+    /// Reads complete lines from `f.offset` to the end of the file, or to `upTo` (a line start).
+    func read(fd: Int32, file f: inout FileRow, path: String, relative: String, source: SourceSpec, upTo: Int = .max) throws {
         var parser = source.makeParser(path, relative, f.parserState)
         var turns = f.activityState.flatMap { try? JSONDecoder().decode(TurnBuilder.self, from: Data($0.utf8)) } ?? TurnBuilder()
         var out = ParseOutput()
@@ -275,7 +336,9 @@ public final class Ingest {
         var filled = 0, sinceApply = 0
         while true {
             if filled == buf.count { buf.append(contentsOf: repeatElement(0, count: buf.count)) } // a line longer than buf
-            let r = buf.withUnsafeMutableBytes { Glibc_read(fd, $0.baseAddress! + filled, $0.count - filled) }
+            let want = min(buf.count - filled, upTo - f.offset - filled)
+            if want <= 0 { break }
+            let r = buf.withUnsafeMutableBytes { Glibc_read(fd, $0.baseAddress! + filled, want) }
             if r <= 0 { break }
             filled += r
             var start = 0

@@ -5,6 +5,7 @@ public struct TokenTotals: Codable, Sendable, Equatable {
     public var total: Int { input + output + cacheRead + cacheWrite }
     public init() {}
     enum CodingKeys: String, CodingKey { case input, output, cacheRead, cacheWrite, cacheWrite1h = "cache_write_1h", requests, total }
+    enum Converted: String, CodingKey { case cacheWrite1h }
     public func encode(to e: Encoder) throws {
         var c = e.container(keyedBy: CodingKeys.self)
         try c.encode(input, forKey: .input); try c.encode(output, forKey: .output)
@@ -16,7 +17,9 @@ public struct TokenTotals: Codable, Sendable, Equatable {
         let c = try d.container(keyedBy: CodingKeys.self)
         input = try c.decode(Int.self, forKey: .input); output = try c.decode(Int.self, forKey: .output)
         cacheRead = try c.decode(Int.self, forKey: .cacheRead); cacheWrite = try c.decode(Int.self, forKey: .cacheWrite)
-        cacheWrite1h = try c.decodeIfPresent(Int.self, forKey: .cacheWrite1h) ?? 0
+        // `cache_write_1h` as written, or `cacheWrite1h` through a decoder that converts from snake case
+        cacheWrite1h = try c.decodeIfPresent(Int.self, forKey: .cacheWrite1h)
+            ?? d.container(keyedBy: Converted.self).decodeIfPresent(Int.self, forKey: .cacheWrite1h) ?? 0
         requests = try c.decode(Int.self, forKey: .requests)
     }
     /// Six columns from `i`: input, output, cache_read, cache_write, cache_write_1h, requests.

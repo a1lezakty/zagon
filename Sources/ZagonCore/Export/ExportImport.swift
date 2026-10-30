@@ -70,7 +70,8 @@ public final class ExportImport {
                           .int(i("cache_write", r)), .int(i("cache_write_1h", r)), .int(i("requests", r)), .int(i("tool_calls", r)),
                           .real(r["session_sec"]?.double ?? 0), .real(r["user_sec"]?.double ?? 0), .int(i("seq"))])
             }
-            for r in v["usage"]?.array ?? [] {
+            // `usage_cwd` (v5) is `usage` split by directory: take it when the server sent it.
+            for r in v["usage_cwd"]?.array ?? v["usage"]?.array ?? [] {
                 try db.run("""
                     INSERT INTO usage_hour(file_id, session_id, agent, hour, model, cwd, input, output, cache_read, cache_write,
                       cache_write_1h, requests, tool_calls) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)

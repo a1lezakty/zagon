@@ -154,8 +154,8 @@ public struct ClaudeParser: LineParser {
             }
             for b in m.blocks ?? [] where b.type == "tool_use" {
                 out.tools.append(ToolCall(sessionId: sessionId, ts: ts, name: b.name ?? "?", callId: b.id))
-                if b.name == "Bash", let cmd = b.command {
-                    out.relays.append(Relay(sessionId: sessionId, ts: ts, targets: Self.relayTargets(cmd)))
+                if b.name == "Bash", let cmd = b.command, case let targets = Self.relayTargets(cmd), !targets.isEmpty {
+                    out.relays.append(Relay(sessionId: sessionId, ts: ts, targets: targets))
                 }
             }
             out.events.append(ActivityEvent(sessionId: sessionId, ts: ts, cwd: r.cwd))
@@ -235,30 +235,47 @@ public struct ClaudeParser: LineParser {
     /// A shell command that types into a terminal pane.
     static func typesKeys(_ cmd: String) -> Bool { cmd.contains("send-keys") || cmd.contains("paste-buffer") }
 
-    /// Targets of every `tmux send-keys` / `paste-buffer` in a shell command: the session name of `-t name`,
+    /// Targets of every `tmux send-keys` / `send` / `paste-buffer` call in a shell command (tmux's own options, then the
+    /// command, then its options up to the first argument, as tmux reads them): the session name of `-t name`,
     /// `-t =name`, `-t name:window.pane`, lower-cased; "" for a call without `-t` or with a target that is not a plain
-    /// name (`$s`, `%3`, `"$(…)"`).
+    /// name (`$s`, `%3`, `"$(…)"`). Empty: the command only mentions them (`rg send-keys`).
     static func relayTargets(_ cmd: String) -> [String] {
         var out: [String] = []
-        for seg in cmd.split(whereSeparator: { ";|&\n".contains($0) }) where typesKeys(String(seg)) {
-            let words = seg.split(whereSeparator: { $0 == " " || $0 == "\t" }).map { w -> Substring in
+        for seg in cmd.split(whereSeparator: { ";|&\n".contains($0) }) {
+            let w = seg.split(whereSeparator: { $0 == " " || $0 == "\t" }).map { w -> Substring in
                 var w = w
-                while let q = w.first, q == "'" || q == "\"" { w.removeFirst() }
-                while let q = w.last, q == "'" || q == "\"" { w.removeLast() }
+                while let q = w.first, q == "'" || q == "\"" || q == "(" { w.removeFirst() }
+                while let q = w.last, q == "'" || q == "\"" || q == ")" { w.removeLast() }
                 return w
             }
-            var target: Substring = ""
-            for (i, w) in words.enumerated() {
-                if w == "-t", i + 1 < words.count { target = words[i + 1]; break }
-                if w.hasPrefix("-t"), w.count > 2 { target = w.dropFirst(2); break }
+            guard var i = w.firstIndex(where: { $0 == "tmux" || $0.hasSuffix("/tmux") }) else { continue }
+            /// Skips the options at `i`; returns the value of `-t` if any. `withArg`: the letters that take a value.
+            func options(_ withArg: String) -> Substring? {
+                var t: Substring?
+                i += 1
+                while i < w.count, w[i].hasPrefix("-"), w[i].count > 1, w[i] != "--" {
+                    var letters = w[i].dropFirst()
+                    while let ch = letters.popFirst() {
+                        guard withArg.contains(ch) else { continue }
+                        let value = letters.isEmpty ? (i + 1 < w.count ? w[i + 1] : "") : letters
+                        if letters.isEmpty { i += 1 }
+                        if ch == "t" { t = value }
+                        break
+                    }
+                    i += 1
+                }
+                return t
             }
+            _ = options("cfLST")
+            guard i < w.count, ["send-keys", "send", "paste-buffer", "pasteb"].contains(w[i]) else { continue }
+            var target = options("tNcbs") ?? ""
             if target.hasPrefix("=") { target.removeFirst() }
             target = target.prefix { $0 != ":" && $0 != "." }
             if target.contains(where: { "$%`(){}*?".contains($0) }) { target = "" }
             let t = target.lowercased()
             if !out.contains(t) { out.append(t) }
         }
-        return out.isEmpty ? [""] : out
+        return out
     }
 
     mutating func meta(_ r: ClaudeRecord, model: String?, into out: inout ParseOutput) {

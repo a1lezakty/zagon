@@ -1,7 +1,7 @@
 /// Rebuilds `day_agg` rows of one local day and host from usage_hour, tool_use, activity and user_activity of the
 /// sessions of that host (rows imported from other machines carry their own host in `session.host`). Tokens and session
-/// time go to the project of the directory each request / interval was in (`usage_hour.cwd`, `activity.cwd`); rows
-/// without one (before v5, imports) and tool calls go to the session's project.
+/// time go to the project of the directory each request / interval was in (`usage_hour.cwd`, `activity.cwd`, see
+/// `SessionTime.project`); rows without one (before v5, imports) and tool calls go to the session's project.
 struct DayAggregator {
     let db: SQLite
     let host: String
@@ -15,11 +15,12 @@ struct DayAggregator {
         var rows: [Key: Row] = [:]
         try db.query("""
             SELECT coalesce(s.tool,''), u.cwd, coalesce(s.project,''), u.model, sum(u.input), sum(u.output), sum(u.cache_read),
-                   sum(u.cache_write), sum(u.cache_write_1h), sum(u.requests)
+                   sum(u.cache_write), sum(u.cache_write_1h), sum(u.requests), s.cwd
             FROM usage_hour u LEFT JOIN session s ON s.id = u.session_id
-            WHERE u.hour >= ?1 AND u.hour < ?2 AND coalesce(s.host, ?3) = ?3 GROUP BY 1, 2, 3, 4
+            WHERE u.hour >= ?1 AND u.hour < ?2 AND coalesce(s.host, ?3) = ?3 GROUP BY 1, 2, 3, 4, 11
             """, [.real(s), .real(e), .text(host)]) { r in
-            let k = Key(tool: r.text(0) ?? "", project: SessionTime.project(r.text(1), r.text(2) ?? ""), model: r.text(3) ?? "?")
+            let k = Key(tool: r.text(0) ?? "", project: SessionTime.project(r.text(1), session: r.text(2) ?? "", started: r.text(10)),
+                        model: r.text(3) ?? "?")
             rows[k, default: Row()].input += r.int(4); rows[k]!.output += r.int(5); rows[k]!.cacheRead += r.int(6)
             rows[k]!.cacheWrite += r.int(7); rows[k]!.cacheWrite1h += r.int(8); rows[k]!.requests += r.int(9)
         }
@@ -76,20 +77,22 @@ enum SessionTime {
     static func working(_ db: SQLite, from: Timestamp, to: Timestamp, host: String? = nil) throws -> [String: Entry] {
         var out: [String: Entry] = [:]
         try db.query("""
-            SELECT a.session_id, coalesce(s.tool,''), coalesce(s.project,''), a.start, a."end", a.cwd
+            SELECT a.session_id, coalesce(s.tool,''), coalesce(s.project,''), a.start, a."end", a.cwd, s.cwd
             FROM activity a LEFT JOIN session s ON s.id = a.session_id
             WHERE a.kind = 'working' AND a.start < ?1 AND a."end" > ?2 AND (?3 IS NULL OR coalesce(s.host, ?3) = ?3)
             """, [.real(to), .real(from), .of(host)]) { r in
             let sid = r.text(0) ?? "", iv = Interval(r.real(3), r.real(4))
             out[sid, default: Entry(tool: r.text(1) ?? "", project: r.text(2) ?? "", intervals: [])].intervals.append(iv)
-            out[sid]!.projects[project(r.text(5), out[sid]!.project), default: []].append(iv)
+            out[sid]!.projects[project(r.text(5), session: out[sid]!.project, started: r.text(6)), default: []].append(iv)
         }
         return out
     }
 
-    /// The project of a directory; nil or "" (not known) = the session's.
-    static func project(_ cwd: String?, _ session: String) -> String {
+    /// The project a directory counts for: the session's (`session`, of the folder it `started` in) when the directory
+    /// is not known or lies inside that folder (`cd src` stays in the project), else the directory's own name.
+    static func project(_ cwd: String?, session: String, started: String?) -> String {
         guard let cwd, !cwd.isEmpty else { return session }
+        if let s = started, !s.isEmpty, cwd == s || cwd.hasPrefix(s.hasSuffix("/") ? s : s + "/") { return session }
         return ClaudeParser.project(cwd)
     }
 }

@@ -17,7 +17,7 @@ public enum Pricing {
     public static func cost(model: String, input: Int, output: Int, cacheRead: Int, cacheWrite: Int, cacheWrite1h: Int = 0) -> Double {
         guard let r = rates(model) else { return 0 }
         return (Double(input) * r.input + Double(output) * r.output + Double(cacheRead) * r.cacheRead
-                + Double(cacheWrite - cacheWrite1h) * r.cacheWrite + Double(cacheWrite1h) * r.cacheWrite1h) / 1_000_000
+                + Double(max(0, cacheWrite - cacheWrite1h)) * r.cacheWrite + Double(cacheWrite1h) * r.cacheWrite1h) / 1_000_000
     }
 
     public static func cost(model: String, _ t: TokenTotals) -> Double {
