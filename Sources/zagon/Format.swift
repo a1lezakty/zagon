@@ -23,8 +23,8 @@ enum Fmt {
         return c >= w ? String(s.prefix(w)) : s + String(repeating: " ", count: w - c)
     }
     static func lpad(_ s: String, _ w: Int) -> String { s.count >= w ? s : String(repeating: " ", count: w - s.count) + s }
-    /// USD at API prices, as the Mac app shows it; `unpriced` tokens (models with no known price) add "?": "$ ?" when
-    /// nothing was priced, "$12+?" when part was.
+    /// USD at API prices; `unpriced` tokens (models with no known price) add "?": "$ ?" when nothing was priced,
+    /// "$12+?" when part was.
     static func usd(_ x: Double, unpriced: Int = 0) -> String {
         let s = x > 0 && x < 1 ? "<$1" : "$\(Int(x.rounded()))"
         return unpriced == 0 ? s : x == 0 ? "$ ?" : s + "+?"
@@ -40,8 +40,9 @@ enum Fmt {
     }
 
     /// "; no price: model-a, model-b" for the models left out of the cost.
-    static func unpricedNote(_ models: [ModelLine]) -> String {
-        let xs = models.filter { $0.unpriced > 0 }.map(\.model)
+    static func unpricedNote(_ r: DayReport) -> String {
+        var xs = r.models.filter { $0.unpriced > 0 }.map(\.model)
+        if r.models.reduce(0, { $0 + $1.unpriced }) < r.unpriced { xs.append("(no model)") }
         return xs.isEmpty ? "" : "; no price: " + xs.joined(separator: ", ")
     }
 
@@ -52,7 +53,7 @@ enum Fmt {
 
     static func day(_ r: DayReport) {
         print("\(r.day)   \(tokenLine(r.tokens))")
-        print("cost       \(usd(r.cost, unpriced: r.unpriced)) \(apiNote)" + unpricedNote(r.models))
+        print("cost       \(usd(r.cost, unpriced: r.unpriced)) \(apiNote)" + unpricedNote(r))
         print("time       sessions \(dur(r.sessionSec)) · you \(dur(r.userSec)) · \(r.toolCalls) tool calls")
         print("hours      |\(spark(r.hours))|  0h…23h")
         if !r.models.isEmpty {
@@ -96,8 +97,9 @@ enum Fmt {
 
     static func week(_ r: WeekReport) {
         print("\(r.from) … \(r.to)   \(tokenLine(r.tokens))")
-        print("cost       \(usd(r.cost, unpriced: r.unpriced)) \(apiNote); previous 7 days \(usd(r.previousCost))"
-              + (r.unpriced > 0 ? "; ? = \(tokens(r.unpriced)) tokens of models with no known price" : ""))
+        print("cost       \(usd(r.cost, unpriced: r.unpriced)) \(apiNote); previous 7 days "
+              + usd(r.previousCost, unpriced: r.previousUnpriced)
+              + (r.unpriced + r.previousUnpriced > 0 ? "; ? = tokens of models with no known price" : ""))
         print("time       sessions \(dur(r.sessionSec)) · you \(dur(r.userSec))   (previous 7 days: \(tokens(r.previous.total)) tokens, "
               + "sessions \(dur(r.previousSessionSec)), you \(dur(r.previousUserSec)))")
         let m = r.days.map { $0.tokens.total }.max() ?? 0

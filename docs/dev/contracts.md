@@ -142,7 +142,8 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
 - days are local days in the top-level `timezone` of config.toml (the older `[notify] timezone` is still read),
   else `TZ` / `/etc/localtime`; every command applies it at start (`Settings.applyTimezone`). The zone the day rows
   were built in is kept in `meta.tz`, the version of the rules that build them in `meta.day_rules`
-  (`Ingest.dayRules`); a scan in another zone or with newer rules rebuilds all days of the host
+  (`Ingest.dayRules`, an integer; never lowered); a scan in another zone or with newer rules rebuilds all days of the
+  host and writes both values only together with the rebuilt days
   (one left empty keeps a zero totals row, so `export` tells clients). The zone is set by
   `zagon tz`, the bot's `/tz` and MCP `settings_timezone` (`Settings.setTimezone`); `zagon daemon` sees the change
   within ~10 s and restarts itself in place (`execve`, same pid), `zagon notify` switches in its loop. Usage is bucketed by UTC

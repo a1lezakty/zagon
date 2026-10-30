@@ -68,6 +68,8 @@ func channelText(_ s: String) -> String {
         #expect(try Reports(store: env.store).sessions(from: T0 - hour, to: T0 + hour).first?.unpriced == 10)
         let w = try Reports(store: env.store).week(ending: "2026-10-20")
         #expect(w.unpriced == 10 && w.days.last?.unpriced == 10 && w.projects.first?.unpriced == 10)
+        let next = try Reports(store: env.store).week(ending: "2026-10-27")
+        #expect(next.previousUnpriced == 10 && abs(next.previousCost - 15) < 1e-9 && next.unpriced == 0)
     }
 
     // MARK: project by the directory of each segment
@@ -373,9 +375,20 @@ func channelText(_ s: String) -> String {
         env.write(mainFile, lines: [typed(T0), assistantLine(T0 + minute, id: "m1", output: 5)])
         env.scan()
         try env.store.db.exec("UPDATE day_agg SET project = 'stale' WHERE project != ''; UPDATE meta SET value = '1' WHERE key = 'day_rules'")
-        env.scan()
+        // A run that stops between the check and the rebuild leaves the old rules, so the next run rebuilds.
+        var o = IngestOptions(); o.host = "test"; o.dedupDays = 1e6
+        func run() -> Ingest { Ingest(store: env.store, sources: [ClaudeSource.spec(root: env.root)], options: o) }
+        try run().checkTimezone()
+        func rules() throws -> String? { try env.store.db.one("SELECT value FROM meta WHERE key = 'day_rules'") { $0.text(0) } ?? nil }
+        #expect(try rules() == "1")
+        try run().scan()
         #expect(env.int("SELECT count(*) FROM day_agg WHERE project = 'stale'") == 0)
-        #expect(try env.store.db.one("SELECT value FROM meta WHERE key = 'day_rules'") { $0.text(0) } == Ingest.dayRules)
+        #expect(env.int("SELECT count(*) FROM day_agg WHERE project = 'alpha'") > 0)
+        #expect(try rules() == String(Ingest.dayRules))
+        // Rules of a newer zagon on the same database are left alone.
+        try env.store.db.exec("UPDATE day_agg SET project = 'stale' WHERE project != ''; UPDATE meta SET value = '9' WHERE key = 'day_rules'")
+        env.scan()
+        #expect(try env.int("SELECT count(*) FROM day_agg WHERE project = 'stale'") > 0 && rules() == "9")
     }
 
     @Test func aSessionStartedAtHomeCountsEachCheckout() throws {

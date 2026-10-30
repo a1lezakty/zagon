@@ -176,7 +176,9 @@ enum QueryFixture {
         #expect(io("gpt-5-nano") == [0.05, 0.4, 0.005] && io("gpt-5-codex") == [1.25, 10, 0.125])
         #expect(io("codex-mini-latest") == [1.5, 6, 0.375] && io("gpt-5.3-codex") == [1.75, 14, 0.175])
         // Cloud ids and suffixes find the same row.
-        for m in ["us.anthropic.claude-opus-4-1-20250805-v1:0", "claude-opus-4-1@20250805", "Claude-Opus-4-1[1m]"] {
+        #expect(io("gpt-5-2025-08-07") == [1.25, 10, 0.125])
+        for m in ["us.anthropic.claude-opus-4-1-20250805-v1:0", "global.anthropic.claude-opus-4-1-20250805-v1:0",
+                  "claude-opus-4-1@20250805", "Claude-Opus-4-1[1m]"] {
             #expect(io(m) == [15, 75, 1.5], "\(m)")
         }
         // Anthropic cache writes: 1.25x input for 5 minutes, 2x for an hour.

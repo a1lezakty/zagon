@@ -154,9 +154,10 @@ zagon update                   # the latest release (see Update above)
 
 - Every report takes `--json`.
 - `$` is at API list prices, for comparison: a subscription is billed differently. Each model has its own price
-  (input, output, cache reads, cache writes: 5 minutes 1.25x input, 1 hour 2x), from the Anthropic and OpenAI pricing
-  pages; a model with no known price is shown as `$ ?` (`$12+?` when only part of the tokens has a price), never
-  as $0. Prices that depend on a request's length (long prompts) or on fast mode are not applied.
+  for input, output, cache reads and cache writes (Anthropic: 1.25x input for 5 minutes, 2x for 1 hour; OpenAI: as
+  listed, free for most models), from the Anthropic and OpenAI pricing pages. In the CLI and MCP reports a model with
+  no known price is shown as `$ ?` (`$12+?` when only part of the tokens has a price), not as $0. Prices that depend
+  on a request's length (long prompts) or on fast mode are not applied.
 - Tokens and session time count for the project each request and stretch was in: inside the folder the session
   started in, that folder's project; anywhere else, and for a session started in your home directory or `/`, the git
   checkout of each directory (a worktree counts for its main checkout), else its last folder name. On macOS, folders

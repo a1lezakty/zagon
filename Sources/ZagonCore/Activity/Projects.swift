@@ -26,6 +26,9 @@ public enum Projects {
             if Sys.isDir(git) { return Dir(project: Sys.basename(d), home: dir.home) }
             if let b = Sys.readFile(git), case let s = String(decoding: b, as: UTF8.self), s.hasPrefix("gitdir:") {
                 let gitdir = absolute(String(s.dropFirst(7)), in: d)
+                #if os(macOS)
+                if guarded(gitdir, homes: homes) { return Dir(project: Sys.basename(d), home: dir.home) }
+                #endif
                 guard let cb = Sys.readFile(gitdir + "/commondir") else {  // a submodule: a checkout of its own
                     return Dir(project: Sys.basename(d), home: dir.home)
                 }
