@@ -62,10 +62,13 @@ The macOS app (sample data): the menu bar, then the Day, Week and Calendar windo
   outlives Claude Code's 30-day cleanup. Run the service with `zagon daemon --no-archive` to turn that off.
 - The daily summary written by an AI is one call a day on your own subscription: `claude -p --safe-mode` on a cheap
   model (no CLAUDE.md, hooks, plugins or MCP servers of yours), or `codex exec --ephemeral --ignore-user-config`.
-  It gets a compact digest: titles, projects, branches, linked task keys, times, edited files, your commit subjects
-  and the first words of the day's first and last typed messages. The result is kept in the database (and goes to
-  the Mac app with the rest of the export); a week, a month or a range is one more call over the days' summaries.
-  With `[summary] engine = "none"` the summary is built without AI.
+  It gets a compact digest: titles, projects, branches, linked tasks (key and title), times, edited files, your
+  commit subjects and the first words (up to 120 characters, secrets redacted) of the day's first and last typed
+  messages. The summary is kept in the database and goes to the Mac app with the rest of the export; it may quote
+  those first words (the summary built without AI starts each card with them). The card of a linked task becomes
+  that task's "what was done" for the day, which is also its worklog text in Jira unless you set one by hand. A week,
+  a month or a range is one more call over the days' summaries. With `[summary] engine = "none"` the summary is
+  built without AI.
 - Your typed messages go into a contentless full-text index used for search: the words can be searched, the text
   itself is not kept. Pass `--no-index-prompts` to `zagon scan` / `zagon daemon` to turn that off.
 - Data lives in `~/.zagon` (or `$ZAGON_DIR`): `zagon.db`, `spool/`, `archive/`, `logs/`, `config.toml`, `backup/`.
@@ -258,7 +261,8 @@ timeout = 120               # seconds; on failure the summary is built without A
 time = "20:00"              # when the service writes the day summary ("" = off); also `zagon summary --at`
 ```
 
-Check with `zagon notify test`. The service reads the file when it starts, so restart it after a change.
+Check with `zagon notify test`. The service reads the file when it starts, so restart it after a change
+(`[summary] time` and the time zone are picked up without a restart).
 
 ## macOS app
 

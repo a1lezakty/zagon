@@ -115,18 +115,24 @@ struct SummaryCommand: ParsableCommand {
 
     var isPeriod: Bool { week || month || from != nil || to != nil }
 
+    /// A real day written as `YYYY-MM-DD` (not `2026-1-5`, not `2026-02-31`).
+    static func isDay(_ s: String) -> Bool { Time.dayBounds(s).map { Time.dayString($0.start) == s } ?? false }
+
     func validate() throws {
         if let at, at != "off", at.split(separator: ":").count != 2 { throw ValidationError("--at takes HH:MM or off") }
         if month {
             if let date, DaySummary.month(date) == nil { throw ValidationError("with --month the date is YYYY-MM") }
-        } else if let date, Time.parseDay(date) == nil { throw ValidationError("date must be YYYY-MM-DD") }
+        } else if let date, !Self.isDay(date) { throw ValidationError("date must be YYYY-MM-DD") }
         if (from == nil) != (to == nil) { throw ValidationError("--from and --to go together") }
         if let from, let to {
-            guard Time.parseDay(from) != nil, Time.parseDay(to) != nil, from <= to else { throw ValidationError("--from and --to: YYYY-MM-DD, from <= to") }
+            guard Self.isDay(from), Self.isDay(to) else { throw ValidationError("--from and --to take YYYY-MM-DD") }
+            guard from < to else { throw ValidationError("--from must be before --to (one day: zagon summary <date>)") }
             guard DaySummary.range(from, to).last == to else { throw ValidationError("a range is at most \(DaySummary.maxDays) days") }
         }
         if [week, month, from != nil].filter({ $0 }).count > 1 { throw ValidationError("one of --week, --month, --from/--to") }
         if isPeriod && (png != nil || send) { throw ValidationError("--png and --send are for a day") }
+        if !isPeriod && (plan || yes) { throw ValidationError("--plan and --yes are for a period (--week, --month, --from/--to)") }
+        if json && (png != nil || send) { throw ValidationError("--json does not go with --png or --send") }
     }
 
     func run() throws {
@@ -140,7 +146,9 @@ struct SummaryCommand: ParsableCommand {
         let today = Time.dayString(Time.now())
         if !isPeriod {
             let day = date ?? today
-            if !refresh, png == nil, !send, let k = try summary.kept(day) { return try show(day, k) }
+            // One made without AI while an AI is configured is written again (the AI may answer now).
+            let ai = summary.calls(missing: 0) > 0
+            if !refresh, png == nil, !send, let k = try summary.kept(day), !(ai && k.engine == "none") { return try show(day, k) }
             let t0 = Time.monotonic()
             var m = try summary.message(day)
             if json { return try show(day, try summary.kept(day)) }
@@ -169,7 +177,8 @@ struct SummaryCommand: ParsableCommand {
             warn("\(missing.count) days have no summary yet: \(calls) AI calls in all. Run again with --yes, or see them with --plan.")
             throw ExitCode(3)
         }
-        try summary.period(a, b, make: yes, progress: { n, of, day in
+        // Without AI the missing days cost nothing: they are made here.
+        try summary.period(a, b, make: yes || calls == 0, progress: { n, of, day in
             warn("day \(n)/\(of): \(day)")
         })
         try show(key, try summary.kept(key))

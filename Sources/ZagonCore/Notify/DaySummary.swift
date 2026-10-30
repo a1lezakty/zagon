@@ -84,7 +84,8 @@ public struct DaySummary {
         }
         try transcripts(&f, from: s, to: e)
         f.commits = commits(f.sessions.compactMap(\.cwd), day: day)
-        if let w = try store.latestLimits().first(where: { $0.tool == .claude && $0.window == "seven_day" }),
+        // The weekly limit as it stands now says nothing about a day before.
+        if day == Time.dayString(now), let w = try store.latestLimits().first(where: { $0.tool == .claude && $0.window == "seven_day" }),
            w.resetsAt.map({ $0 > now }) ?? true { f.weekPct = w.usedPct }
         return f
     }
@@ -107,7 +108,8 @@ public struct DaySummary {
                 ? ClaudeSource.spec(root: claudeRoot, indexPrompts: true).makeParser(file.path, "p/" + Sys.basename(file.path), nil)
                 : nil
             Lines.each(file.path) { line in
-                if parser != nil && contains(line, "\"type\":\"user\"") {
+                // Tool results are user records too, often large: not typed messages.
+                if parser != nil && contains(line, "\"type\":\"user\"") && !contains(line, "\"tool_result\"") {
                     var out = ParseOutput()
                     parser!.parse(line: line, into: &out)
                     for m in out.userMessages where m.ts >= from && m.ts < to {
@@ -183,11 +185,13 @@ public struct DaySummary {
             else { groups.append(Group(project: p, key: k, sessions: [s])) }
         }
         var extra: [Group] = []
+        let linker = try? TaskLinker()
         for c in f.commits {
             // A commit goes to the card of the task it names, else to the project's first card.
             for subject in c.subjects {
                 let mine = groups.indices.filter { groups[$0].project == c.repo }
-                if let i = mine.first(where: { groups[$0].key.map { subject.uppercased().contains($0.uppercased()) } ?? false }) ?? mine.first {
+                let named = Set((linker?.keys(in: subject) ?? []).map { $0.uppercased() })
+                if let i = mine.first(where: { groups[$0].key.map { named.contains($0.uppercased()) } ?? false }) ?? mine.first {
                     groups[i].commits.append(subject)
                 } else if let i = extra.firstIndex(where: { $0.project == c.repo }) { extra[i].commits.append(subject) }
                 else { extra.append(Group(project: c.repo, commits: [subject])) }
@@ -214,8 +218,8 @@ public struct DaySummary {
         }
         let commits = f.commits.reduce(0) { $0 + $1.subjects.count }
         let overview = f.sessions.isEmpty && commits == 0 ? w.t("Сессий за день не было.", "No sessions this day.")
-            : w.t("Сессии работали \(w.dur(f.sessionSec)), ты — \(w.dur(f.userSec)). Проекты: \(Set(items.map(\.project)).count), сессии: \(f.sessions.count), коммиты: \(commits).",
-                  "Sessions worked \(w.dur(f.sessionSec)), you \(w.dur(f.userSec)). Projects: \(Set(items.map(\.project)).count), sessions: \(f.sessions.count), commits: \(commits).")
+            : w.t("Проекты: \(Set(items.map(\.project)).count), сессии: \(f.sessions.count), коммиты: \(commits).",
+                  "Projects: \(Set(items.map(\.project)).count), sessions: \(f.sessions.count), commits: \(commits).")
         return SummaryDoc(lang: w.en ? "en" : "ru", from: f.day, to: f.day, overview: overview, items: items)
     }
 
@@ -225,8 +229,9 @@ public struct DaySummary {
         return w.t("Дольше всех ждала тебя ", "Waited for you longest: ") + "\(s.project ?? w.name(nil, s.title)) — \(w.dur(s.waitingSec))."
     }
 
-    /// Compact input for the AI, at most `maxDigest` characters: sessions numbered `[1]…` (the cards name them),
-    /// their tasks, branches, first words of typed messages, edited files; then the commits.
+    /// Compact input for the AI, at most `maxDigest` characters: the commits (they say best what was done, so they come
+    /// before the cut), then sessions numbered `[1]…` (the cards name them) with their tasks, branches, first words of
+    /// typed messages and edited files.
     public static func digest(_ f: Facts, _ w: Words) -> String {
         var out = headline(f, w) + "\n"
         if !f.tasks.isEmpty {
@@ -234,6 +239,11 @@ public struct DaySummary {
                 .joined(separator: "; ") + "\n"
         }
         func quoted(_ xs: [String]) -> String { xs.map { w.t("«\($0)»", "“\($0)”") }.joined(separator: "; ") }
+        for c in f.commits {
+            let b = w.t("Коммиты в ", "Commits in ") + "\(c.repo): " + c.subjects.prefix(10).joined(separator: "; ") + "\n"
+            if out.count + b.count > maxDigest / 3 { break }
+            out += b
+        }
         for (n, s) in f.sessions.enumerated() {
             var b = "\n[\(n + 1)] " + w.t("Проект \(s.project ?? "—") (\(w.tool(s.tool))), сессия «\(s.title ?? "без названия")»",
                                           "Project \(s.project ?? "—") (\(w.tool(s.tool))), session “\(s.title ?? "untitled")”")
@@ -243,11 +253,6 @@ public struct DaySummary {
             if !s.prompts.isEmpty { b += w.t("\n  Начала запросов: ", "\n  First words of prompts: ") + quoted(s.prompts) }
             if !s.lastPrompts.isEmpty { b += w.t("\n  Последние запросы: ", "\n  Last prompts: ") + quoted(s.lastPrompts) }
             if !s.files.isEmpty { b += w.t("\n  Файлы: ", "\n  Files: ") + s.files.prefix(12).map(Sys.basename).joined(separator: ", ") }
-            if out.count + b.count > maxDigest { break }
-            out += b
-        }
-        for c in f.commits {
-            let b = w.t("\nКоммиты в ", "\nCommits in ") + "\(c.repo): " + c.subjects.prefix(10).joined(separator: "; ")
             if out.count + b.count > maxDigest { break }
             out += b
         }
@@ -291,11 +296,12 @@ public struct DaySummary {
     public func ai(_ f: Facts) -> (doc: SummaryDoc, engine: String)? {
         let w = words
         guard !f.sessions.isEmpty, let r = complete(DaySummary.instruction(w) + DaySummary.digest(f, w)) else { return nil }
-        let refs = f.sessions.map { SummaryDoc.Ref(project: $0.project ?? w.tool($0.tool), sec: $0.workingSec, cost: $0.cost) }
+        let refs = f.sessions.map { SummaryDoc.Ref(project: $0.project ?? w.tool($0.tool), sec: $0.workingSec, cost: $0.cost, keys: $0.tasks) }
         guard var (doc, unused) = SummaryDoc.parse(answer: r.text, refs: refs, tasks: f.tasks, lang: w.en ? "en" : "ru",
                                                    from: f.day, to: f.day) else {
             log("summary: the \(r.engine) answer has no cards"); return nil
         }
+        if doc.overview.isEmpty { doc.overview = DaySummary.plain(f, w).overview }
         if !unused.isEmpty {
             var rest = f
             // Short ones (a look, a quick question) would only add empty cards.
@@ -378,10 +384,19 @@ public struct DaySummary {
         if let r = ai(f) { (doc, engine) = r }
         try save(doc, engine: engine, now: now)
         if engine != "none" {
+            // One text per task and day: the cards of one task together. It is also the task's worklog text in Jira
+            // (unless one was set by hand), so it is kept short.
             let tasks = Tasks(store: store)
+            var texts: [String: [String]] = [:], order: [String] = []
             for i in doc.items {
-                guard let key = i.key, let t = try tasks.find(key) else { continue }
-                try tasks.setDone(t.id, day: day, text: doc.taskText(i), source: "auto")
+                guard let key = i.key else { continue }
+                if texts[key] == nil { order.append(key) }
+                texts[key, default: []].append(doc.taskText(i))
+            }
+            for key in order {
+                guard let t = try tasks.find(key) else { continue }
+                let text = texts[key]!.joined(separator: "\n\n")
+                try tasks.setDone(t.id, day: day, text: text.count > 1000 ? String(text.prefix(999)) + "…" : text, source: "auto")
             }
         }
         return (f, doc, engine)
@@ -391,8 +406,10 @@ public struct DaySummary {
     public func message(_ day: String, now: Double = Sys.now()) throws -> Message {
         let (f, doc, _) = try make(day, now: now)
         let w = words
-        var body = DaySummary.headline(f, w) + "\n\n" + doc.text()
-        if let l = DaySummary.longestWait(f, w) { body += "\n\n" + l }
+        // Who waited goes before the cards: a long text is cut at the channel's limit.
+        var body = DaySummary.headline(f, w)
+        if let l = DaySummary.longestWait(f, w) { body += "\n" + l }
+        body += "\n\n" + doc.text()
         return Message(title: w.t("Сводка дня", "Day summary"), text: body, photo: try ribbon(f),
                        buttons: [[.init(w.t("Подробнее", "Details"), "day:\(day)")]])
     }
@@ -404,8 +421,9 @@ public struct DaySummary {
         guard let at = config.summaryAt, Notifier.localMinute(now) >= at else { return false }
         let day = Time.dayString(now), mark = "summary_auto:" + day
         if try store.db.one("SELECT 1 FROM meta WHERE key = ?", [.text(mark)], { _ in true }) == true { return false }
-        try make(day, now: now)
+        // Marked first: a failure after the AI's answer must not bring another call every minute.
         try store.db.run("INSERT OR REPLACE INTO meta(key, value) VALUES(?, 1)", [.text(mark)])
+        try make(day, now: now)
         return true
     }
 

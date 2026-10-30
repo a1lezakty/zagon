@@ -3,8 +3,8 @@ import Testing
 @testable import ZagonCore
 
 @Suite struct SummaryDocTests {
-    let refs = [SummaryDoc.Ref(project: "alpha", sec: 3600, cost: 4), .init(project: "alpha", sec: 600, cost: 1),
-                .init(project: "beta", sec: 1200, cost: 2)]
+    let refs = [SummaryDoc.Ref(project: "alpha", sec: 3600, cost: 4, keys: ["PROJ-1"]), .init(project: "alpha", sec: 600, cost: 1),
+                .init(project: "beta", sec: 1200, cost: 2, keys: ["PROJ-2"])]
 
     @Test func readsTheAnswer() throws {
         let answer = """
@@ -39,9 +39,20 @@ import Testing
         #expect(doc.items.map(\.sec) == [4200] && unused == [2])
     }
 
+    @Test func keysOnlyOfTheCardsSessionsAndOddRefs() throws {
+        // PROJ-2 is a task of the day, but not of ref 2's session; refs as huge numbers or strings of numbers.
+        let answer = #"{"items": [{"project": "alpha", "task": "PROJ-2", "title": "Other", "refs": [2, 1e30, 99999999999999999999], "done": ["a"]},"#
+            + #" {"project": "beta", "task": "proj-2", "title": "", "refs": ["3, 1"], "done": ["b"]}]}"#
+        let (doc, unused) = try #require(SummaryDoc.parse(answer: answer, refs: refs, tasks: ["PROJ-1": "One", "PROJ-2": "Two"],
+                                                          lang: "en", from: "d", to: "d"))
+        #expect(doc.overview == "" && unused.isEmpty)  // no overview: the caller puts its own in
+        #expect(doc.items.map(\.key) == [nil, "PROJ-2"] && doc.items.map(\.heading) == ["Other", "PROJ-2 Two"])
+        #expect(doc.items[0].sec == 600 && doc.items[1].sec == 1200 + 3600 && doc.items[1].project == "beta")
+    }
+
     @Test func rejectsUnusableAnswers() {
         for bad in ["", "no json here", "{\"overview\": \"x\", \"items\": []}", "{oops",
-                    #"{"items": [{"project": "alpha", "title": "t", "refs": [1], "done": ["a"]}]}"#] {
+                    #"{"overview": "x", "items": [{"project": "alpha", "title": "t", "refs": [1], "done": []}]}"#] {
             #expect(SummaryDoc.parse(answer: bad, refs: refs, tasks: [:], lang: "ru", from: "d", to: "d") == nil)
         }
     }
@@ -106,6 +117,11 @@ import Testing
         let m = summary(mac)
         #expect(try m.kept("2026-10-30")?.doc == ai && m.kept("2026-10-26..2026-11-01")?.doc == week)
         #expect(try Query(store: mac).day("2026-10-30").summary?.engine == "claude")
+        // A copy of an older summary does not replace a newer one.
+        var older = lines.first { $0.contains("\"type\":\"summary\"") && $0.contains("\"engine\":\"claude\"") && $0.contains("2026-10-30") }!
+        older = older.replacingOccurrences(of: "\"created\":100", with: "\"created\":10").replacingOccurrences(of: "Overview of", with: "Old")
+        try ExportImport(store: mac, source: "box").apply([lines[0], older])
+        #expect(try m.kept("2026-10-30")?.doc == ai)
     }
 
     @Test func findsTheCLIWhereItIsInstalled() throws {

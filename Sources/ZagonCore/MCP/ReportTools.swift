@@ -232,15 +232,15 @@ final class ReportTools {
                            + "\(s.project ?? "?") · \(Txt.tokens(s.tokens.total)) tokens, working \(Txt.dur(s.workingSec))")
             }
         }
-        if let sum = try summary(d) { out.append("summary: " + Txt.oneLine(sum, 600)) }
+        if let sum = try summary(d, markdown: false) { out.append("summary: " + Txt.oneLine(sum, 600)) }
         return out.joined(separator: "\n")
     }
 
-    func summary(_ d: String) throws -> String? {
+    func summary(_ d: String, markdown: Bool = true) throws -> String? {
         // One written by an AI over one made without; a stored doc as Markdown, free text from before as it is.
         let t = try store.db.one("SELECT text FROM summary WHERE day=? ORDER BY engine = 'none', created DESC LIMIT 1",
                                  [.text(d)]) { $0.text(0) } ?? nil
-        return t.map { SummaryDoc.decode($0)?.text(markdown: true) ?? $0 }
+        return t.map { SummaryDoc.decode($0)?.text(markdown: markdown) ?? $0 }
     }
 
     func week(_ a: MCPArgs) throws -> String {

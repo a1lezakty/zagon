@@ -76,7 +76,8 @@ extension DaySummary {
             let all = docs.flatMap(\.items)
             var tasks: [String: String] = [:]
             for i in all { if let k = i.key { tasks[k] = i.title } }
-            if var (d, unused) = SummaryDoc.parse(answer: r.text, refs: all.map { .init(project: $0.project, sec: $0.sec, cost: $0.cost) },
+            if var (d, unused) = SummaryDoc.parse(answer: r.text, refs: all.map {
+                .init(project: $0.project, sec: $0.sec, cost: $0.cost, keys: $0.key.map { [$0] } ?? []) },
                                                   tasks: tasks, lang: w.en ? "en" : "ru", from: from, to: to) {
                 // Cards the AI left out keep their own (from 5 minutes of work, as for a day).
                 let rest = unused.map { all[$0] }.filter { $0.sec >= 300 }
@@ -84,6 +85,7 @@ extension DaySummary {
                     d.items += DaySummary.merge([SummaryDoc(lang: d.lang, from: from, to: to, overview: "", items: rest)],
                                                 from: from, to: to, w).items
                 }
+                if d.overview.isEmpty { d.overview = doc.overview }
                 (doc, engine) = (d, r.engine)
             } else { log("period summary: the \(r.engine) answer has no cards") }
         }
@@ -112,24 +114,29 @@ extension DaySummary {
                           main: items.prefix(3).map { "\($0.project) · \($0.heading) — \(w.dur($0.sec))" }, items: items)
     }
 
-    /// The days' summaries for the AI, cards numbered `[1]…` across the days, at most `maxPeriodDigest` characters.
+    /// The days' summaries for the AI, cards numbered `[1]…` across the days, at most `maxPeriodDigest` characters:
+    /// when all of it does not fit (a month), each card is cut to its title, time and first points, so every day is in.
     static func periodDigest(_ docs: [SummaryDoc], from: String, to: String, _ w: Words) -> String {
-        var out = w.t("Период: \(w.date(from)) — \(w.date(to)). Дней с работой: \(docs.count).\n",
-                      "Period: \(w.date(from)) to \(w.date(to)). Days with work: \(docs.count).\n")
-        var n = 0
-        for d in docs {
-            var b = "\n" + w.t("День ", "Day ") + w.date(d.from) + ": " + d.overview
-            for i in d.items {
-                n += 1
-                b += "\n  [\(n)] \(i.project) · \(i.heading) — \(w.dur(i.sec))."
-                if let was = i.was { b += w.t(" Было: ", " Was: ") + was }
-                if !i.done.isEmpty { b += w.t(" Сделано: ", " Done: ") + i.done.joined(separator: "; ") }
-                if let left = i.left { b += w.t(" Осталось: ", " Left: ") + left }
+        let head = w.t("Период: \(w.date(from)) — \(w.date(to)). Дней с работой: \(docs.count).\n",
+                       "Period: \(w.date(from)) to \(w.date(to)). Days with work: \(docs.count).\n")
+        func render(full: Bool) -> String {
+            var out = head, n = 0
+            for d in docs {
+                var b = "\n" + w.t("День ", "Day ") + w.date(d.from) + (full ? ": " + d.overview : "")
+                for i in d.items {
+                    n += 1
+                    b += "\n  [\(n)] \(i.project) · \(i.heading) — \(w.dur(i.sec))."
+                    if full, let was = i.was { b += w.t(" Было: ", " Was: ") + was }
+                    if !i.done.isEmpty { b += w.t(" Сделано: ", " Done: ") + i.done.prefix(full ? SummaryDoc.maxDone : 2).joined(separator: "; ") }
+                    if full, let left = i.left { b += w.t(" Осталось: ", " Left: ") + left }
+                }
+                if out.count + b.count > maxPeriodDigest { break }
+                out += b
             }
-            if out.count + b.count > maxPeriodDigest { break }
-            out += b
+            return out
         }
-        return out
+        let full = render(full: true)
+        return full.count < maxPeriodDigest - 2000 ? full : render(full: false)
     }
 
     static func periodInstruction(_ w: Words) -> String {

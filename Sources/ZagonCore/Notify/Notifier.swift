@@ -61,6 +61,8 @@ public final class Notifier {
             if let prev = try state(e.key), abs(prev - e.anchor) <= e.tolerance { continue }
             if now - e.at > e.staleAfter { pending[e.key] = nil; try mark(e); continue }
             if let q = config.quiet, q.contains(Notifier.localMinute(now)) {
+                // The day summary is still written (it is kept and shown in the app), only not sent.
+                if e.key == "summary", pending[e.key] == nil { _ = try e.make() }
                 log("notify: quiet hours, skipped \(e.key)"); pending[e.key] = nil; try mark(e); continue
             }
             let built = pending[e.key].flatMap { abs($0.anchor - e.anchor) <= e.tolerance ? $0.message : nil }

@@ -96,8 +96,12 @@ public final class ExportImport {
         case "summary":
             guard let day = v["day"]?.string, let engine = v["engine"]?.string, let text = v["text"]?.string,
                   let created = v["created"]?.double else { return }
-            try db.run("INSERT OR REPLACE INTO summary(day, engine, text, created) VALUES(?, ?, ?, ?)",
-                       [.text(day), .text(engine), .text(text), .real(created)])
+            // ponytail: one row per (day, engine) on this store: two servers' summaries of a day replace each other
+            // (the newer stays); a host in the key of `summary` (a schema change) if that bites.
+            try db.run("""
+                INSERT INTO summary(day, engine, text, created) VALUES(?1, ?2, ?3, ?4)
+                ON CONFLICT(day, engine) DO UPDATE SET text = ?3, created = ?4 WHERE ?4 >= created
+                """, [.text(day), .text(engine), .text(text), .real(created)])
         case "limit":
             guard let tool = v["tool"]?.string.flatMap(ToolKind.init), let w = v["window"]?.string,
                   let pct = v["used_pct"]?.double, let ts = v["ts"]?.double else { return }

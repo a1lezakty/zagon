@@ -102,15 +102,15 @@ public struct SummaryDoc: Codable, Sendable, Equatable {
     // MARK: the AI's answer
 
     /// A numbered source of the digest (a session of the day, a card of a period's day): what its card counts.
-    struct Ref { var project: String; var sec: Double; var cost: Double }
+    struct Ref { var project: String; var sec: Double; var cost: Double; var keys: [String] = [] }
 
     static let maxItems = 12, maxDone = 5
 
     /// Reads the AI's answer: one JSON object (code fences or words around it are dropped) with `overview`, `main`
     /// and `items` of `{project, task, title, refs, was, done, left}`. Time and price come from the numbered `refs`
     /// (a ref in several items is split between them), never from the AI; a task key counts only when it is one of
-    /// `tasks` (key → title), a project only when a ref or the digest has it. Returns the refs no item named.
-    /// nil = no usable answer.
+    /// `tasks` (key → title) and a ref of the card is linked to it, a project only when a ref or the digest has it.
+    /// Returns the refs no item named. nil = no usable answer.
     static func parse(answer: String, refs: [Ref], tasks: [String: String], lang: String, from: String, to: String)
         -> (doc: SummaryDoc, unused: [Int])? {
         let a = Array(answer.utf8)
@@ -127,20 +127,25 @@ public struct SummaryDoc: Codable, Sendable, Equatable {
         var raw: [(item: Item, refs: [Int])] = []
         for x in v["items"]?.array ?? [] {
             var rs: [Int] = []
+            // Numbers, or strings of them ("3", "3, 4"); anything out of range is ignored.
             for r in x["refs"]?.array ?? [] {
-                let n = (r.double.map { Int($0) } ?? r.string.flatMap { Int($0.filter(\.isNumber)) }) ?? 0
-                if n >= 1 && n <= refs.count && !rs.contains(n - 1) { rs.append(n - 1) }
+                let ns = r.double.map { [$0.isFinite && abs($0) < 1e6 ? Int($0) : 0] }
+                    ?? (r.string ?? "").split(whereSeparator: { !$0.isNumber }).map { Int($0.prefix(6)) ?? 0 }
+                for n in ns where n >= 1 && n <= refs.count && !rs.contains(n - 1) { rs.append(n - 1) }
             }
             let done = (x["done"]?.array ?? []).compactMap { line($0, 220) }.prefix(maxDone)
-            let key = line(x["task"], 40).flatMap { upper[$0.uppercased()] }
-            guard !done.isEmpty, let title = line(x["title"], 120) ?? key.map({ $0.value }) ?? line(x["task"], 120) else { continue }
+            let key = line(x["task"], 40).flatMap { upper[$0.uppercased()] }.flatMap { k in
+                rs.contains { refs[$0].keys.contains { $0.uppercased() == k.key.uppercased() } } ? k : nil
+            }
+            guard !done.isEmpty, let title = line(x["title"], 120) ?? key.map({ $0.value }) else { continue }
             let named = line(x["project"], 80).flatMap { projects.contains($0) ? $0 : nil }
             guard let project = rs.first.map({ refs[$0].project }) ?? named else { continue }
             raw.append((Item(project: project, key: key?.key, title: key.map { title == $0.key ? $0.value : title } ?? title,
                              was: line(x["was"], 300), done: Array(done), left: line(x["left"], 300)), rs))
             if raw.count == maxItems { break }
         }
-        guard !raw.isEmpty, let overview = line(v["overview"], 600) else { return nil }
+        guard !raw.isEmpty else { return nil }
+        let overview = line(v["overview"], 600) ?? ""  // the caller puts its own in
         var share = [Int](repeating: 0, count: refs.count)
         for r in raw { for i in r.refs { share[i] += 1 } }
         var items = raw.map { r -> Item in
