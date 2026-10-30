@@ -84,14 +84,18 @@ final class ZagonUIModelTests: XCTestCase {
     }
 
     func testLaunchWindow() {
-        XCTAssertFalse(Launch.showsWindow(first: false, loginItem: true, sinceLogin: nil))
-        XCTAssertFalse(Launch.showsWindow(first: true, loginItem: true, sinceLogin: 5000))
-        // No login item mark: a launch just after the login is still one.
-        XCTAssertFalse(Launch.showsWindow(first: false, loginItem: false, sinceLogin: 30))
-        XCTAssertFalse(Launch.showsWindow(first: false, loginItem: false, sinceLogin: -3))
-        XCTAssertTrue(Launch.showsWindow(first: true, loginItem: false, sinceLogin: 30))
-        XCTAssertTrue(Launch.showsWindow(first: false, loginItem: false, sinceLogin: 120))
-        XCTAssertTrue(Launch.showsWindow(first: false, loginItem: false, sinceLogin: nil))
+        func shows(first: Bool = false, mark: Bool = false, on: Bool = true, _ since: TimeInterval?) -> Bool {
+            Launch.showsWindow(first: first, loginItem: mark, opensAtLogin: on, sinceLogin: since)
+        }
+        XCTAssertFalse(shows(mark: true, nil))
+        XCTAssertFalse(shows(first: true, mark: true, 5000))
+        // No login item mark: a launch just after the login is still one, if Zagon opens at login.
+        XCTAssertFalse(shows(30))
+        XCTAssertFalse(shows(-3))
+        XCTAssertTrue(shows(on: false, 30))
+        XCTAssertTrue(shows(first: true, 30))
+        XCTAssertTrue(shows(120))
+        XCTAssertTrue(shows(nil))
     }
 
     func testRingTurnsRedNearTheLimit() {

@@ -264,7 +264,7 @@ struct TaskCommand: ParsableCommand {
                     throw ValidationError(p.projects.isEmpty ? "no Jira project you may create issues in"
                                           : "choose --project: " + p.projects.map(\.key).joined(separator: ", "))
                 }
-                print("Create in Jira: a \(p.type ?? "Task") in \(proj), assigned to you\n  title: \(p.title)\n  description:\n"
+                print("Create in Jira: \(p.type ?? "Task") in \(proj), assigned to you\n  title: \(p.title)\n  description:\n"
                       + p.description.split(separator: "\n", omittingEmptySubsequences: false).map { "    " + $0 }.joined(separator: "\n")
                       + "\n  then \(Fmt.dur(p.draft.workedSec)) of work is linked to it")
                 if !yes {

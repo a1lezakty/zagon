@@ -21,7 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         d.set(true, forKey: "launched")
         let since = Self.loginTime().map { Date().timeIntervalSince($0) }
         Log.shared.write("launch: login item mark \(atLogin), \(since.map { "\(Int($0)) s after login" } ?? "login time unknown")")
-        if Launch.showsWindow(first: first, loginItem: atLogin, sinceLogin: since) { MainWindow.shared.show(Self.state) }
+        if Launch.showsWindow(first: first, loginItem: atLogin, opensAtLogin: Self.state.launchAtLogin, sinceLogin: since) {
+            MainWindow.shared.show(Self.state)
+        }
     }
 
     /// When the user logged in to this GUI session: their newest console login in utmpx (nil: none there).

@@ -165,7 +165,8 @@ a call, stretches the size limit left out and the rest after a failed call come 
 and asks about all. Open suggestions whose time got any link since are dropped before each run.
 `zagon task suggest [day] [--json] [--again] [--prompt]` (`--json`: the run with its items, drafts, engine, cost, note;
 `--prompt` prints what the next call would send: no AI call, nothing stored), `zagon task drafts [--json]`, `zagon task
-accept|reject <id…>` (numbers or `N…`), `zagon task jira-projects [--json]`; MCP `task_suggestions`,
+accept|reject <id…>` (numbers or `N…`), `zagon task jira-projects [--json] [--type-of <KEY>]` (`--type-of`: only the name of the issue
+type a new task gets in that project, for the app's create sheet); MCP `task_suggestions`,
 `task_suggestions_answer` (`confirm: true`; ids numbers or `"N3"`), `task_create_in_jira`; the evening message at
 `[notify] worklog_at` lists them with Yes / No buttons (`sg:y|n:<id>:<task>:<start>`, `sg:y|n:N<n>` for a new task, made
 here only, via `Bot.onCallback`; without the bot, the commands instead);
