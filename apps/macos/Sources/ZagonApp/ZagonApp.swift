@@ -494,6 +494,7 @@ struct ZagonApp: App {
             Image(nsImage: statusIcon(state))
         }
         .menuBarExtraStyle(.window)
+        .commands { ZagonCommands(app: state) }
     }
 }
 
@@ -647,70 +648,95 @@ struct MainPanel: View {
     }
 }
 
-/// Rings or pace charts; a click switches between used + reset time and left + time until the reset.
+/// Rings or pace charts; a click switches between used + reset time and left + time until the reset. Whose limits they
+/// are on top; a window with no current reading shows "–" and a line on when one comes, not 0 %.
 struct LimitsBlock: View {
     @EnvironmentObject private var app: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let vm: MainVM
     var body: some View {
+        let f = app.f
         VStack(alignment: .leading, spacing: 16) {
-            Group {
-                if app.pace {
-                    let paces = PaceVM.both(app.provider, weekdaysOnly: app.paceWeekdays, app.f)
-                    HStack(alignment: .top, spacing: 16) {
-                        chart(paces.five, vm.five)
-                        chart(paces.week, vm.week)
-                    }
-                } else {
-                    HStack(spacing: 12) {
-                        ring(vm.five).frame(maxWidth: .infinity, alignment: .leading)
-                        ring(vm.week).frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Caps(text: vm.limitsHeader)
+                    Spacer(minLength: 8)
+                    if let age = vm.limitsAge { Text(age).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1) }
+                }
+                Group {
+                    if app.pace {
+                        let paces = PaceVM.both(app.provider, weekdaysOnly: app.paceWeekdays, f)
+                        HStack(alignment: .top, spacing: 16) {
+                            chart(paces.five, vm.five ?? .empty(f.t("limit.five"), f))
+                            chart(paces.week, vm.week ?? .empty(f.t("limit.week"), f))
+                        }
+                    } else {
+                        HStack(spacing: 12) {
+                            ring(vm.five ?? .empty(f.t("limit.five"), f)).frame(maxWidth: .infinity, alignment: .leading)
+                            ring(vm.week ?? .empty(f.t("limit.week"), f)).frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }
+                .contentShape(Rectangle())
+                .onTapGesture { app.showLeft.toggle() }
+                if vm.limitsMissing {
+                    let unconnected = app.localTools && !(app.cli?.connected ?? true)
+                    Text(f.t(unconnected ? "limit.hint.connect" : "limit.hint.wait")).font(.system(size: 12)).foregroundColor(Z.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            .contentShape(Rectangle())
-            .onTapGesture { app.showLeft.toggle() }
             if let fc = vm.forecast { Banner.amber(fc) }
         }
     }
 
-    @ViewBuilder func ring(_ r: RingVM?) -> some View {
-        if let r {
-            let left = app.showLeft
-            HStack(spacing: 12) {
-                ZStack {
-                    Ring(fraction: left ? 1 - r.fraction : r.fraction, color: Color(hex: r.color))
-                    Text("\(left ? r.leftPct : r.pct)%").font(mono(17, .semibold)).foregroundColor(Z.text)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(r.title).font(.system(size: 14, weight: .semibold)).foregroundColor(Z.text)
-                    Text(left ? r.leftLine : r.resetLine).font(.system(size: 12)).foregroundColor(Z.secondary)
-                    Text(r.inLine).font(.system(size: 12)).foregroundColor(Z.secondary)
-                }
-                .lineLimit(1).minimumScaleFactor(0.85)
-            }
-        } else {
-            Ring(fraction: 0, color: Z.track)
-        }
-    }
+    /// The arc follows a new reading (or the used / left switch) in 0.4 s; at once with Reduce Motion.
+    var arc: Animation? { reduceMotion ? nil : .easeOut(duration: 0.4) }
 
-    @ViewBuilder func chart(_ p: PaceVM?, _ r: RingVM?) -> some View {
-        if let p, let r {
-            let left = app.showLeft
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(p.title).font(.system(size: 14, weight: .semibold)).foregroundColor(Z.text)
-                    Spacer(minLength: 4)
-                    Text("\(left ? r.leftPct : r.pct)%").font(mono(15, .semibold)).foregroundColor(Z.text)
-                }
-                PaceChart(pace: p).frame(height: 64)
-                Text(p.verdict).font(.system(size: 12)).foregroundColor(p.ahead ? Color(hex: p.color) : Z.secondary)
-                Text(left ? [r.leftLine, r.inLine].filter { !$0.isEmpty }.joined(separator: " · ") : r.resetLine).font(.system(size: 12)).foregroundColor(Z.secondary)
+    func ring(_ r: RingVM) -> some View {
+        let left = app.showLeft
+        let pct = left ? r.leftPct : r.pct
+        let fraction = pct == nil ? 0 : left ? 1 - r.fraction : r.fraction
+        return HStack(spacing: 12) {
+            ZStack {
+                Ring(fraction: fraction, color: Color(hex: r.color)).animation(arc, value: fraction)
+                Text(pct.map { "\($0)%" } ?? "–").font(mono(17, .semibold)).foregroundColor(pct == nil ? Z.secondary : Z.text)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(r.title).font(.system(size: 14, weight: .semibold)).foregroundColor(Z.text)
+                Text(left && pct != nil ? r.leftLine : r.resetLine).font(.system(size: 12)).foregroundColor(Z.secondary)
+                Text(r.inLine).font(.system(size: 12)).foregroundColor(Z.secondary)
             }
             .lineLimit(1).minimumScaleFactor(0.85)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            Spacer().frame(maxWidth: .infinity)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(left ? r.spokenLeft : r.spoken)
+    }
+
+    @ViewBuilder func chart(_ p: PaceVM?, _ r: RingVM) -> some View {
+        let left = app.showLeft
+        let pct = left ? r.leftPct : r.pct
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(r.title).font(.system(size: 14, weight: .semibold)).foregroundColor(Z.text)
+                Spacer(minLength: 4)
+                Text(pct.map { "\($0)%" } ?? "–").font(mono(15, .semibold)).foregroundColor(pct == nil ? Z.secondary : Z.text)
+            }
+            if let p, pct != nil {
+                PaceChart(pace: p).frame(height: 64)
+                Text(p.verdict).font(.system(size: 12)).foregroundColor(p.ahead ? Color(hex: p.color) : Z.secondary)
+                Text(left ? [r.leftLine, r.inLine].filter { !$0.isEmpty }.joined(separator: " · ") : r.resetLine)
+                    .font(.system(size: 12)).foregroundColor(Z.secondary)
+            } else {
+                RoundedRectangle(cornerRadius: 6).fill(Z.track.opacity(0.35)).frame(height: 64)
+                Text(r.resetLine).font(.system(size: 12)).foregroundColor(Z.secondary)
+                Text(r.inLine).font(.system(size: 12)).foregroundColor(Z.secondary)
+            }
+        }
+        .lineLimit(1).minimumScaleFactor(0.85)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([left ? r.spokenLeft : r.spoken, pct == nil ? "" : p?.verdict ?? ""].filter { !$0.isEmpty }
+            .joined(separator: ", "))
     }
 }
 
@@ -741,6 +767,7 @@ struct SessionsBlock: View {
     @Binding var showIdle: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if let none = vm.noSessions { Text(none).font(.system(size: 12)).foregroundColor(Z.muted) }
             if !vm.waiting.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Caps(text: vm.waitingHeader, color: Z.bad)
@@ -788,6 +815,7 @@ struct WaitingRow: View {
             }
             .buttonStyle(Pressable())
             .help(copied ? app.f.t("copied") : app.f.t("main.copyCommand") + ": " + s.command)
+            .accessibilityLabel(app.f.t("main.copyCommand"))
         }
         .padding(.vertical, 9).padding(.horizontal, 10)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color(hex: 0x2E2425)))

@@ -11,6 +11,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let state = AppState.local()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppState.openMain = { MainWindow.shared.show(AppDelegate.state) }
+        // A click on a notification brings up the sessions: what waits, what finished, the limits.
+        MacNotifications.onOpen = { AppDelegate.state.show(.sessions) }
+        MacNotifications.listenForCI()
         // macOS marks the login item's launch in its open event.
         let e = NSAppleEventManager.shared().currentAppleEvent
         let atLogin = e?.eventID == AEEventID(kAEOpenApplication)

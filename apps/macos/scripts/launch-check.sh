@@ -9,6 +9,8 @@ mkdir -p "$shots"
 # no update check, no notification prompt on the runner
 defaults write dev.zagon.app SUEnableAutomaticChecks -bool false
 defaults write dev.zagon.app macNotify -bool false
+# lets the check close the window and stand in for a click on a notification (MacNotifications.listenForCI)
+defaults write dev.zagon.app ciChecks -bool true
 
 # Zagon's normal windows on screen (layer 0), as the window server lists them.
 cat > build/windows.swift <<'SWIFT'
@@ -17,6 +19,12 @@ let all = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as?
 print(all.filter { $0[kCGWindowOwnerName as String] as? String == "Zagon" && $0[kCGWindowLayer as String] as? Int == 0 }.count)
 SWIFT
 swiftc -O build/windows.swift -o build/windows
+cat > build/post.swift <<'SWIFT'
+import Foundation
+DistributedNotificationCenter.default().postNotificationName(.init(CommandLine.arguments[1]), object: nil, userInfo: nil,
+                                                              deliverImmediately: true)
+SWIFT
+swiftc -O build/post.swift -o build/post
 wait_windows() {  # <count>: up to 30 s
   for _ in $(seq 1 30); do [ "$(build/windows)" = "$1" ] && return 0; sleep 1; done
   echo "expected $1 Zagon window(s), have $(build/windows)"; return 1
@@ -42,6 +50,13 @@ if in20 osascript -e 'tell application "System Events" to tell process "Zagon" t
 else
   echo "reopen: skipped (no accessibility for System Events)"
 fi
+# a click on a notification while the window is closed opens it again, on the sessions
+build/post dev.zagon.ci.closeWindow
+wait_windows 0
+build/post dev.zagon.ci.notificationClick
+wait_windows 1
+shot notification
+echo "notification click: ok"
 [ "$(pgrep -x Zagon | wc -l)" -eq 1 ] || { echo "expected one Zagon process"; exit 1; }
 pkill -x Zagon
 

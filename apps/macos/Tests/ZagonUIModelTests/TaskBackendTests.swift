@@ -87,7 +87,7 @@ final class TaskBackendTests: XCTestCase {
         XCTAssertEqual(card.sessions.count, c.sessions.count)
         XCTAssertTrue(card.sessions.allSatisfy { $0.host == "laptop" && $0.sec > 0 }, "known sessions come from this Mac's store")
         let detail = try XCTUnwrap(TasksVM([card], filter: .active, Fmt(lang: .en, now: p.now)).detail("PROJ-12"))
-        XCTAssertEqual(detail.jiraLines.map(\.text), ["Jira issue PROJ-12: Jira is not connected where the task lives."])
+        XCTAssertEqual(detail.jiraLines.map(\.text), ["Can't check PROJ-12 against Jira: Jira is not connected on the machine that keeps this task."])
 
         XCTAssertThrowsError(try b.card("NOPE")) { XCTAssertEqual("\($0)", "no task NOPE") }
 

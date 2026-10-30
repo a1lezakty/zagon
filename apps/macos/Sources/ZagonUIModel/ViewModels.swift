@@ -35,27 +35,53 @@ public struct Note: Sendable, Equatable {
 
 public struct RingVM: Sendable, Equatable {
     public var title: String
-    public var pct: Int
+    /// Used percent; nil = not known: no reading, or the last one is older than its reset (the window started over).
+    public var pct: Int?
     public var fraction: Double
     public var color: UInt32
     public var resetLine: String
     public var inLine: String
     /// The other way to show it (a click on the limits): what is left and the time until the reset.
-    public var leftPct: Int
+    public var leftPct: Int?
     public var leftLine: String
+    /// What VoiceOver reads for the ring and its lines, in either way of showing it.
+    public var spoken: String
+    public var spokenLeft: String
 
     init(title: String, window: LimitWindow, base: UInt32, f: Fmt) {
         self.title = title
         // The last reading is older than its reset: the window has started over, usage is unknown until a new one.
         let stale = window.resetsAt <= f.now
-        let used = stale ? 0 : window.usedPct
-        pct = Int(used.rounded())
-        fraction = min(max(used / 100, 0), 1)
-        color = used >= 95 ? Palette.waiting : base
+        pct = stale ? nil : Int(window.usedPct.rounded())
+        fraction = stale ? 0 : min(max(window.usedPct / 100, 0), 1)
+        color = !stale && window.usedPct >= 95 ? Palette.waiting : base
         resetLine = f.t(stale ? "limit.wasReset" : "limit.resets", f.resetMoment(window.resetsAt))
-        inLine = stale ? "" : f.t("limit.in", f.duration(window.resetsAt.timeIntervalSince(f.now)))
-        leftPct = 100 - pct
+        inLine = stale ? f.t("limit.noReading") : f.t("limit.in", f.duration(window.resetsAt.timeIntervalSince(f.now)))
+        leftPct = pct.map { 100 - $0 }
         leftLine = f.t("limit.left")
+        spoken = ""; spokenLeft = ""
+        speak(f)
+    }
+
+    /// A window with no reading at all.
+    public static func empty(_ title: String, _ f: Fmt) -> RingVM { RingVM(title: title, f: f) }
+
+    private init(title: String, f: Fmt) {
+        self.title = title
+        fraction = 0
+        color = Palette.track
+        resetLine = f.t("limit.noData")
+        inLine = ""
+        leftLine = resetLine
+        spoken = ""; spokenLeft = ""
+        speak(f)
+    }
+
+    private mutating func speak(_ f: Fmt) {
+        let lines = [resetLine, inLine].filter { !$0.isEmpty }.joined(separator: ", ")
+        guard let pct, let leftPct else { spoken = title + ": " + lines; spokenLeft = spoken; return }
+        spoken = title + ": " + f.t("limit.usedPct", f.pct(Double(pct))) + ", " + lines
+        spokenLeft = title + ": " + f.t("limit.leftPct", f.pct(Double(leftPct))) + ", " + inLine
     }
 }
 
@@ -80,6 +106,13 @@ public struct MainVM: Sendable {
     public var idleHideButton: String?
     public var idle: [SessionRowVM]
     public var totals: [Stat]
+    /// Above the rings: whose limits they are, and how old the reading is once that is over 15 minutes.
+    public var limitsHeader: String
+    public var limitsAge: String?
+    /// A window has no current reading: the panel says when one comes.
+    public var limitsMissing: Bool
+    /// No sessions at all: one line instead of an empty block.
+    public var noSessions: String?
 
     public init(_ p: ZagonDataProvider, _ f: Fmt) {
         let limits = p.limits()
@@ -111,6 +144,15 @@ public struct MainVM: Sendable {
         totals = [Stat(f.duration(today.sessionSec), f.t("stat.sessionsWorked")),
                   Stat(f.tokens(today.tokens), f.t("stat.tokensToday")),
                   Stat(f.cost(today.cost), f.t("stat.apiPrices"))]
+
+        let windows = [limits.fiveHour, limits.week].compactMap { $0 }
+        let tools = windows.compactMap(\.tool).reduce(into: [Tool]()) { if !$0.contains($1) { $0.append($1) } }
+        limitsHeader = (tools.isEmpty ? f.t("limit.header.none")
+            : f.t("limit.header", tools.map { $0 == .codex ? "Codex" : "Claude" }.joined(separator: " · "))).uppercased()
+        let age = windows.compactMap(\.readAt).max().map { f.now.timeIntervalSince($0) }
+        limitsAge = age.flatMap { $0 > 900 ? f.t("limit.updated", f.duration($0)) : nil }
+        limitsMissing = five?.pct == nil || week?.pct == nil
+        noSessions = sessions.isEmpty ? f.t("sessions.none") : nil
     }
 
     /// Warn only when the current pace hits 100 % before the reset.

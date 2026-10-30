@@ -26,7 +26,7 @@ public struct PaceVM: Sendable, Equatable {
     public init(title: String, window: LimitWindow, minutes: Double, history: [LimitPoint], base: UInt32,
                 weekdaysOnly: Bool = false, f: Fmt) {
         self.title = title
-        // The last reading is from a window that has ended: nothing to compare until a new one (as RingVM shows 0 %).
+        // The last reading is from a window that has ended: nothing to compare until a new one (RingVM shows "–").
         guard window.resetsAt > f.now else {
             points = [Point(x: 0, y: 0)]; now = Point(x: 0, y: 0); verdict = ""; ahead = false; color = base
             return

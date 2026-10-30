@@ -5,6 +5,21 @@ import UserNotifications
 enum MacNotifications {
     static var available: Bool { Bundle.main.bundleURL.pathExtension == "app" }
     private static let delegate = ShowWhileActive()
+    /// A click on one of Zagon's notifications (`AppDelegate` sets it).
+    @MainActor static var onOpen: (@MainActor () -> Void)?
+
+    /// CI (`launch-check.sh`, with the `ciChecks` default): distributed notifications close the main window and do
+    /// what a click on a notification does; the runner cannot post and click a real one.
+    @MainActor static func listenForCI() {
+        guard UserDefaults.standard.bool(forKey: "ciChecks") else { return }
+        let center = DistributedNotificationCenter.default()
+        center.addObserver(forName: .init("dev.zagon.ci.closeWindow"), object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { NSApp.windows.filter { $0.isVisible && $0.title == "Zagon" }.forEach { $0.performClose(nil) } }
+        }
+        center.addObserver(forName: .init("dev.zagon.ci.notificationClick"), object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { onOpen?() }
+        }
+    }
 
     /// Asks for permission once and shows banners even while the app is active.
     static func start() {
@@ -41,6 +56,14 @@ enum MacNotifications {
         func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                     withCompletionHandler handler: @escaping (UNNotificationPresentationOptions) -> Void) {
             handler([.banner, .sound])
+        }
+
+        func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                    withCompletionHandler handler: @escaping () -> Void) {
+            if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+                Task { @MainActor in MacNotifications.onOpen?() }
+            }
+            handler()
         }
     }
 }
