@@ -165,7 +165,27 @@ enum QueryFixture {
     }
 
     @Test func pricing() {
-        #expect(Pricing.cost(model: "claude-opus-5-5", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0) == 5)
+        func io(_ m: String) -> [Double]? { Pricing.rates(m).map { [$0.input, $0.output, $0.cacheRead] } }
+        // By model, not by family: Opus 4 / 4.1 cost three times Opus 4.5+, Haiku 3.5 less than Haiku 4.5.
+        #expect(io("claude-opus-4-20250514") == [15, 75, 1.5] && io("claude-opus-4-1-20250805") == [15, 75, 1.5])
+        #expect(io("claude-opus-4-5-20251101") == [5, 25, 0.5] && io("claude-opus-5-5") == [4, 20, 0.2])
+        #expect(io("claude-sonnet-4-5-20250929") == [3, 15, 0.3] && io("claude-sonnet-5") == [2, 10, 0.2])
+        #expect(io("claude-3-5-haiku-20241022") == [0.8, 4, 0.08] && io("claude-haiku-4-5-20251001") == [1, 5, 0.1])
+        #expect(io("claude-fable-5-1") == [10, 50, 0.25])
+        #expect(io("gpt-5") == [1.25, 10, 0.125] && io("gpt-5-mini-2025-08-07") == [0.25, 2, 0.025])
+        #expect(io("gpt-5-nano") == [0.05, 0.4, 0.005] && io("gpt-5-codex") == [1.25, 10, 0.125])
+        #expect(io("codex-mini-latest") == [1.5, 6, 0.375] && io("gpt-5.3-codex") == [1.75, 14, 0.175])
+        // Cloud ids and suffixes find the same row.
+        for m in ["us.anthropic.claude-opus-4-1-20250805-v1:0", "claude-opus-4-1@20250805", "Claude-Opus-4-1[1m]"] {
+            #expect(io(m) == [15, 75, 1.5], "\(m)")
+        }
+        // Anthropic cache writes: 1.25x input for 5 minutes, 2x for an hour.
+        #expect(Pricing.rates("claude-opus-5-5").map { [$0.cacheWrite, $0.cacheWrite1h] } == [5, 8])
+        #expect(Pricing.cost(model: "claude-opus-5-5", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0) == 4)
+        // Unknown: no rates, $0 in `cost`, all its tokens unpriced.
+        for m in ["unknown", "codex-auto-review", "claude-opus-9", "gpt-5.6"] { #expect(Pricing.rates(m) == nil, "\(m)") }
         #expect(Pricing.cost(model: "unknown", input: 1_000_000, output: 1, cacheRead: 1, cacheWrite: 1) == 0)
+        var t = TokenTotals(); t.input = 3; t.output = 4
+        #expect(Pricing.unpriced(model: "unknown", t) == 7 && Pricing.unpriced(model: "gpt-5.4", t) == 0)
     }
 }

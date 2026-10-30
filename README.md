@@ -153,11 +153,15 @@ zagon update                   # the latest release (see Update above)
 ```
 
 - Every report takes `--json`.
-- `$` is at API list prices, for comparison: a subscription is billed differently.
+- `$` is at API list prices, for comparison: a subscription is billed differently. Each model has its own price
+  (input, output, cache reads, cache writes: 5 minutes 1.25x input, 1 hour 2x), from the Anthropic and OpenAI pricing
+  pages; a model with no known price is shown as `$ ?` (`$12+?` when only part of the tokens has a price), never
+  as $0. Prices that depend on a request's length (long prompts) or on fast mode are not applied.
 - Tokens and session time count for the project each request and stretch was in: inside the folder the session
-  started in, that folder's project, elsewhere its last folder name; for a session started in your home directory or
-  `/`, the git checkout of each directory (a worktree counts for its main checkout). A session is listed under the
-  folder it started in.
+  started in, that folder's project; anywhere else, and for a session started in your home directory or `/`, the git
+  checkout of each directory (a worktree counts for its main checkout), else its last folder name. On macOS, folders
+  that ask for access (Desktop, Documents, Downloads, iCloud Drive, cloud drives, external and network volumes) count
+  by folder name, without looking inside. A session is listed under the folder it started in.
 - "You" is your own messages: one that another session types into a worker's terminal (`tmux send-keys`) is not yours.
 - Common options:
   - `--data-dir` (default `$ZAGON_DIR` or `~/.zagon`);

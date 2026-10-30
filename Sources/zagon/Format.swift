@@ -23,8 +23,12 @@ enum Fmt {
         return c >= w ? String(s.prefix(w)) : s + String(repeating: " ", count: w - c)
     }
     static func lpad(_ s: String, _ w: Int) -> String { s.count >= w ? s : String(repeating: " ", count: w - s.count) + s }
-    /// USD at API prices, as the Mac app shows it.
-    static func usd(_ x: Double) -> String { x > 0 && x < 1 ? "<$1" : "$\(Int(x.rounded()))" }
+    /// USD at API prices, as the Mac app shows it; `unpriced` tokens (models with no known price) add "?": "$ ?" when
+    /// nothing was priced, "$12+?" when part was.
+    static func usd(_ x: Double, unpriced: Int = 0) -> String {
+        let s = x > 0 && x < 1 ? "<$1" : "$\(Int(x.rounded()))"
+        return unpriced == 0 ? s : x == 0 ? "$ ?" : s + "+?"
+    }
     static let apiNote = "at API prices (for comparison; a subscription is billed differently)"
     static func pct(_ a: Int, _ b: Int) -> String { b == 0 ? "" : "\(Int((Double(a) / Double(b) * 100).rounded()))%" }
 
@@ -35,6 +39,12 @@ enum Fmt {
         return String(xs.map { $0 == 0 ? "·" : bars[max(1, Int((Double($0) / Double(m) * 8).rounded()))] })
     }
 
+    /// "; no price: model-a, model-b" for the models left out of the cost.
+    static func unpricedNote(_ models: [ModelLine]) -> String {
+        let xs = models.filter { $0.unpriced > 0 }.map(\.model)
+        return xs.isEmpty ? "" : "; no price: " + xs.joined(separator: ", ")
+    }
+
     static func tokenLine(_ t: TokenTotals) -> String {
         "\(tokens(t.total)) tokens · in \(tokens(t.input)) · out \(tokens(t.output)) · cache read \(tokens(t.cacheRead))"
             + " · cache write \(tokens(t.cacheWrite)) · \(t.requests) requests"
@@ -42,21 +52,21 @@ enum Fmt {
 
     static func day(_ r: DayReport) {
         print("\(r.day)   \(tokenLine(r.tokens))")
-        print("cost       \(usd(r.cost)) \(apiNote)")
+        print("cost       \(usd(r.cost, unpriced: r.unpriced)) \(apiNote)" + unpricedNote(r.models))
         print("time       sessions \(dur(r.sessionSec)) · you \(dur(r.userSec)) · \(r.toolCalls) tool calls")
         print("hours      |\(spark(r.hours))|  0h…23h")
         if !r.models.isEmpty {
             print("models")
             for m in r.models.prefix(6) {
                 print("  \(pad(m.model, 32)) \(lpad(tokens(m.tokens.total), 7)) \(lpad(pct(m.tokens.total, r.tokens.total), 4))"
-                      + " \(lpad(usd(m.cost), 7))")
+                      + " \(lpad(usd(m.cost, unpriced: m.unpriced), 7))")
             }
         }
         if !r.projects.isEmpty {
             print("projects")
             for p in r.projects.prefix(8) {
                 print("  \(pad(p.project.isEmpty ? "?" : p.project, 32)) \(lpad(tokens(p.tokens.total), 7)) \(lpad(dur(p.sessionSec), 8))"
-                      + " \(lpad(usd(p.cost), 7))")
+                      + " \(lpad(usd(p.cost, unpriced: p.unpriced), 7))")
             }
         }
         if !r.tools.isEmpty {
@@ -73,7 +83,7 @@ enum Fmt {
             let id = s.id.split(separator: ":").last.map { String($0.prefix(8)) } ?? s.id
             let title = s.title ?? s.project ?? "-"
             print("  \(id)  \(pad(title, 40)) \(pad(s.project ?? "", 16)) \(lpad(tokens(s.tokens.total), 7)) \(lpad(dur(s.workingSec), 8))"
-                  + " \(lpad(usd(s.cost), 7))" + (s.status.map { "  \($0)" } ?? "") + (s.statusDetail.map { " (\($0))" } ?? ""))
+                  + " \(lpad(usd(s.cost, unpriced: s.unpriced), 7))" + (s.status.map { "  \($0)" } ?? "") + (s.statusDetail.map { " (\($0))" } ?? ""))
         }
     }
 
@@ -81,25 +91,27 @@ enum Fmt {
         if xs.isEmpty { print("no sessions"); return }
         print("  id        \(pad("title", 40)) \(pad("project", 16)) \(lpad("tokens", 7)) \(lpad("working", 8)) \(lpad("$", 7))")
         sessionRows(xs)
-        print("$ \(apiNote)")
+        print("$ \(apiNote)" + (xs.contains { $0.unpriced > 0 } ? "; ? = tokens of models with no known price" : ""))
     }
 
     static func week(_ r: WeekReport) {
         print("\(r.from) … \(r.to)   \(tokenLine(r.tokens))")
-        print("cost       \(usd(r.cost)) \(apiNote); previous 7 days \(usd(r.previousCost))")
+        print("cost       \(usd(r.cost, unpriced: r.unpriced)) \(apiNote); previous 7 days \(usd(r.previousCost))"
+              + (r.unpriced > 0 ? "; ? = \(tokens(r.unpriced)) tokens of models with no known price" : ""))
         print("time       sessions \(dur(r.sessionSec)) · you \(dur(r.userSec))   (previous 7 days: \(tokens(r.previous.total)) tokens, "
               + "sessions \(dur(r.previousSessionSec)), you \(dur(r.previousUserSec)))")
         let m = r.days.map { $0.tokens.total }.max() ?? 0
         for d in r.days {
             let w = m == 0 ? 0 : Int((Double(d.tokens.total) / Double(m) * 30).rounded())
             print("  \(d.day)  \(pad(String(repeating: "█", count: w), 30)) \(lpad(tokens(d.tokens.total), 7))"
-                  + "  sessions \(lpad(dur(d.sessionSec), 7))  you \(lpad(dur(d.userSec), 7))  \(lpad(usd(d.cost), 7))")
+                  + "  sessions \(lpad(dur(d.sessionSec), 7))  you \(lpad(dur(d.userSec), 7))"
+                  + "  \(lpad(usd(d.cost, unpriced: d.unpriced), 7))")
         }
         if !r.projects.isEmpty {
             print("top projects")
             for p in r.projects.prefix(5) {
                 print("  \(pad(p.project.isEmpty ? "?" : p.project, 32)) \(lpad(tokens(p.tokens.total), 7)) \(lpad(dur(p.sessionSec), 8))"
-                      + " \(lpad(usd(p.cost), 7))")
+                      + " \(lpad(usd(p.cost, unpriced: p.unpriced), 7))")
             }
         }
     }
