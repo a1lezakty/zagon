@@ -61,9 +61,6 @@ public final class Ingest {
     public private(set) var stats = IngestStats()
     var db: SQLite { store.db }
 
-    /// Directories already in `dir_project` (loaded on first use).
-    var knownDirs: Set<String>?
-
     // Pending derived work, done once in finish().
     var touchedHours = Set<Int>()
     var touchedSessions = Set<String>()
@@ -420,7 +417,8 @@ public final class Ingest {
         }
         touchedSessions.formUnion(sessions)
         for m in out.meta { try store.mergeSession(m, host: host) }
-        try noteDirs(out.usage.compactMap(\.cwd) + out.events.compactMap(\.cwd) + out.userMessages.compactMap(\.cwd))
+        try noteDirs(out.usage.compactMap(\.cwd) + out.events.compactMap(\.cwd) + out.userMessages.compactMap(\.cwd)
+                     + out.meta.compactMap(\.cwd))
         // Readings, not contributions: keyed by (tool, window, ts), so a recount writes the same rows again.
         for l in out.limits { try store.addLimitSnapshot(l) }
 
@@ -550,18 +548,16 @@ public final class Ingest {
         }
     }
 
-    /// Resolves each directory not seen before into `dir_project`, while it is still on disk.
+    /// Resolves each directory not seen before into `dir_project`, while it is still on disk. No cache in memory: a
+    /// rolled-back batch takes its rows with it and the retry writes them again.
     func noteDirs(_ cwds: [String]) throws {
-        if knownDirs == nil {
-            knownDirs = []
-            try db.query("SELECT cwd FROM dir_project") { if let c = $0.text(0) { knownDirs!.insert(c) } }
-        }
         let home = options.home ?? Sys.env("HOME") ?? ""
-        for c in Set(cwds) where !c.isEmpty && !knownDirs!.contains(c) {
+        for c in Set(cwds) where !c.isEmpty {
+            guard try db.one("SELECT 1 FROM dir_project WHERE host = ? AND cwd = ?", [.text(host), .text(c)], { _ in true }) == nil
+            else { continue }
             let d = Projects.resolve(c, home: home)
-            try db.run("INSERT OR IGNORE INTO dir_project(cwd, project, home, seq) VALUES(?, ?, ?, ?)",
-                       [.text(c), .text(d.project), .int(d.home ? 1 : 0), .int(Int64(try store.nextSeq()))])
-            knownDirs!.insert(c)
+            try db.run("INSERT INTO dir_project(host, cwd, project, home, seq) VALUES(?, ?, ?, ?, ?)",
+                       [.text(host), .text(c), .text(d.project), .int(d.home ? 1 : 0), .int(Int64(try store.nextSeq()))])
         }
     }
 
@@ -678,7 +674,7 @@ public final class Ingest {
             }
             if !days.isEmpty {
                 let seq = try store.nextSeq()
-                let agg = DayAggregator(db: db, host: host, dirs: try Projects.load(db))
+                let agg = DayAggregator(db: db, host: host, dirs: try Projects.load(db))  // all hosts: rows carry theirs
                 for d in days.sorted() { try agg.rebuild(day: d, seq: seq) }
             }
         }

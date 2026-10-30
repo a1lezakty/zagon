@@ -90,9 +90,9 @@ public final class ExportImport {
                            [.int(file), .of(r["start"]?.double), .of(r["end"]?.double)])
             }
         case "dir":
-            guard let cwd = v["cwd"]?.string, let project = v["project"]?.string else { return }
-            try db.run("INSERT OR REPLACE INTO dir_project(cwd, project, home, seq) VALUES(?, ?, ?, 0)",
-                       [.text(cwd), .text(project), .int(v["home"] == .bool(true) ? 1 : 0)])
+            guard let host = v["host"]?.string, let cwd = v["cwd"]?.string, let project = v["project"]?.string else { return }
+            try db.run("INSERT OR REPLACE INTO dir_project(host, cwd, project, home, seq) VALUES(?, ?, ?, ?, 0)",
+                       [.text(host), .text(cwd), .text(project), .int(v["home"] == .bool(true) ? 1 : 0)])
         case "limit":
             guard let tool = v["tool"]?.string.flatMap(ToolKind.init), let w = v["window"]?.string,
                   let pct = v["used_pct"]?.double, let ts = v["ts"]?.double else { return }

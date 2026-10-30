@@ -49,7 +49,8 @@ The macOS app (sample data): the menu bar, then the Day, Week and Calendar windo
   that off in Settings → Updates).
 - It reads only local files: Claude Code transcripts (`~/.claude/projects`), Codex session files and its thread index
   (`~/.codex/sessions`, `~/.codex/archived_sessions`, `~/.codex/state_*.sqlite`), plus what its own hooks and status
-  line wrapper record.
+  line wrapper record. To name the project of a working directory it also looks for a `.git` above it (and a
+  worktree's `commondir`); it stores the directory paths and project names, never file contents.
 - Limits come only from what Claude Code passes to its status line (`rate_limits`, Claude Code 2.1.80+ on Pro and
   Max) and from Codex's own session files. Zagon never reads or stores OAuth tokens, cookies or credential files,
   and it does not call any usage API. So it shows the 5-hour and weekly windows, and the last reading when no
@@ -154,8 +155,9 @@ zagon update                   # the latest release (see Update above)
 - Every report takes `--json`.
 - `$` is at API list prices, for comparison: a subscription is billed differently.
 - Tokens and session time count for the project each request and stretch was in: inside the folder the session
-  started in, that folder's project; for a session started in your home directory, the git checkout of each directory
-  (a worktree counts for its main checkout). A session is listed under the folder it started in.
+  started in, that folder's project, elsewhere its last folder name; for a session started in your home directory or
+  `/`, the git checkout of each directory (a worktree counts for its main checkout). A session is listed under the
+  folder it started in.
 - "You" is your own messages: one that another session types into a worker's terminal (`tmux send-keys`) is not yours.
 - Common options:
   - `--data-dir` (default `$ZAGON_DIR` or `~/.zagon`);

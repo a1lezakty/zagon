@@ -225,7 +225,7 @@ func channelText(_ s: String) -> String {
             INSERT INTO usage_hour(file_id, session_id, agent, hour, model, input, output, cache_read, cache_write, requests,
               tool_calls) SELECT * FROM u;
             DROP TABLE u;
-            UPDATE msg SET cwd = NULL, cache_write_1h = 0; UPDATE source_file SET recount = 1;
+            UPDATE msg SET cwd = NULL, cache_write_1h = 0; UPDATE source_file SET recount = 1; DELETE FROM dir_project;
             """)
     }
     func split(_ env: ClaudeEnv) -> String? {
@@ -286,6 +286,8 @@ func channelText(_ s: String) -> String {
         // 0 would claim m1 again: its recount is rolled back; S's recount reproduces its rows and is kept.
         #expect(st.recountsKept == 1 && perSession() == "claude:0=5,claude:S=7")
         #expect(split(env) == "/w/alpha:7:0,:5:0")
+        // The directory 0 noted went with its rollback; S notes it again.
+        #expect(env.int("SELECT count(*) FROM dir_project WHERE cwd = '/w/alpha'") == 1)
         #expect(env.int("SELECT sum(recount) FROM source_file") == 0)
 
         // The original gone without a copy: its rows stay, and the copy still does not count m1 again.

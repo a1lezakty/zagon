@@ -143,7 +143,8 @@ extension Query {
             out[i].tokens.input += r.int(6); out[i].tokens.output += r.int(7); out[i].tokens.cacheRead += r.int(8)
             out[i].tokens.cacheWrite += r.int(9); out[i].tokens.cacheWrite1h += r.int(10); out[i].tokens.requests += r.int(11)
             out[i].cost += c
-            Self.add(&out[i].project, Projects.of(r.text(1), session: r.text(2) ?? "", started: r.text(12), dirs: dirs), t, c)
+            Self.add(&out[i].project, Projects.of(r.text(1), session: r.text(2) ?? "", started: r.text(12), host: r.text(3),
+                                                  dirs: dirs), t, c)
             Self.add(&out[i].host, r.text(3) ?? "", t, c)
             Self.add(&out[i].agent, r.text(4) ?? "", t, c); Self.add(&out[i].model, m, t, c)
         }
@@ -153,14 +154,14 @@ extension Query {
         // Session time: union per session; per project (the directory of each interval), union per session and project.
         var working: [String: (all: [Interval], projects: [String: [Interval]])] = [:]
         try db.query("""
-            SELECT a.session_id, coalesce(s.project,''), a.start, a."end", a.cwd, s.cwd FROM activity a
+            SELECT a.session_id, coalesce(s.project,''), a.start, a."end", a.cwd, s.cwd, s.host FROM activity a
             LEFT JOIN session s ON s.id = a.session_id
             WHERE a.kind = 'working' AND a.start < ?1 AND a.start > ?2 - \(Self.longestStretch) AND a."end" > ?2
             """, [.real(hi), .real(lo)]) { r in
             let sid = r.text(0) ?? "", iv = Interval(r.real(2), r.real(3))
             working[sid, default: ([], [:])].all.append(iv)
-            working[sid]!.projects[Projects.of(r.text(4), session: r.text(1) ?? "", started: r.text(5), dirs: dirs),
-                                   default: []].append(iv)
+            working[sid]!.projects[Projects.of(r.text(4), session: r.text(1) ?? "", started: r.text(5), host: r.text(6),
+                                               dirs: dirs), default: []].append(iv)
         }
         for e in working.values {
             let merged = Intervals.merge(e.all)

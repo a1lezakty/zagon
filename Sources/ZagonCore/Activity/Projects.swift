@@ -11,13 +11,15 @@ public enum Projects {
         public var home: Bool
     }
 
-    /// `cwd` as it is on this machine now; `home` = this user's home directory. A gone directory: its last component.
+    /// `cwd` as it is on this machine now; `home` = this user's home directory (also as its real path: transcripts
+    /// carry physical paths). A gone directory: its last component.
     static func resolve(_ cwd: String, home: String) -> Dir {
-        let h = trimmed(home), c = trimmed(cwd)
-        let dir = Dir(project: ClaudeParser.project(cwd), home: c == "/" || (!h.isEmpty && c == h))
-        guard Sys.isDir(c) else { return dir }
+        let homes = Set([home, Sys.realPath(home) ?? home].map(trimmed).filter { !$0.isEmpty })
+        let c = trimmed(cwd)
+        let dir = Dir(project: ClaudeParser.project(cwd), home: c == "/" || homes.contains(c))
+        guard c.hasPrefix("/"), Sys.isDir(c) else { return dir }
         var d = c
-        while d != "/", d != h, d != "." {  // a git checkout at home (dotfiles) is no project
+        while d != "/", d != ".", !homes.contains(d) {  // a git checkout at home (dotfiles) is no project
             let git = d + "/.git"
             if Sys.isDir(git) { return Dir(project: Sys.basename(d), home: dir.home) }
             if let b = Sys.readFile(git), case let s = String(decoding: b, as: UTF8.self), s.hasPrefix("gitdir:") {
@@ -36,22 +38,23 @@ public enum Projects {
         return dir
     }
 
-    /// Every directory Ingest has resolved (`dir_project`, this machine's and imported ones).
-    static func load(_ db: SQLite) throws -> [String: Dir] {
-        var out: [String: Dir] = [:]
-        try db.query("SELECT cwd, project, home FROM dir_project") { r in
-            if let c = r.text(0) { out[c] = Dir(project: r.text(1) ?? "", home: r.int(2) != 0) }
+    /// Every directory Ingest has resolved (`dir_project`, this machine's and imported ones), by host, then directory.
+    static func load(_ db: SQLite) throws -> [String: [String: Dir]] {
+        var out: [String: [String: Dir]] = [:]
+        try db.query("SELECT host, cwd, project, home FROM dir_project") { r in
+            if let h = r.text(0), let c = r.text(1) { out[h, default: [:]][c] = Dir(project: r.text(2) ?? "", home: r.int(3) != 0) }
         }
         return out
     }
 
-    /// `cwd` nil or "" (not known) = the session's project.
-    static func of(_ cwd: String?, session: String, started: String?, dirs: [String: Dir]) -> String {
+    /// `cwd` nil or "" (not known) = the session's project. `host`: the session's (directories are per machine).
+    static func of(_ cwd: String?, session: String, started: String?, host: String?, dirs: [String: [String: Dir]]) -> String {
         guard let cwd, !cwd.isEmpty else { return session }
-        if let s = started, !s.isEmpty, !(dirs[s]?.home ?? (s == "/")) {
+        let known = dirs[host ?? ""] ?? [:]
+        if let s = started, !s.isEmpty, !(known[s]?.home ?? (s == "/")) {
             return cwd == s || cwd.hasPrefix(s.hasSuffix("/") ? s : s + "/") ? session : ClaudeParser.project(cwd)
         }
-        return dirs[cwd]?.project ?? ClaudeParser.project(cwd)
+        return known[cwd]?.project ?? ClaudeParser.project(cwd)
     }
 
     static func trimmed(_ p: String) -> String {

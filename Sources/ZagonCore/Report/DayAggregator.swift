@@ -6,7 +6,7 @@ struct DayAggregator {
     let db: SQLite
     let host: String
     /// `Projects.load`
-    var dirs: [String: Projects.Dir] = [:]
+    var dirs: [String: [String: Projects.Dir]] = [:]
 
     struct Key: Hashable { var tool: String; var project: String; var model: String }
     struct Row { var input = 0, output = 0, cacheRead = 0, cacheWrite = 0, cacheWrite1h = 0, requests = 0, toolCalls = 0
@@ -22,7 +22,7 @@ struct DayAggregator {
             WHERE u.hour >= ?1 AND u.hour < ?2 AND coalesce(s.host, ?3) = ?3 GROUP BY 1, 2, 3, 4, 11
             """, [.real(s), .real(e), .text(host)]) { r in
             let k = Key(tool: r.text(0) ?? "",
-                        project: Projects.of(r.text(1), session: r.text(2) ?? "", started: r.text(10), dirs: dirs),
+                        project: Projects.of(r.text(1), session: r.text(2) ?? "", started: r.text(10), host: host, dirs: dirs),
                         model: r.text(3) ?? "?")
             rows[k, default: Row()].input += r.int(4); rows[k]!.output += r.int(5); rows[k]!.cacheRead += r.int(6)
             rows[k]!.cacheWrite += r.int(7); rows[k]!.cacheWrite1h += r.int(8); rows[k]!.requests += r.int(9)
@@ -79,17 +79,18 @@ enum SessionTime {
     /// Working intervals overlapping [from, to), grouped by session; with `host`, only sessions of that host. `projects`
     /// by `Projects.of` with `dirs`.
     static func working(_ db: SQLite, from: Timestamp, to: Timestamp, host: String? = nil,
-                        dirs: [String: Projects.Dir] = [:]) throws -> [String: Entry] {
+                        dirs: [String: [String: Projects.Dir]] = [:]) throws -> [String: Entry] {
         var out: [String: Entry] = [:]
         try db.query("""
-            SELECT a.session_id, coalesce(s.tool,''), coalesce(s.project,''), a.start, a."end", a.cwd, s.cwd
+            SELECT a.session_id, coalesce(s.tool,''), coalesce(s.project,''), a.start, a."end", a.cwd, s.cwd,
+                   coalesce(s.host, ?3)
             FROM activity a LEFT JOIN session s ON s.id = a.session_id
             WHERE a.kind = 'working' AND a.start < ?1 AND a."end" > ?2 AND (?3 IS NULL OR coalesce(s.host, ?3) = ?3)
             """, [.real(to), .real(from), .of(host)]) { r in
             let sid = r.text(0) ?? "", iv = Interval(r.real(3), r.real(4))
             out[sid, default: Entry(tool: r.text(1) ?? "", project: r.text(2) ?? "", intervals: [])].intervals.append(iv)
-            out[sid]!.projects[Projects.of(r.text(5), session: out[sid]!.project, started: r.text(6), dirs: dirs),
-                               default: []].append(iv)
+            out[sid]!.projects[Projects.of(r.text(5), session: out[sid]!.project, started: r.text(6), host: r.text(7),
+                                           dirs: dirs), default: []].append(iv)
         }
         return out
     }
