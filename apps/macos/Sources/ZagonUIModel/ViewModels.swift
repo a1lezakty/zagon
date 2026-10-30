@@ -475,13 +475,16 @@ public struct CalendarVM: Sendable {
 
 // MARK: - Tasks
 
+/// The main list by status, then `jira`: open Jira issues with no work here in the last 7 days (done ones are not shown).
 public enum TaskFilter: String, CaseIterable, Sendable {
-    case active, planned, done
-    func matches(_ s: TaskState) -> Bool {
+    case active, review, planned, done, jira
+    func matches(_ t: TaskItem) -> Bool {
         switch self {
-        case .active: s == .active || s == .review
-        case .planned: s == .planned
-        case .done: s == .done
+        case .active: t.worked && t.state == .active
+        case .review: t.worked && t.state == .review
+        case .planned: t.worked && t.state == .planned
+        case .done: t.worked && t.state == .done
+        case .jira: !t.worked && t.state != .done
         }
     }
 }
@@ -530,8 +533,11 @@ public struct TasksVM: Sendable {
     /// `cards`: full cards by key for the detail (the list's own lines may carry less, e.g. only the last 7 days).
     public init(_ tasks: [TaskItem], filter: TaskFilter, _ f: Fmt, cards: [String: TaskItem] = [:]) {
         self.tasks = tasks; self.cards = cards; self.f = f
-        filters = TaskFilter.allCases.map { fl in (fl, f.t("filter.\(fl.rawValue)", String(tasks.filter { fl.matches($0.state) }.count))) }
-        rows = tasks.filter { filter.matches($0.state) }.map { t in
+        // Empty "In review" and "More in Jira" are left out (most Jiras have no review here, not every source has Jira).
+        filters = TaskFilter.allCases.map { fl in (fl, tasks.filter { fl.matches($0) }.count) }
+            .filter { $0.1 > 0 || ![.review, .jira].contains($0.0) || $0.0 == filter }
+            .map { ($0.0, f.t("filter.\($0.0.rawValue)", String($0.1))) }
+        rows = tasks.filter { filter.matches($0) }.map { t in
             TaskRowVM(key: t.key, title: t.title, status: TasksVM.status(t, f), state: t.state, time: f.duration(t.userSec),
                       sessions: f.t.plural("sessions", t.sessionCount),
                       sync: t.jira != nil ? "Jira ✓" : t.jiraKey != nil ? "Jira" : f.t("task.noJira"))
@@ -539,7 +545,7 @@ public struct TasksVM: Sendable {
     }
 
     static func status(_ t: TaskItem, _ f: Fmt) -> String {
-        t.jira?.status ?? f.t("state.\(t.state)")
+        t.jira?.status ?? t.jiraStatus ?? f.t("state.\(t.state)")
     }
 
     public func detail(_ key: String?) -> TaskDetailVM? {

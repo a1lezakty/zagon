@@ -1,13 +1,17 @@
 /// Own task registry over the `task*` tables (works without Jira).
 public enum TaskStatus: String, Codable, Sendable, CaseIterable {
-    case planned, inProgress = "in_progress", done
+    /// `review`: in review, testing or ready to release.
+    case planned, inProgress = "in_progress", review, done
     /// Older rows may carry the schema default `open`.
     init(stored: String?) { self = TaskStatus(rawValue: stored ?? "") ?? .planned }
-    /// Jira status category (`new` | `indeterminate` | `done`) that matches.
-    public var jiraCategory: String {
-        switch self { case .planned: "new"; case .inProgress: "indeterminate"; case .done: "done" }
-    }
     public init(jiraCategory c: String) { self = c == "done" ? .done : c == "indeterminate" ? .inProgress : .planned }
+    /// A Jira status as a status here: a name with a part from `review` (any case) is `review` unless Jira counts it
+    /// done; the rest by the status category (`new` | `indeterminate` | `done`).
+    public init(jira i: JiraIssue, review: [String] = JiraConfig.defaultReview) {
+        let name = i.status.lowercased()
+        if i.statusCategory != "done", review.contains(where: { !$0.isEmpty && name.contains($0.lowercased()) }) { self = .review }
+        else { self.init(jiraCategory: i.statusCategory) }
+    }
 }
 
 public struct TaskItem: Codable, Sendable, Equatable {
@@ -20,6 +24,32 @@ public struct TaskItem: Codable, Sendable, Equatable {
     public var jiraKey: String?
     public var created: Timestamp
     public var updated: Timestamp
+
+    public init(id: Int, key: String, title: String, description: String? = nil, status: TaskStatus, jiraKey: String? = nil, created: Timestamp,
+                updated: Timestamp) {
+        self.id = id; self.key = key; self.title = title; self.description = description; self.status = status
+        self.jiraKey = jiraKey; self.created = created; self.updated = updated
+    }
+
+    // JSON: `status` keeps to the three values a zagon before 0.1.1 reads (`review` goes as `in_progress`), `stage`
+    // carries `review`; an unknown status reads as `planned`.
+    enum CodingKeys: String, CodingKey { case id, key, title, description, status, stage, jiraKey, created, updated }
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id); key = try c.decode(String.self, forKey: .key)
+        title = try c.decode(String.self, forKey: .title); description = try c.decodeIfPresent(String.self, forKey: .description)
+        status = TaskStatus(stored: try c.decodeIfPresent(String.self, forKey: .stage) ?? c.decodeIfPresent(String.self, forKey: .status))
+        jiraKey = try c.decodeIfPresent(String.self, forKey: .jiraKey)
+        created = try c.decode(Timestamp.self, forKey: .created); updated = try c.decode(Timestamp.self, forKey: .updated)
+    }
+    public func encode(to e: Encoder) throws {
+        var c = e.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id); try c.encode(key, forKey: .key); try c.encode(title, forKey: .title)
+        try c.encodeIfPresent(description, forKey: .description)
+        try c.encode(status == .review ? TaskStatus.inProgress : status, forKey: .status)
+        if status == .review { try c.encode(status, forKey: .stage) }
+        try c.encodeIfPresent(jiraKey, forKey: .jiraKey); try c.encode(created, forKey: .created); try c.encode(updated, forKey: .updated)
+    }
 }
 
 public struct TaskTodo: Codable, Sendable { public var id: Int; public var text: String; public var done: Bool; public var created: Timestamp }

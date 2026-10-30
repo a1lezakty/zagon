@@ -58,6 +58,8 @@ class H(BaseHTTPRequestHandler):
             jql = b.get("jql", "")
             if "worklogAuthor" in jql:
                 keys = [k for k, i in issues.items() if any(w["author"] == me and not w.get("_new") for w in i.get("worklogs", []))]
+            elif jql.startswith("key in ("):
+                keys = [k.strip() for k in jql[len("key in ("):jql.index(")")].split(",") if k.strip() in issues]
             else:
                 keys = [k for k, i in issues.items() if i.get("assignee") == me and i.get("category") != "done"]
             keys.sort()

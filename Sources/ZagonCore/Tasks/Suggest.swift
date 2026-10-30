@@ -94,7 +94,7 @@ public struct TaskSuggester {
             return Run(items: try list(day), made: false, engine: prev?["engine"]?.string ?? "none", segments: 0)
         }
         var run = Run(items: [], made: true, engine: "none", segments: p.segs.count, asked: p.asked.count)
-        if p.missing > 0 { run.note = "\(p.missing) of your Jira issues of those days are not tasks here (zagon task import adds them)" }
+        if p.missing > 0 { run.note = "\(p.missing) of your Jira issues of those days are not read yet (zagon task import reads them)" }
         let blocked = try self.blocked()
         let allowed = { (seg: Segment, task: Int) in !blocked.contains("\(task) \(seg.session)") }
         let byKey = Dictionary(p.cands.map { ($0.task.key, $0.task.id) }, uniquingKeysWith: { a, _ in a })
@@ -414,14 +414,19 @@ public struct TaskSuggester {
 
     /// Tasks worth offering: your Jira worklogs of the last `lookback` days, links of those days, in progress, created
     /// then, Jira issues assigned to you and updated then; best first, at most `maxTasks`. Jira is read once per day (cached in
-    /// `meta`; for today at most an hour) and failures only drop the Jira part. `missing`: Jira issues with those
-    /// signals that are not tasks here.
+    /// `meta`; for today at most an hour) and failures only drop the Jira part. Your Jira issues with those signals
+    /// that are no task here yet become tasks (with no work, they stay out of the task list); `missing`: those Jira
+    /// issues not read into `JiraCache`, so not offered.
     func candidates(_ day: String, from: Timestamp, to: Timestamp, now: Timestamp) throws -> (cands: [Candidate], missing: Int) {
         let tasks = Tasks(store: store)
         var c: [Int: Candidate] = [:]
         let since = from - Double(Self.lookback) * 86400
+        let j = jiraFacts(day, since: since, from: from, to: to, now: now)
+        let cache = JiraCache.current(store, jira, now: now, log: log)
+        for k in Set(Array(j.worklogs.keys) + j.updated + j.near) where cache.mine.contains(k) { _ = try tasks.findOrAdopt(k) }
         for t in try tasks.list() {
-            c[t.id] = Candidate(task: t, score: (t.status == .inProgress ? 1 : t.status == .planned ? 0.2 : 0) + (t.created >= since ? 0.5 : 0))
+            c[t.id] = Candidate(task: t, score: ([.inProgress, .review].contains(t.status) ? 1 : t.status == .planned ? 0.2 : 0)
+                                    + (t.created >= since ? 0.5 : 0))
         }
         let byKey = Dictionary(c.values.flatMap { v in [v.task.key, v.task.jiraKey].compactMap { $0 }.map { ($0, v.task.id) } },
                                uniquingKeysWith: { a, _ in a })
@@ -429,7 +434,6 @@ public struct TaskSuggester {
             SELECT ts.task_id, count(DISTINCT ts.session_id) FROM task_session ts JOIN session s ON s.id = ts.session_id
             WHERE ts.how NOT IN ('unlinked', 'suggested') AND s.last_at >= ? AND coalesce(s.started_at, s.last_at) < ? GROUP BY ts.task_id
             """, [.real(since), .real(from)]) { r in c[r.int(0)]?.score += 1 + min(Double(r.int(1)), 5) * 0.1 }
-        let j = jiraFacts(day, since: since, from: from, to: to, now: now)
         // Signals: updated in Jira on the day or the next (2.5), your worklogs (2 the day before … 0.5 two weeks
         // before), links of those days before this one (1+; work with a key is linked already, the rest is more
         // often another task), in progress (1), created then (0.5), updated then (0.5).

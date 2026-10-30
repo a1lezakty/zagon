@@ -15,9 +15,11 @@ public struct DayWorklog {
     }
 
     /// Links the day's sessions (branch, title, messages, commits), reads the day from Jira and rebuilds the plan.
+    /// `JiraCache` is read again first when older than an hour.
     /// Without `strict` a Jira failure comes back as `jiraError` and the plan is made without Jira.
     public func plan(_ day: String, strict: Bool = false) throws -> (plan: DayPlan, jiraError: String?) {
         guard let (from, to) = Time.dayBounds(day) else { throw TaskError("bad day \(day)") }
+        _ = JiraCache.current(store, jira)  // your Jira issues found in the day's work become tasks
         try linker.linkSessions(store)
         try linker.linkDay(store, from: from, to: to)
         var jiraDay: JiraDay?, jiraError = jiraSetupError
@@ -107,7 +109,7 @@ public struct DayWorklog {
             """, [.real(from), .real(to)]) { if let k = $0.text(0) { keys.insert(k) } }
         var issues: [String: JiraIssue?] = [:]
         for k in keys { issues[k] = .some(try jira.issue(k)) }
-        return JiraDay(worklogs: try jira.myWorklogs(from: from, to: to), issues: issues)
+        return JiraDay(worklogs: try jira.myWorklogs(from: from, to: to), issues: issues, review: jira.config.reviewStatuses)
     }
 
     public struct WriteResult: Sendable {

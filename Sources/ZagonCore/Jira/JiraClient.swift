@@ -19,17 +19,32 @@ public struct JiraConfig: Sendable {
     /// The token is the last non-empty line of this file.
     public var tokenFile: String
     public var curl = "curl"
+    /// Jira statuses that mean "in review / ready to release" here, by part of the name (any case), whatever their
+    /// status category (Jira often files "Ready to release" under To Do); a status Jira counts as done stays done.
+    /// Not "ready for": "Ready for development" is work not started ("Ready for QA / review / test" match anyway).
+    public var reviewStatuses = JiraConfig.defaultReview
+    public static let defaultReview = ["review", "qa", "test", "release", "deploy", "ревью", "провер", "тест", "релиз"]
     public init(baseURL: String, email: String, tokenFile: String) {
         self.baseURL = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
         self.email = email; self.tokenFile = tokenFile
     }
 
-    /// `[jira] url, email, token_file` from config.toml; nil when the module is not configured.
+    /// `[jira] url, email, token_file, review_statuses` from config.toml; nil when the module is not configured.
     public static func load(configText: String) -> JiraConfig? {
         guard let u = TOMLLite.string(in: configText, section: "jira", key: "url"),
               let e = TOMLLite.string(in: configText, section: "jira", key: "email"),
               let f = TOMLLite.string(in: configText, section: "jira", key: "token_file") else { return nil }
-        return JiraConfig(baseURL: u, email: e, tokenFile: f)
+        var c = JiraConfig(baseURL: u, email: e, tokenFile: f)
+        if let r = TOMLLite.raw(in: configText, section: "jira", key: "review_statuses").flatMap(stringList) { c.reviewStatuses = r }
+        return c
+    }
+
+    /// A one-line TOML array of strings, `["a", "b"]`; nil when it is not one.
+    static func stringList(_ raw: Substring) -> [String]? {
+        guard raw.hasPrefix("["), let close = raw.lastIndex(of: "]") else { return nil }
+        // Quoted strings are every other piece between quotes (no escaped quotes in status names).
+        let parts = raw[raw.index(after: raw.startIndex)..<close].split(separator: "\"", omittingEmptySubsequences: false)
+        return stride(from: 1, to: parts.count, by: 2).map { String(parts[$0]) }.filter { !$0.isEmpty }
     }
 }
 
@@ -39,6 +54,23 @@ public struct JiraIssue: Codable, Sendable, Equatable {
     public var status: String
     /// `new` | `indeterminate` | `done`.
     public var statusCategory: String
+}
+
+public struct JiraProject: Codable, Sendable, Equatable {
+    public var key: String
+    public var name: String
+}
+
+/// Texts you wrote in Jira (`JiraClient.myTexts`), as samples of your style.
+public struct JiraTexts: Sendable, Equatable {
+    /// Issues you created, newest first.
+    public var issues: [(summary: String, description: String)] = []
+    public var worklogs: [String] = [], comments: [String] = []
+    public static func == (a: JiraTexts, b: JiraTexts) -> Bool {
+        a.issues.map(\.summary) == b.issues.map(\.summary) && a.issues.map(\.description) == b.issues.map(\.description)
+            && a.worklogs == b.worklogs && a.comments == b.comments
+    }
+    public init() {}
 }
 
 public struct JiraWorklog: Codable, Sendable, Equatable {
@@ -199,6 +231,22 @@ public final class JiraClient {
         var fields: F?
     }
     struct WorklogPage: Decodable { var startAt: Int?; var total: Int?; var worklogs: [WorklogBean] }
+    struct ProjectPage: Decodable { var values: [JiraProject]; var isLast: Bool? }
+    struct IssueTypes: Decodable {
+        struct T: Decodable { var id: String; var name: String?; var untranslatedName: String?; var subtask: Bool? }
+        var issueTypes: [T]?
+    }
+    struct TextPage: Decodable {
+        struct F: Decodable { var summary: String?; var description: String? }
+        struct I: Decodable { var key: String; var fields: F? }
+        var issues: [I]
+    }
+    struct CommentPage: Decodable {
+        struct Author: Decodable { var accountId: String? }
+        struct C: Decodable { var author: Author?; var body: String? }
+        var comments: [C]?
+    }
+    struct Created: Decodable { var key: String }
 
     /// Account id of the token's user.
     public func accountId() throws -> String {
@@ -267,7 +315,58 @@ public final class JiraClient {
         return out.sorted { $0.started < $1.started }
     }
 
+    /// Projects you may create issues in, by key.
+    public func projects() throws -> [JiraProject] {
+        var out: [JiraProject] = []
+        while true {
+            let p = try get("/rest/api/3/project/search?action=create&startAt=\(out.count)&maxResults=50", ProjectPage.self)
+            out += p.values
+            if p.values.isEmpty || p.isLast != false || out.count >= 1000 { return out.sorted { $0.key < $1.key } }
+        }
+    }
+
+    /// The project's issue type for a plain task: "Task" (also when Jira shows it translated), else the first type
+    /// that is neither a sub-task nor an epic.
+    func taskType(_ project: String) throws -> String {
+        let types = try get("/rest/api/3/issue/createmeta/\(Self.escape(project))/issuetypes", IssueTypes.self).issueTypes ?? []
+        let plain = types.filter { $0.subtask != true }
+        guard let t = plain.first(where: { ($0.untranslatedName ?? $0.name) == "Task" })
+                ?? plain.first(where: { ($0.untranslatedName ?? $0.name) != "Epic" }) else {
+            throw JiraError.http(400, "project \(project) has no issue type for a task")
+        }
+        return t.id
+    }
+
+    /// Your texts as samples of your style, newest first, at most `limit` of each: issues you created (summary and
+    /// description), your worklog comments since `since`, your comments on issues assigned to you.
+    public func myTexts(since: Timestamp, limit: (issues: Int, worklogs: Int, comments: Int) = (5, 10, 3)) throws -> JiraTexts {
+        var t = JiraTexts()
+        let body: [String: JSONValue] = ["jql": .s("creator = currentUser() ORDER BY created DESC"), "fields": .a([.s("summary"), .s("description")]),
+                                         "maxResults": .n(limit.issues)]
+        let page = try JSONDecoder().decode(TextPage.self, from: Data(try request("POST", "/rest/api/2/search/jql", json: Array(try JSONEncoder().encode(body)))))
+        t.issues = page.issues.prefix(limit.issues).map { ($0.fields?.summary ?? "", $0.fields?.description ?? "") }
+        t.worklogs = Array(try myWorklogs(from: since, to: Time.now()).sorted { $0.started > $1.started }
+            .compactMap { $0.comment.flatMap { $0.isEmpty ? nil : $0 } }.prefix(limit.worklogs))
+        let me = try accountId()
+        for i in try search("assignee = currentUser() ORDER BY updated DESC", limit: 8).prefix(8) where t.comments.count < limit.comments {
+            let p = try get("/rest/api/2/issue/\(Self.escape(i.key))/comment?orderBy=-created&maxResults=20", CommentPage.self)
+            for c in p.comments ?? [] where c.author?.accountId == me && t.comments.count < limit.comments {
+                if let b = c.body, !b.isEmpty { t.comments.append(b) }
+            }
+        }
+        return t
+    }
+
     // MARK: writing — only on an explicit command (CLI with confirmation, MCP with confirm: true, bot button)
+
+    /// Creates a task in `project`, assigned to you; returns its key.
+    public func createIssue(project: String, summary: String, description: String) throws -> String {
+        let type = try taskType(project), me = try accountId()
+        let fields: [String: JSONValue] = ["project": .o(["key": .s(project)]), "issuetype": .o(["id": .s(type)]),
+                                           "summary": .s(summary), "description": .s(description), "assignee": .o(["id": .s(me)])]
+        let data = try request("POST", "/rest/api/2/issue", json: Array(try JSONEncoder().encode(["fields": JSONValue.o(fields)])))
+        return try JSONDecoder().decode(Created.self, from: Data(data)).key
+    }
 
     /// Adds a worklog; returns its id.
     public func addWorklog(issue key: String, started: Timestamp, seconds: Int, comment: String) throws -> String {
@@ -309,13 +408,14 @@ public final class JiraClient {
 
 /// Minimal JSON value for request bodies.
 enum JSONValue: Encodable {
-    case s(String), n(Int), a([JSONValue])
+    case s(String), n(Int), a([JSONValue]), o([String: JSONValue])
     func encode(to e: Encoder) throws {
         var c = e.singleValueContainer()
         switch self {
         case .s(let v): try c.encode(v)
         case .n(let v): try c.encode(v)
         case .a(let v): try c.encode(v)
+        case .o(let v): try c.encode(v)
         }
     }
 }

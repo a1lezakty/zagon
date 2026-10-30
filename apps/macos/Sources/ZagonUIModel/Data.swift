@@ -248,15 +248,20 @@ public struct TaskItem: Sendable, Identifiable {
     /// The Jira issue when Jira itself was not asked (`jira` nil), and why it could not be.
     public var jiraKey: String?
     public var jiraError: String?
+    /// Worked on in the last 7 days (the main list); false: in Jira with no work here then ("More in Jira").
+    public var worked: Bool
+    /// The Jira status as last read where the task lives.
+    public var jiraStatus: String?
     public var id: String { key }
     public init(key: String, title: String, description: String = "", state: TaskState, jira: JiraInfo? = nil,
                 userSec: Double, sessionSec: Double = 0, tokens: Int = 0, weekPct: Double = 0, todo: [TodoItem] = [],
                 doneByDay: [(day: Date, text: String)] = [], sessions: [TaskSession] = [], sessionCount: Int? = nil,
-                notes: [String] = [], jiraKey: String? = nil, jiraError: String? = nil) {
+                notes: [String] = [], jiraKey: String? = nil, jiraError: String? = nil, worked: Bool = true, jiraStatus: String? = nil) {
         self.key = key; self.title = title; self.description = description; self.state = state; self.jira = jira
         self.userSec = userSec; self.sessionSec = sessionSec; self.tokens = tokens; self.weekPct = weekPct
         self.todo = todo; self.doneByDay = doneByDay; self.sessions = sessions
         self.sessionCount = sessionCount ?? sessions.count; self.notes = notes; self.jiraKey = jiraKey; self.jiraError = jiraError
+        self.worked = worked; self.jiraStatus = jiraStatus
     }
 }
 

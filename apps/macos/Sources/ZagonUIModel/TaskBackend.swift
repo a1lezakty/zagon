@@ -32,6 +32,8 @@ public struct TaskBackend: Sendable {
 
     public struct Failure: Error, Sendable, CustomStringConvertible {
         public var description: String
+        /// The zagon there does not know an option or a command of this app.
+        var older = false
     }
 
     /// stdout, and the `jira: …` warning from stderr; a failure as one short line without home folders.
@@ -59,7 +61,11 @@ public struct TaskBackend: Sendable {
 
     struct Digest: Decodable { var commitDigest: String? }
 
-    public func list() throws -> [TaskListLine] { try decode(["task", "list", "--json"]).0 }
+    /// Also what is in Jira with no work here (`worked` false); a zagon from before `--all` sends only its list.
+    public func list() throws -> [TaskListLine] {
+        do { return try decode(["task", "list", "--all", "--json"]).0 }
+        catch let e as Failure where e.older { return try decode(["task", "list", "--json"]).0 }
+    }
     /// `scan: false` right after an edit: nothing new to read, and the answer comes sooner.
     public func card(_ key: String, scan: Bool = true) throws -> TaskCard {
         try decode(["task", "show", "--json"] + (scan ? [] : ["--no-scan"]) + ["--", key]).0
@@ -82,7 +88,7 @@ public struct TaskBackend: Sendable {
     }
     public func addNote(_ key: String, _ text: String) throws { _ = try call(["task", "note", "--", key, text]) }
     public func setStatus(_ key: String, _ state: TaskState) throws {
-        let s: TaskStatus = state == .done ? .done : state == .planned ? .planned : .inProgress
+        let s: TaskStatus = switch state { case .planned: .planned; case .active: .inProgress; case .review: .review; case .done: .done }
         _ = try call(["task", "status", "--", key, s.rawValue])
     }
 
@@ -139,7 +145,7 @@ public struct TaskBackend: Sendable {
         let why = err.first { $0.hasPrefix("Error: ") }.map { String($0.dropFirst(7)) } ?? err.last ?? "exit \(r.status)"
         // A zagon from before `task` / `--json` does not know the words.
         if ["Unexpected argument", "Unknown option"].contains(where: why.contains) {
-            return Failure(description: "zagon there is older than this app, update it (\(Remote.scrubHomes(why)))")
+            return Failure(description: "zagon there is older than this app, update it (\(Remote.scrubHomes(why)))", older: true)
         }
         return Failure(description: Remote.scrubHomes(why))
     }
@@ -179,13 +185,14 @@ public struct TaskCache: Sendable {
 
 extension TaskBackend {
     static func state(_ s: TaskStatus) -> TaskState {
-        switch s { case .planned: .planned; case .inProgress: .active; case .done: .done }
+        switch s { case .planned: .planned; case .inProgress: .active; case .review: .review; case .done: .done }
     }
 
     /// A list line: time over the last 7 days.
     public static func item(_ l: TaskListLine) -> TaskItem {
         TaskItem(key: l.task.key, title: l.task.title, description: l.task.description ?? "", state: state(l.task.status),
-                 userSec: l.weekSec, sessionSec: l.weekSessionSec, sessionCount: l.sessions, jiraKey: l.task.jiraKey)
+                 userSec: l.weekSec, sessionSec: l.weekSessionSec, sessionCount: l.sessions, jiraKey: l.task.jiraKey,
+                 worked: l.worked ?? true, jiraStatus: l.jiraStatus)
     }
 
     /// A card: time over the task's whole history; `sessions` as this Mac knows them; days shown in `zone`.
@@ -198,7 +205,8 @@ extension TaskBackend {
         }
         return TaskItem(
             key: t.key, title: t.title, description: t.description ?? "", state: state(t.status),
-            jira: c.jira.map { JiraInfo(status: $0.status, statusMatches: $0.statusCategory == t.status.jiraCategory,
+            // A zagon from before 0.1.1 sends no `jira_status_here`: then by the status category.
+            jira: c.jira.map { JiraInfo(status: $0.status, statusMatches: (c.jiraStatusHere ?? TaskStatus(jiraCategory: $0.statusCategory)) == t.status,
                                         loggedSec: c.jiraLoggedSec ?? 0) },
             userSec: c.time.userSec, sessionSec: c.time.sessionSec, tokens: c.time.tokens.total,
             // Claude's and Codex's weekly limits are different limits: the larger share, not a sum.
@@ -244,12 +252,12 @@ extension TaskBackend {
                 let linker = try TaskLinker()
                 try linker.linkSessions(store)
                 let tasks = Tasks(store: store), ts = now.timeIntervalSince1970
-                let words = args.filter { $0 != "--json" && $0 != "--" }
+                let words = args.filter { $0 != "--json" && $0 != "--" && $0 != "--all" }
                 let out: Data
                 switch (words.first, words.dropFirst().first, words.dropFirst(2).first) {
-                case ("task", "list", nil): out = try e.encode(try tasks.overview(now: ts))
+                case ("task", "list", nil): out = try e.encode(try tasks.overview(all: args.contains("--all"), now: ts))
                 case ("task", "show", let k?):
-                    guard let t = try tasks.find(k) else { return Proc.Result(status: 64, out: Data(), err: Data("Error: no task \(k)\n".utf8)) }
+                    guard let t = try tasks.find(k) ?? tasks.jiraOnly(k) else { return Proc.Result(status: 64, out: Data(), err: Data("Error: no task \(k)\n".utf8)) }
                     out = try e.encode(try tasks.card(t, now: ts))
                 case ("log", "plan", let d?):
                     out = try e.encode(try DayWorklog(store: store, linker: linker, jira: nil).plan(d).plan)

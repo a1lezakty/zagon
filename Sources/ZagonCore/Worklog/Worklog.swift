@@ -28,7 +28,11 @@ public struct JiraDay: Sendable {
     public var worklogs: [JiraWorklog]
     /// Jira key -> issue; a key mapped to nil was looked up and not found.
     public var issues: [String: JiraIssue?]
-    public init(worklogs: [JiraWorklog], issues: [String: JiraIssue?]) { self.worklogs = worklogs; self.issues = issues }
+    /// `[jira] review_statuses`: how a Jira status reads here.
+    public var review = JiraConfig.defaultReview
+    public init(worklogs: [JiraWorklog], issues: [String: JiraIssue?], review: [String] = JiraConfig.defaultReview) {
+        self.worklogs = worklogs; self.issues = issues; self.review = review
+    }
 }
 
 public struct DayPlan: Codable, Sendable {
@@ -154,7 +158,7 @@ public struct Worklog {
                 switch jira.issues[k] {
                 case .some(.none): notes.append("\(item.key): issue \(k) not found in Jira")
                 case .some(.some(let i)):
-                    if item.status.jiraCategory != i.statusCategory {
+                    if item.status != TaskStatus(jira: i, review: jira.review) {
                         notes.append("\(item.key): status here \(item.status.rawValue), in Jira \"\(i.status)\"")
                     }
                 case .none: break

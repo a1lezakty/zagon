@@ -20,7 +20,8 @@ final class TaskBackendTests: XCTestCase {
             #!/bin/sh
             { for a in "$@"; do printf '%s|' "$a"; done; echo; } >> "$HOME/calls"
             case "$1 $2" in
-            "task list") echo "Last login: a banner"; cat "$HOME/list.json" ;;
+            "task list") if [ "$3" = --all ] && [ -e "$HOME/old" ]; then echo "Error: Unknown option '--all'" >&2; exit 64; fi
+                echo "Last login: a banner"; cat "$HOME/list.json" ;;
             "task show") case "$*" in *NOPE*) echo "Error: no task NOPE" >&2; echo "Usage: zagon task show <task>" >&2; exit 64 ;; esac
                 cat "$HOME/card.json" ;;
             "log plan") cat "$HOME/plan.json"; if [ -e "$HOME/jira-down" ]; then echo "jira: HTTP 401 reading /home/al/.zagon/jira-token" >&2; fi ;;
@@ -48,7 +49,7 @@ final class TaskBackendTests: XCTestCase {
         let p = try StoreDataProvider.fixture(StoreDataProviderTests.fixtures)
         let sample = try p.fixtureTasks()
         let day = TaskBackend.day(p.now.addingTimeInterval(-86400))
-        for (file, args) in [("list", ["task", "list", "--json"]), ("card", ["task", "show", "--json", "--", "PROJ-12"]),
+        for (file, args) in [("list", ["task", "list", "--all", "--json"]), ("card", ["task", "show", "--json", "--", "PROJ-12"]),
                              ("plan", ["log", "plan", "--json", "--", day])] {
             let r = try XCTUnwrap(try sample.run(args, 60))
             XCTAssertEqual(r.status, 0, String(decoding: r.err, as: UTF8.self))
@@ -76,6 +77,14 @@ final class TaskBackendTests: XCTestCase {
         XCTAssertEqual(main.state, .active)
         XCTAssertEqual(main.jiraKey, "PROJ-12")
         XCTAssertNil(list.first { $0.key == "ZAG-1" }?.jiraKey)
+        // PROJ-14 is a session's title; the own task was done (and its note written) before the last 7 days.
+        XCTAssertEqual(list.filter { !$0.worked }.map(\.key), ["ZAG-1"])
+        XCTAssertEqual(calls.last, "task|list|--all|--json|")
+        // A zagon from before `--all` gets the plain list.
+        FileManager.default.createFile(atPath: home + "/old", contents: nil)
+        XCTAssertEqual(try b.list().count, 3)
+        XCTAssertEqual(calls.suffix(2), ["task|list|--all|--json|", "task|list|--json|"])
+        try FileManager.default.removeItem(atPath: home + "/old")
 
         let c = try b.card("PROJ-12")
         XCTAssertFalse(c.sessions.isEmpty, "the sample's PROJ-12 branch links its sessions")

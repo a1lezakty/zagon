@@ -59,6 +59,10 @@ private let day = "2026-10-29"
         }
         let l = try m.call("task_list", #"{"status":"in_progress"}"#).text
         #expect(l.hasPrefix("PROJ-1") && l.contains("1 sessions") && !l.contains("ZAG-1"), "\(l)")
+        // A task with no work in the last 7 days comes only with all: true.
+        _ = try m.call("task_create", #"{"title":"Later","key":"OPS-5"}"#)
+        #expect(try !m.call("task_list", "{}").text.contains("OPS-5"))
+        #expect(try m.call("task_list", #"{"all":true}"#).text.contains("In Jira, no work here in the last 7 days:\nOPS-5"))
     }
 
     @Test func planWithoutJiraAndCommitRefused() throws {

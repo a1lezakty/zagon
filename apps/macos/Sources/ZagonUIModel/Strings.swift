@@ -127,6 +127,8 @@ enum Strings {
         "jira.statusOk": "Status matches: “{0}”.", "jira.statusDiff": "Status differs: Jira says “{0}”.",
         "jira.unlogged": "Logged {0} of {1}: {2} not logged yet, it goes into the evening plan.",
         "jira.allLogged": "All time is logged: {0}.", "jira.none": "Not in Jira, kept in Zagon only.",
+        "filter.review": "In review · {0}", "filter.jira": "More in Jira · {0}",
+        "tasks.noWork": "No tasks worked on in the last 7 days. Your other Jira issues are under “More in Jira”.",
 
         "worklog.title": "What to log — {0}", "worklog.yourTime": "your work time",
         "worklog.sessions": "sessions worked (in parallel)", "worklog.inJira": "already in Jira today",
@@ -272,6 +274,8 @@ enum Strings {
         "jira.statusOk": "Статус совпадает: «{0}».", "jira.statusDiff": "Статус расходится: в Jira «{0}».",
         "jira.unlogged": "Залогировано {0} из {1} — {2} ещё не залогированы, они попадут в вечерний план.",
         "jira.allLogged": "Всё время залогировано: {0}.", "jira.none": "Задачи нет в Jira — она только в Zagon.",
+        "filter.review": "На проверке · {0}", "filter.jira": "Ещё в Jira · {0}",
+        "tasks.noWork": "За 7 дней работы ни по одной задаче. Остальные задачи Jira — в «Ещё в Jira».",
 
         "worklog.title": "Что логировать — {0}", "worklog.yourTime": "твоё рабочее время",
         "worklog.sessions": "сессии работали (параллельно)", "worklog.inJira": "уже в Jira за сегодня",

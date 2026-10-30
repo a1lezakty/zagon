@@ -8,11 +8,18 @@ import Darwin
 
 /// What `task list` / `task show` / `log plan` show, as data (JSON, Mac app) and as short text (CLI, MCP).
 public struct TaskListLine: Codable, Sendable {
+    /// `id` 0: one of your open Jira issues that is no task here yet (`--all` only).
     public var task: TaskItem
     public var sessions: Int
     /// Worked time (on the chosen base) and session time over the last 7 days.
     public var weekSec: Double
     public var weekSessionSec: Double
+    /// In the main list: worked on in the last 7 days (time, a link reaching into them, your Jira worklogs, TODO /
+    /// notes / what was done of those days, an open TODO), or an own task that is not done since before then. False:
+    /// in Jira, no work here then. nil (a zagon before 0.1.1) = true.
+    public var worked: Bool?
+    /// The issue's Jira status as last read (`JiraCache`).
+    public var jiraStatus: String?
 }
 
 public struct TaskCard: Codable, Sendable {
@@ -24,6 +31,8 @@ public struct TaskCard: Codable, Sendable {
     public var done: [TaskDone]
     public var sessions: [TaskLink]
     public var jira: JiraIssue?
+    /// That Jira status as a status here (`[jira] review_statuses`).
+    public var jiraStatusHere: TaskStatus?
     /// Your worklogs on the Jira issue, all time.
     public var jiraLoggedSec: Double?
     /// Jira is configured but failed (or the issue was not found: then `jira` is nil and this says so).
@@ -31,15 +40,54 @@ public struct TaskCard: Codable, Sendable {
 }
 
 extension Tasks {
-    public func overview(status: TaskStatus? = nil, limit: Int = 100, base: TaskTime.Base = .sessions, idleGap: Double = 20 * 60,
-                         now: Timestamp = Time.now()) throws -> [TaskListLine] {
+    /// The task list: tasks worked on in the last 7 days first (most time first); `all` adds the rest, also your open
+    /// Jira issues that are no task here (`JiraCache`, as last read).
+    public func overview(status: TaskStatus? = nil, all: Bool = false, limit: Int = 100, base: TaskTime.Base = .sessions,
+                         idleGap: Double = 20 * 60, now: Timestamp = Time.now()) throws -> [TaskListLine] {
         let today = Time.dayString(now)
         let from = Time.dayBounds(Time.addDays(today, -6) ?? today)?.start ?? now - 7 * 86400
         let time = try TaskTime.compute(store, from: from, to: now, idleGap: idleGap, base: base)
-        return try list(status: status).prefix(limit).map { t in
-            TaskListLine(task: t, sessions: try links(t.id).filter { $0.how != LinkHow.unlinked.rawValue }.count,
-                         weekSec: time.lines[t.id]?.userSec ?? 0, weekSessionSec: time.lines[t.id]?.sessionSec ?? 0)
+        let cache = JiraCache.load(store)
+        var busy = Set<Int>()
+        try db.query("""
+            SELECT ts.task_id FROM task_session ts JOIN session s ON s.id = ts.session_id
+            WHERE ts.how NOT IN ('unlinked', 'suggested') AND s.last_at >= ?1 AND ts."end" > ?1
+            UNION SELECT task_id FROM task_todo WHERE created >= ?1 OR done = 0 UNION SELECT task_id FROM task_note WHERE created >= ?1
+            UNION SELECT task_id FROM task_done WHERE day >= ?2
+            """, [.real(from), .text(Time.dayString(from))]) { busy.insert($0.int(0)) }
+        var lines = try list().map { t in
+            let sec = time.lines[t.id]?.userSec ?? 0, sessionSec = time.lines[t.id]?.sessionSec ?? 0
+            let worked = sec > 0 || sessionSec > 0 || busy.contains(t.id) || t.jiraKey.map(cache.logged.contains) == true
+                || (t.jiraKey == nil && !(t.status == .done && t.updated < from))
+            return TaskListLine(task: t, sessions: try links(t.id).filter { $0.how != LinkHow.unlinked.rawValue }.count,
+                                weekSec: sec, weekSessionSec: sessionSec, worked: worked, jiraStatus: t.jiraKey.flatMap { cache.issues[$0]?.status })
         }
+        if all {
+            let here = Set(lines.flatMap { [$0.task.key, $0.task.jiraKey].compactMap { $0 } })
+            for k in cache.mine.sorted() where !here.contains(k) {
+                guard let i = cache.issues[k], i.statusCategory != "done" else { continue }
+                let t = TaskItem(id: 0, key: k, title: i.summary, status: TaskStatus(jira: i, review: cache.review), jiraKey: k, created: 0, updated: 0)
+                lines.append(TaskListLine(task: t, sessions: 0, weekSec: 0, weekSessionSec: 0, worked: false, jiraStatus: i.status))
+            }
+        }
+        let shown = lines.filter { (all || $0.worked == true) && (status == nil || $0.task.status == status) }
+        // Stable: `list()` is newest change first.
+        let worked = shown.filter { $0.worked == true }.enumerated().sorted { ($0.element.weekSec, -$0.offset) > ($1.element.weekSec, -$1.offset) }
+        return Array((worked.map(\.element) + shown.filter { $0.worked != true }).prefix(limit))
+    }
+
+    /// One of your Jira issues that is no task here (as last read), as a task with id 0: to show, not to edit.
+    public func jiraOnly(_ ref: String) -> TaskItem? {
+        let cache = JiraCache.load(store), k = ref.uppercased()
+        guard cache.mine.contains(k), let i = cache.issues[k] else { return nil }
+        return TaskItem(id: 0, key: k, title: i.summary, status: TaskStatus(jira: i, review: cache.review), jiraKey: k, created: 0, updated: 0)
+    }
+
+    /// A task to change: the task, or one of your Jira issues (as last read) made a task (at `at`).
+    public func findOrAdopt(_ ref: String, at: Timestamp = Time.now()) throws -> TaskItem? {
+        if let t = try find(ref) { return t }
+        guard let j = jiraOnly(ref) else { return nil }
+        return try add(title: j.title.isEmpty ? j.key : j.title, key: j.key, status: j.status, at: at)
     }
 
     /// Everything about one task; Jira (if given) adds its status and your logged time, its failure is reported in
@@ -58,6 +106,7 @@ extension Tasks {
             do {
                 let me = try jira.accountId()
                 c.jira = try jira.issue(k)
+                c.jiraStatusHere = c.jira.map { TaskStatus(jira: $0, review: jira.config.reviewStatuses) }
                 if c.jira == nil { c.jiraError = "issue \(k) not found in Jira" }
                 else { c.jiraLoggedSec = Double(try jira.worklogs(issue: k, startedAfter: 0).filter { $0.accountId == me }.reduce(0) { $0 + $1.seconds }) }
             } catch { c.jiraError = "\(error)" }
@@ -70,12 +119,20 @@ public enum TaskText {
     static func label(_ base: TaskTime.Base) -> String { base == .user ? "you" : "worked" }
     static func pad(_ s: String, _ w: Int) -> String { s.count >= w ? String(s.prefix(w)) : s + String(repeating: " ", count: w - s.count) }
 
-    public static func list(_ lines: [TaskListLine], base: TaskTime.Base = .sessions) -> String {
-        guard !lines.isEmpty else { return "No tasks." }
-        return lines.map { l in
+    /// `lines` as `overview(all: true)` gives them: without `all` only the worked ones, and how many more there are.
+    public static func list(_ lines: [TaskListLine], base: TaskTime.Base = .sessions, all: Bool = false, limit: Int = .max,
+                            more: String = "task list --all") -> String {
+        func line(_ l: TaskListLine) -> String {
             "\(pad(l.task.key, 10)) \(pad(l.task.status.rawValue, 11)) \(label(base)) 7d \(pad(Txt.dur(l.weekSec), 7)) "
-                + "\(l.sessions) sessions  \(Txt.oneLine(l.task.title, 70))"
-        }.joined(separator: "\n")
+                + "\(l.sessions) sessions  \(Txt.oneLine(l.task.title, 70))" + (l.jiraStatus.map { "  · Jira \"\($0)\"" } ?? "")
+                + (l.task.id == 0 ? "  (not a task here yet)" : "")
+        }
+        let worked = lines.filter { $0.worked != false }, rest = lines.filter { $0.worked == false }
+        let open = rest.filter { $0.task.status != .done }.count
+        var out = worked.isEmpty ? ["No tasks worked on in the last 7 days."] : worked.prefix(limit).map(line)
+        if all, !rest.isEmpty { out += ["In Jira, no work here in the last 7 days:"] + rest.prefix(limit).map(line) }
+        else if !all, open > 0 { out.append("+ \(open) more open in Jira with no work here in the last 7 days: \(more)") }
+        return out.joined(separator: "\n")
     }
 
     public static func card(_ c: TaskCard, base: TaskTime.Base = .sessions, jiraConnected: Bool = false) -> String {
@@ -87,7 +144,7 @@ public enum TaskText {
                    + c.time.weekPct.sorted { $0.key < $1.key }.map { " · \($0.key) week \(Txt.pct($0.value))" }.joined())
         if let k = t.jiraKey {
             if let i = c.jira {
-                out.append("jira: \(k) \"\(i.status)\"" + (t.status.jiraCategory == i.statusCategory ? "" : " (here \(t.status.rawValue))")
+                out.append("jira: \(k) \"\(i.status)\"" + (c.jiraStatusHere.map { $0 == t.status } ?? true ? "" : " (here \(t.status.rawValue))")
                            + (c.jiraLoggedSec.map { " · you logged \(Txt.dur($0)) of \(Txt.dur(c.time.userSec)) worked" } ?? ""))
             } else if let e = c.jiraError { out.append("jira: \(k): \(e)") }
             else { out.append("jira: \(k)" + (jiraConnected ? "" : " (Jira not connected)")) }
