@@ -16,9 +16,9 @@ public final class Store {
         // A newer zagon migrated this database (e.g. before `mv zagon.prev zagon`): writing to it with an older schema
         // would corrupt it, so refuse before any write.
         let v = try db.one("PRAGMA user_version") { $0.int(0) } ?? 0
-        guard v <= Schema.migrations.count else {
+        guard v <= Store.schemaVersion else {
             throw StoreError(description: "\(path): the database is newer than this zagon (schema v\(v) > "
-                             + "v\(Schema.migrations.count)): update zagon or put the newer version back")
+                             + "v\(Store.schemaVersion)): update zagon or put the newer version back")
         }
         try db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")
         try migrate()
