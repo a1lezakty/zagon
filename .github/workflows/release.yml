@@ -144,11 +144,43 @@ jobs:
             apps/macos/build/appcast.xml
           if-no-files-found: error
 
+  # Every release file, checked, plus SHA256SUMS: one artifact, on manual runs too.
+  bundle:
+    needs: [version, linux, macos]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos
+          path: assets
+      - name: Check the files, SHA256SUMS
+        working-directory: assets
+        run: |
+          for f in zagon-linux-x86_64 zagon-linux-aarch64 Zagon.dmg Zagon.zip appcast.xml; do
+            [ -s "$f" ] || { echo "::error::$f is missing"; exit 1; }
+          done
+          if ! grep -q 'sparkle:edSignature="' appcast.xml || ! grep -qF "/releases/download/v$VERSION/Zagon.zip" appcast.xml; then
+            echo "::error::appcast.xml is not signed or points to another release"; exit 1
+          fi
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: assets/
+          if-no-files-found: error
+
   # Installed copies read releases/latest: zagon update and install.sh take SHA256SUMS and the binary, Zagon.app takes
   # appcast.xml. So the release is published (not a draft or prerelease) and checked to be `latest` with every file.
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [version, notes, linux, macos]
+    needs: [version, notes, bundle]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -159,32 +191,28 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: linux
-          path: assets
-      - uses: actions/download-artifact@v4
-        with:
-          name: macos
+          name: release-files
           path: assets
       - uses: actions/download-artifact@v4
         with:
           name: notes
-      - name: Check the files, SHA256SUMS
-        working-directory: assets
-        run: |
-          for f in zagon-linux-x86_64 zagon-linux-aarch64 Zagon.dmg Zagon.zip appcast.xml; do
-            [ -s "$f" ] || { echo "::error::$f is missing"; exit 1; }
-          done
-          if ! grep -q 'sparkle:edSignature="' appcast.xml || ! grep -qF "/releases/download/$GITHUB_REF_NAME/Zagon.zip" appcast.xml; then
-            echo "::error::appcast.xml is not signed or points to another release"; exit 1
-          fi
-          sha256sum -- * > SHA256SUMS
-          cat SHA256SUMS
+      # gh creates it as a draft, uploads, then publishes; never --draft / --prerelease, those are not `latest`.
+      # A re-run after a failed check finds the release and only re-uploads.
       - name: Publish
-        run: gh release create "$GITHUB_REF_NAME" assets/* --title "Zagon $VERSION" --notes-file notes.md --verify-tag --latest
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" assets/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" assets/* --title "Zagon $VERSION" --notes-file notes.md --verify-tag --latest
+          fi
       - name: Check that releases/latest is this release, with appcast.xml
         run: |
-          gh api "repos/$GH_REPO/releases/latest" | jq -e --arg t "$GITHUB_REF_NAME" '.tag_name == $t and (.draft | not)
-            and (.prerelease | not) and ([.assets[].name] | index("appcast.xml") and index("SHA256SUMS"))' > /dev/null ||
-            { echo "::error::releases/latest is not $GITHUB_REF_NAME with appcast.xml and SHA256SUMS"; exit 1; }
-          curl -fsSL -o /dev/null "https://github.com/$GH_REPO/releases/latest/download/appcast.xml"
-          curl -fsSL "https://github.com/$GH_REPO/releases/latest/download/SHA256SUMS" | grep -q zagon-linux-x86_64
+          for _ in 1 2 3 4 5; do
+            gh api "repos/$GH_REPO/releases/latest" | jq -e --arg t "$GITHUB_REF_NAME" \
+              '.tag_name == $t and ([.assets[].name] | index("appcast.xml") and index("SHA256SUMS"))' > /dev/null &&
+              curl -fsSL -o /dev/null "https://github.com/$GH_REPO/releases/latest/download/appcast.xml" &&
+              curl -fsSL "https://github.com/$GH_REPO/releases/latest/download/SHA256SUMS" | grep -q zagon-linux-x86_64 &&
+              exit 0
+            sleep 10
+          done
+          echo "::error::releases/latest is not $GITHUB_REF_NAME with appcast.xml and SHA256SUMS"; exit 1

@@ -28,8 +28,8 @@ only, and each must be higher than the last: Sparkle compares the build number (
 
 ## Try the workflow without releasing
 
-Actions → release → Run workflow, with a `version` such as `0.0.0`. It builds every artifact and uploads them to the
-run; nothing is published.
+Actions → release → Run workflow, with a `version` such as `0.0.0`. It builds and checks every file and uploads them
+with `SHA256SUMS` to the run as the artifact `release-files`; nothing is published.
 
 ## The Sparkle key
 
