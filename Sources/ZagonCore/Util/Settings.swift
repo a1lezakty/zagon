@@ -83,6 +83,16 @@ public enum Settings {
         guard Sys.writeFile(paths.config, Array(new.utf8), mode: 0o600) else { throw SettingsError("cannot write \(paths.config)") }
     }
 
+    /// Writes `[summary] time` (nil = off), keeping every other line; the service reads it on its next tick.
+    public static func setSummaryTime(_ paths: ZagonPaths, _ at: String?) throws {
+        if let at, NotifyConfig.clock(at) == nil { throw SettingsError("the time must be HH:MM (00:00-23:59) or off") }
+        let cur = Sys.readFile(paths.config).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        let new = TOMLLite.setting(cur, section: "summary", key: "time", to: at ?? "")
+        guard new != cur else { return }
+        Sys.mkdirs(paths.dir)
+        guard Sys.writeFile(paths.config, Array(new.utf8), mode: 0o600) else { throw SettingsError("cannot write \(paths.config)") }
+    }
+
     /// Replaces this process with a fresh run of the same command (same pid), `TZ` as it was at start: a service
     /// that must follow a new zone, which cannot be switched under running threads. Returns only on failure.
     public static func restart() {

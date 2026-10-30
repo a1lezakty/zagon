@@ -93,6 +93,11 @@ public final class ExportImport {
             guard let host = v["host"]?.string, let cwd = v["cwd"]?.string, let project = v["project"]?.string else { return }
             try db.run("INSERT OR REPLACE INTO dir_project(host, cwd, project, home, seq) VALUES(?, ?, ?, ?, 0)",
                        [.text(host), .text(cwd), .text(project), .int(v["home"] == .bool(true) ? 1 : 0)])
+        case "summary":
+            guard let day = v["day"]?.string, let engine = v["engine"]?.string, let text = v["text"]?.string,
+                  let created = v["created"]?.double else { return }
+            try db.run("INSERT OR REPLACE INTO summary(day, engine, text, created) VALUES(?, ?, ?, ?)",
+                       [.text(day), .text(engine), .text(text), .real(created)])
         case "limit":
             guard let tool = v["tool"]?.string.flatMap(ToolKind.init), let w = v["window"]?.string,
                   let pct = v["used_pct"]?.double, let ts = v["ts"]?.double else { return }

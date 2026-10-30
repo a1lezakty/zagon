@@ -112,7 +112,7 @@ extension Query {
             if d.weekPctStart == nil { d.weekPctStart = row.real(0) }
             d.weekPctEnd = row.real(0)
         }
-        d.summary = try db.one("SELECT engine, text, created FROM summary WHERE day = ? ORDER BY created DESC LIMIT 1",
+        d.summary = try db.one("SELECT engine, text, created FROM summary WHERE day = ? ORDER BY engine = 'none', created DESC LIMIT 1",
                                [.text(day)]) { StoredSummary(engine: $0.text(0) ?? "", text: $0.text(1) ?? "", created: $0.real(2)) }
         return d
     }

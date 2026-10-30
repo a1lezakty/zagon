@@ -28,9 +28,13 @@ struct DaemonCommand: ParsableCommand {
                     Daemon.startArchiver(dbPath: common.dataDir + "/zagon.db", dir: common.dataDir + "/archive", log: { log.write($0) })
                 }
                 guard !noNotify else { return }
-                if !Daemon.startNotifier(dbPath: common.dataDir + "/zagon.db", paths: paths, config: config,
-                                         claudeRoot: common.claudeDir, log: { log.write($0) }) {
-                    log.write("notify: off (no channel configured)")
+                let notifies = Daemon.startNotifier(dbPath: common.dataDir + "/zagon.db", paths: paths, config: config,
+                                                    claudeRoot: common.claudeDir, log: { log.write($0) })
+                if !notifies { log.write("notify: off (no channel configured)") }
+                // The day summary is written at its time even when no message carries it.
+                if !(notifies && config.enabled) {
+                    Daemon.startSummaryWriter(dbPath: common.dataDir + "/zagon.db", paths: paths, config: config,
+                                              claudeRoot: common.claudeDir, log: { log.write($0) })
                 }
             }
         } catch {

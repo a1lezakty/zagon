@@ -237,7 +237,10 @@ final class ReportTools {
     }
 
     func summary(_ d: String) throws -> String? {
-        try store.db.one("SELECT text FROM summary WHERE day=? ORDER BY created DESC LIMIT 1", [.text(d)]) { $0.text(0) } ?? nil
+        // One written by an AI over one made without; a stored doc as Markdown, free text from before as it is.
+        let t = try store.db.one("SELECT text FROM summary WHERE day=? ORDER BY engine = 'none', created DESC LIMIT 1",
+                                 [.text(d)]) { $0.text(0) } ?? nil
+        return t.map { SummaryDoc.decode($0)?.text(markdown: true) ?? $0 }
     }
 
     func week(_ a: MCPArgs) throws -> String {
