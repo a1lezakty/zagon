@@ -4,7 +4,6 @@ import ZagonUIModel
 
 struct SettingsScreen: View {
     @EnvironmentObject private var app: AppState
-    @State private var diagResult: String?
     /// The summary time being typed; nil = the file's.
     @State private var summaryTime: String?
     @State private var summaryTimeBad = false
@@ -30,11 +29,13 @@ struct SettingsScreen: View {
                     Text(f.t("connect.onlyApp")).foregroundColor(Z.muted)
                 }
                 HStack(spacing: 8) {
-                    let busy = app.cliBusy
-                    PillButton(title: busy ? f.t("connect.busy") : f.t("connect.button"), primary: true) { app.runCLI("install") }
-                    PillButton(title: busy ? f.t("connect.busy") : f.t("connect.remove")) { app.runCLI("uninstall") }
-                    PillButton(title: busy ? f.t("connect.busy") : f.t("connect.check")) { app.runCLI(nil) }
+                    let busy = app.cliBusy, running = app.cliCommand
+                    PillButton(title: busy && running == "install" ? f.t("connect.connecting") : f.t("connect.button"), primary: true,
+                               busy: busy && running == "install") { app.runCLI("install") }
+                    PillButton(title: f.t("connect.remove"), busy: busy && running == "uninstall") { app.runCLI("uninstall") }
+                    PillButton(title: f.t("connect.check"), busy: busy && running == nil) { app.runCLI(nil) }
                 }
+                .disabled(app.cliBusy)
                 if let e = app.cliError {
                     Text(f.t("connect.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad)
                         .fixedSize(horizontal: false, vertical: true)
@@ -140,12 +141,7 @@ struct SettingsScreen: View {
                 Text(f.t("settings.diag")).font(.system(size: 15, weight: .semibold))
                 Text(f.t("settings.diag.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 12) {
-                    PillButton(title: f.t("settings.diag.collect")) { collect(f) }
-                    if let diagResult {
-                        Text(diagResult).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1).truncationMode(.middle)
-                    }
-                }
+                PillButton(title: f.t("settings.diag.collect")) { collect(f) }
             }
             .frame(maxWidth: 640, alignment: .leading)
         }
@@ -205,10 +201,9 @@ struct SettingsScreen: View {
     func collect(_ f: Fmt) {
         do {
             let zip = try app.collectDiagnostics()
-            diagResult = f.t("settings.diag.saved", Log.scrub(zip.path))
-            NSWorkspace.shared.activateFileViewerSelecting([zip])
+            app.say(f.t("settings.diag.saved"), reveal: zip, seconds: 10)
         } catch {
-            diagResult = f.t("settings.diag.failed", Log.scrub(String(describing: error)))
+            app.say(f.t("settings.diag.failed", Log.scrub(String(describing: error))), error: true)
         }
     }
 }

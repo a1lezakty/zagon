@@ -15,7 +15,7 @@ for arch in arm64 x86_64; do
 done
 
 app=build/Zagon.app
-rm -rf "$app" build/Zagon.dmg build/dmg
+rm -rf "$app" build/Zagon.dmg build/rw.dmg build/dmg build/AppIcon.iconset
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 lipo -create "${slices[@]}" -output "$app/Contents/MacOS/Zagon"
 lipo -info "$app/Contents/MacOS/Zagon"
@@ -38,12 +38,16 @@ lipo -create "${cli[@]}" -output "$app/Contents/Helpers/zagon"
 strip -x "$app/Contents/Helpers/zagon"
 codesign --force -s - "$app/Contents/Helpers/zagon"
 lipo -info "$app/Contents/Helpers/zagon"
+# The app draws its own icon (AppIconView): no image in the repository.
+"$app/Contents/MacOS/Zagon" --app-icon build/AppIcon.iconset
+iconutil -c icns build/AppIcon.iconset -o "$app/Contents/Resources/AppIcon.icns"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>Zagon</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIdentifier</key><string>dev.zagon.app</string>
   <key>CFBundleName</key><string>Zagon</string>
   <key>CFBundleDisplayName</key><string>Zagon</string>
@@ -74,6 +78,17 @@ codesign --verify --deep --strict --verbose=2 "$app"
 mkdir -p build/dmg
 cp -R "$app" build/dmg/
 ln -s /Applications build/dmg/Applications
-hdiutil create -volname Zagon -srcfolder build/dmg -ov -format UDZO build/Zagon.dmg
+# The volume's icon too: the file goes in with the rest (the image is sized to its contents), the flag is set on the
+# mounted volume where SetFile (Xcode tools) is around, as hdiutil does not carry a folder's flag over.
+cp "$app/Contents/Resources/AppIcon.icns" build/dmg/.VolumeIcon.icns
+hdiutil create -volname Zagon -srcfolder build/dmg -ov -format UDRW build/rw.dmg
 rm -rf build/dmg
+if setfile=$(xcrun --find SetFile 2>/dev/null); then
+  mnt=$PWD/build/mnt-rw
+  hdiutil attach build/rw.dmg -nobrowse -noautoopen -mountpoint "$mnt" >/dev/null
+  "$setfile" -a C "$mnt"
+  hdiutil detach "$mnt" >/dev/null || { sleep 2; hdiutil detach -force "$mnt" >/dev/null; }
+fi
+hdiutil convert build/rw.dmg -format UDZO -ov -o build/Zagon.dmg
+rm -f build/rw.dmg
 echo "built $app and build/Zagon.dmg ($version, $build)"

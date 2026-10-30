@@ -71,8 +71,6 @@ public struct SessionRowVM: Sendable, Identifiable, Equatable {
 public struct MainVM: Sendable {
     public var five: RingVM?
     public var week: RingVM?
-    /// Status item: label next to the dual-ring icon.
-    public var statusLabel: String
     public var forecast: Emphasis?
     public var waitingHeader: String
     public var waiting: [SessionRowVM]
@@ -88,7 +86,6 @@ public struct MainVM: Sendable {
         let limits = p.limits()
         five = limits.fiveHour.map { RingVM(title: f.t("limit.five"), window: $0, base: Palette.fiveHour, f: f) }
         week = limits.week.map { RingVM(title: f.t("limit.week"), window: $0, base: Palette.week, f: f) }
-        statusLabel = five.map { "\($0.pct)%" } ?? "–"
         forecast = limits.fiveHour.flatMap { MainVM.forecast($0, f) }
 
         let sessions = p.liveSessions().sorted { $0.since < $1.since }

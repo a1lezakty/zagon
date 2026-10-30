@@ -39,6 +39,8 @@ final class AppState: ObservableObject {
     /// Claude Code / Codex connection by the CLI inside Zagon.app (nil = not checked, or not running from the app).
     @Published var cli: Connect.Status?
     @Published private(set) var cliBusy = false
+    /// What runs while `cliBusy`: `install`, `uninstall`, nil = `doctor`.
+    private(set) var cliCommand: String?
     @Published private(set) var cliError: String?
     /// Tasks and the worklog plan: whose `zagon` answers (nil = the provider's own, the design sample) and what came
     /// back per source (`TaskSource.swift`).
@@ -79,6 +81,7 @@ final class AppState: ObservableObject {
             guard zoneID != oldValue else { return }
             if persist { UserDefaults.standard.set(zoneID, forKey: "timeZone") }
             rezone()
+            if persist { say(f.t("zone.changed", zone.identifier)) }
         }
     }
     var zone: TimeZone { zoneID.flatMap(TimeZone.init(identifier:)) ?? .autoupdatingCurrent }
@@ -107,7 +110,45 @@ final class AppState: ObservableObject {
         set { objectWillChange.send(); updater?.updater.automaticallyChecksForUpdates = newValue }
     }
 
-    func checkForUpdates() { updater?.checkForUpdates(nil) }
+    /// A check the user asked for: its result comes back as a toast (`UpdateReminders`), and Sparkle's window opens in
+    /// front of the other apps.
+    private var checkingUpdates = false
+    func checkForUpdates() {
+        guard let updater else { return }
+        checkingUpdates = true
+        NSApp.activate(ignoringOtherApps: true)
+        updater.checkForUpdates(nil)
+    }
+
+    /// `quiet`: the session ended without a result; only forget the check.
+    func updateChecked(found: String?, error: String?, quiet: Bool = false) {
+        guard checkingUpdates else { return }
+        checkingUpdates = false
+        if quiet { return }
+        if let error { say(f.t("update.failed", error), error: true) }
+        else if let found { say(f.t("update.found", found)) }
+        else { say(f.t("update.latest", Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev")) }
+    }
+
+    @Published var toast: Toast?
+
+    /// The one place results are shown (a VoiceOver announcement belongs here too).
+    func say(_ text: String, error: Bool = false, reveal: URL? = nil, revealTitle: String? = nil, seconds: Double = 4) {
+        let t = Toast(text: text, error: error, reveal: reveal, revealTitle: revealTitle)
+        toast = t
+        guard !error else { return }
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            if self?.toast?.id == t.id { self?.toast = nil }
+        }
+    }
+
+    /// Until "Got it": the window says where Zagon lives.
+    @Published var welcome = false
+    func welcomeDone() {
+        welcome = false
+        UserDefaults.standard.set(true, forKey: "welcomeDone")
+    }
 
     /// The last pull of a checked server worked (grey until the first one did); the samples have no store.
     func serverOnline(_ alias: String) -> Bool { store?.serverOnline(alias) ?? true }
@@ -158,7 +199,8 @@ final class AppState: ObservableObject {
                 let reminders = UpdateReminders()
                 reminders.app = state
                 state.reminders = reminders
-                state.updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: reminders)
+                state.updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: reminders,
+                                                             userDriverDelegate: reminders)
             }
             // The Mac moved to another zone while running: "System" follows it.
             NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak state] _ in
@@ -183,7 +225,8 @@ final class AppState: ObservableObject {
             }
             let home = NSHomeDirectory()
             state.localTools = [home + "/.claude", home + "/.codex"].contains { FileManager.default.fileExists(atPath: $0) }
-            state.runCLI(nil)
+            state.runCLI(nil, quiet: true)
+            state.welcome = !d.bool(forKey: "welcomeDone")
             do { state.notify = try NotifySettings.load(NotifySettings.configPath) } catch {
                 state.notifyError = Log.scrub(String(describing: error))
             }
@@ -248,12 +291,17 @@ final class AppState: ObservableObject {
         } catch {
             notifyError = Log.scrub(String(describing: error))
             Log.shared.write("config.toml not saved: \(notifyError ?? "")")
+            say(f.t("settings.notify.failed", notifyError ?? ""), error: true)
         }
     }
+
+    /// Servers just checked: the pull that includes one says whether it answered.
+    private var awaitingHosts: Set<String> = []
 
     func setRemote(_ host: String, on: Bool) {
         remoteHosts = on ? remoteHosts + [host] : remoteHosts.filter { $0 != host }
         UserDefaults.standard.set(remoteHosts, forKey: "remoteHosts")
+        if on { awaitingHosts.insert(host) } else { awaitingHosts.remove(host) }
         guard let store else { return }
         // Unchecked: its sessions and days leave the numbers now, not only stop updating.
         if !on { store.dropServer(host) { [weak self] in self?.revision += 1 } }
@@ -339,13 +387,19 @@ final class AppState: ObservableObject {
     }
 
     /// `install` / `uninstall`, then `doctor`; nil = only `doctor`. Off the main thread (the login shell and the CLI).
-    func runCLI(_ command: String?) {
+    /// The result shows as a toast unless `quiet` (the check at launch).
+    func runCLI(_ command: String?, quiet: Bool = false) {
         guard let bin = Self.cliPath, !cliBusy else { return }
         if command == "install", Connect.temporaryLocation(Bundle.main.bundlePath) {
             cliError = f.t("connect.moveFirst")
+            // From the DMG, Finder shows where to drag it from; a translocated copy is a hidden folder, not worth showing.
+            let dmg = Bundle.main.bundlePath.hasPrefix("/Volumes/")
+            say(f.t("connect.failedInstall", f.t("connect.moveFirst")), error: true, reveal: dmg ? Bundle.main.bundleURL : nil,
+                revealTitle: f.t("connect.revealApp"))
             return
         }
         if let command { connectDismissed = command == "uninstall" }
+        cliCommand = command
         cliBusy = true
         cliError = nil
         Task.detached {
@@ -359,8 +413,17 @@ final class AppState: ObservableObject {
                 if command != nil { self.cliError = error }
                 if status == nil, self.cliError == nil { self.cliError = self.f.t("connect.noDoctor") }
                 self.cliBusy = false
+                if !quiet { self.reportCLI(command, status) }
             }
         }
+    }
+
+    private func reportCLI(_ command: String?, _ status: Connect.Status?) {
+        if let e = cliError { return say(f.t(command == "install" ? "connect.failedInstall" : "connect.failed", e), error: true) }
+        guard let status else { return }
+        if command == "uninstall" { return say(f.t("connect.removed")) }
+        if !status.missing.isEmpty { return say(f.t("connect.missing", status.missing.joined(separator: ", ")), error: true) }
+        if command == "install" { say(f.t("connect.done"), seconds: 8) } else { say(f.t("connect.checked")) }
     }
 
     /// A server that fails only gets a grey dot; the next attempt comes on schedule.
@@ -372,10 +435,19 @@ final class AppState: ObservableObject {
         guard force || (!remoteHosts.isEmpty && Date().timeIntervalSince(lastPull) >= (windowOpen ? 30 : 180)) else { return }
         pulling = true
         lastPull = Date()
-        p.pull(remoteHosts) { [weak self] changed in
+        let hosts = remoteHosts
+        p.pull(hosts) { [weak self] changed in
             guard let self else { return }
             self.pulling = false
             if changed { self.revision += 1 }
+            for h in self.awaitingHosts.intersection(hosts) {
+                self.awaitingHosts.remove(h)
+                if let e = self.hostErrors[h] {
+                    self.say(e == Remote.oldZagon ? h + ": " + self.f.t("servers.oldZagon") : self.f.t("servers.failed", h, e), error: true)
+                } else {
+                    self.say(self.f.t("servers.ok", h))
+                }
+            }
             if self.pullAgain {
                 self.pullAgain = false
                 self.pullServers(p, force: true)
@@ -409,40 +481,43 @@ enum Entry {
             Snapshots.render(to: URL(fileURLWithPath: value("--snapshots") ?? "build/snapshots"), fixtures: value("--fixtures"))
             return
         }
+        if let dir = value("--app-icon") { exit(AppIcon.iconset(URL(fileURLWithPath: dir)) ? 0 : 1) }
         ZagonApp.main()
     }
 }
 
 struct ZagonApp: App {
-    @StateObject private var state = AppState.local()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @StateObject private var state = AppDelegate.state
 
     var body: some Scene {
         MenuBarExtra {
             MainPanel().environmentObject(state).preferredColorScheme(.dark)
         } label: {
             // ponytail: rebuilt on every AppState change; give the status item its own observable if that shows in a profile
-            let vm = MainVM(state.provider, state.f)
-            Image(nsImage: statusIcon(vm, mono: state.monoIcon))
-            Text(vm.statusLabel)
+            Image(nsImage: statusIcon(state))
         }
         .menuBarExtraStyle(.window)
-
-        Window("Zagon", id: "main") {
-            WindowRoot().environmentObject(state).preferredColorScheme(.dark)
-                .frame(minWidth: 980, minHeight: 620)
-        }
-        .defaultSize(width: 1280, height: 860)
     }
 }
 
-/// Two rings for the status item, rasterised because a menu bar label shows only images and text. Monochrome is a
-/// template image (the menu bar tints it); the rings then differ by shape: a thin outer week, a thick inner 5 hours.
+/// The status item, rasterised because a menu bar label shows only images and text. Monochrome without a warning is
+/// a template image (the menu bar tints it); otherwise it is drawn in the bar's text colour. 1x screens get the numbers
+/// beside the rings.
 @MainActor
-func statusIcon(_ vm: MainVM, mono: Bool) -> NSImage {
-    let r = ImageRenderer(content: RingsIcon(five: vm.five, week: vm.week, mono: mono))
-    r.scale = NSScreen.main?.backingScaleFactor ?? 2
-    let image = r.nsImage ?? NSImage(size: NSSize(width: 16, height: 16))
-    image.isTemplate = mono
+func statusIcon(_ app: AppState) -> NSImage {
+    let vm = MainVM(app.provider, app.f)
+    let five = vm.five?.pct, week = vm.week?.pct
+    let scale = NSScreen.main?.backingScaleFactor ?? 2
+    let template = app.monoIcon && max(five ?? 0, week ?? 0) < 80
+    let tint: Color = template ? .black : StatusButton.dark ? .white : .black.opacity(0.85)
+    let r = ImageRenderer(content: MenuBarLabel(five: five, week: week, colored: !app.monoIcon, beside: scale < 2, tint: tint))
+    r.scale = scale
+    let image = r.nsImage ?? NSImage(size: NSSize(width: 40, height: 18))
+    image.isTemplate = template
+    let pct = { (p: Int?) in p.map { app.f.t("num.pct", "\($0)") } ?? "–" }
+    StatusButton.button?.toolTip = app.f.t("menubar.tip", pct(five), pct(week))
+    StatusButton.watch { [weak app] in app?.objectWillChange.send() }
     return image
 }
 
@@ -465,29 +540,9 @@ struct Ring: View {
     }
 }
 
-struct RingsIcon: View {
-    let five: RingVM?
-    let week: RingVM?
-    var mono = false
-    var body: some View {
-        ZStack {
-            if mono {
-                Ring(fraction: week?.fraction ?? 0, color: .black, size: 16, line: 1.2, inset: 0.9, track: .black.opacity(0.25))
-                Ring(fraction: five?.fraction ?? 0, color: .black, size: 16, line: 2.8, inset: 4.4, track: .black.opacity(0.25))
-            } else {
-                Ring(fraction: week?.fraction ?? 0, color: Color(hex: week?.color ?? Palette.week), size: 16, line: 2, inset: 1.5,
-                     track: Color(hex: 0x3A3A40))
-                Ring(fraction: five?.fraction ?? 0, color: Color(hex: five?.color ?? Palette.fiveHour), size: 16, line: 2,
-                     inset: 4.8, track: Color(hex: 0x3A3A40))
-            }
-        }
-        .frame(width: 16, height: 16)
-    }
-}
-
 /// Zagon has no Dock icon, so the alert of an update found by the daily check opens behind other apps' windows: the
 /// panel offers the update too (Sparkle's gentle reminders). Sparkle holds its delegate weakly; AppState keeps this.
-final class UpdateReminders: NSObject, SPUStandardUserDriverDelegate {
+final class UpdateReminders: NSObject, SPUStandardUserDriverDelegate, SPUUpdaterDelegate {
     weak var app: AppState?
     var supportsGentleScheduledUpdateReminders: Bool { true }
 
@@ -498,6 +553,25 @@ final class UpdateReminders: NSObject, SPUStandardUserDriverDelegate {
     func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) { found(nil) }
     func standardUserDriverWillFinishUpdateSession() { found(nil) }
 
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        let v = item.displayVersionString
+        MainActor.assumeIsolated { app?.updateChecked(found: v, error: nil) }
+    }
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
+        MainActor.assumeIsolated { app?.updateChecked(found: nil, error: nil) }
+    }
+    func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {
+        let e = error as NSError
+        guard e.code != 1001 else { return }  // SUNoUpdateError: updaterDidNotFindUpdate says it
+        MainActor.assumeIsolated { app?.updateChecked(found: nil, error: e.localizedDescription) }
+    }
+    /// After every cycle, also one that a check only brought forward (no result callback then): forget the check.
+    /// The selector is spelled out, so a mismatch fails the build instead of never being called.
+    @objc(updater:didFinishUpdateCycleForUpdateCheck:error:)
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
+        MainActor.assumeIsolated { app?.updateChecked(found: nil, error: nil, quiet: true) }
+    }
+
     // Sparkle calls its user driver's delegate on the main thread.
     private func found(_ version: String?) { MainActor.assumeIsolated { app?.updateFound = version } }
 }
@@ -506,7 +580,6 @@ final class UpdateReminders: NSObject, SPUStandardUserDriverDelegate {
 
 struct MainPanel: View {
     @EnvironmentObject private var app: AppState
-    @Environment(\.openWindow) private var openWindow
     @Environment(\.isSnapshot) private var snapshot
     @State private var showIdle = false
 
@@ -529,14 +602,13 @@ struct MainPanel: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Banner.blue(Emphasis(before: f.t("connect.banner")))
                     HStack(spacing: 8) {
-                        PillButton(title: app.cliBusy ? f.t("connect.busy") : f.t("connect.button"), primary: true, expand: true) {
+                        let installing = app.cliBusy && app.cliCommand == "install"
+                        PillButton(title: installing ? f.t("connect.connecting") : f.t("connect.button"), primary: true, expand: true,
+                                   busy: installing) {
                             app.runCLI("install")
                         }
-                        PillButton(title: f.t("connect.notNow")) { app.connectDismissed = true }
-                    }
-                    if let e = app.cliError {
-                        Text(f.t("connect.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad)
-                            .fixedSize(horizontal: false, vertical: true)
+                        .disabled(app.cliBusy)
+                        PillButton(title: f.t("connect.notNow")) { app.connectDismissed = true }.disabled(app.cliBusy)
                     }
                 }
             }
@@ -545,6 +617,7 @@ struct MainPanel: View {
                 SessionsBlock(vm: vm, showIdle: $showIdle)
             }
             TotalsBlock(vm: vm)
+            ToastView()
             HStack(spacing: 8) {
                 PillButton(title: f.t("main.openWindow"), primary: true, expand: true) { open(nil) }
                 PillButton(title: f.t("main.daySummary"), expand: true) { open(.day) }
@@ -576,8 +649,7 @@ struct MainPanel: View {
             app.screen = screen
             app.day = app.homeDay
         }
-        openWindow(id: "main")
-        NSApp.activate(ignoringOtherApps: true)
+        MainWindow.shared.show(app)
     }
 }
 
@@ -703,6 +775,7 @@ struct SessionsBlock: View {
 struct WaitingRow: View {
     let s: SessionRowVM
     @EnvironmentObject private var app: AppState
+    @State private var copied = false
     var body: some View {
         HStack(spacing: 10) {
             Dot(color: Z.waiting)
@@ -712,14 +785,15 @@ struct WaitingRow: View {
             }
             Spacer(minLength: 0)
             Text(s.time).font(mono(12)).foregroundColor(Z.bad).lineLimit(1)
-            Button { copyToPasteboard(s.command) } label: {
-                Image(systemName: "terminal").font(.system(size: 12)).foregroundColor(Z.text)
+            Button { copy(s.command, $copied) } label: {
+                Image(systemName: copied ? "checkmark" : "terminal").font(.system(size: 12))
+                    .foregroundColor(copied ? Z.good : Z.text)
                     .frame(width: 28, height: 28)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Color(hex: 0x3A2C2D)))
                     .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(hex: 0x4D3234)))
             }
-            .buttonStyle(.plain)
-            .help(app.f.t("main.copyCommand") + ": " + s.command)
+            .buttonStyle(Pressable())
+            .help(copied ? app.f.t("copied") : app.f.t("main.copyCommand") + ": " + s.command)
         }
         .padding(.vertical, 9).padding(.horizontal, 10)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color(hex: 0x2E2425)))
@@ -731,6 +805,7 @@ struct SessionRow: View {
     let s: SessionRowVM
     let dot: Color
     @EnvironmentObject private var app: AppState
+    @State private var copied = false
     var body: some View {
         HStack(spacing: 10) {
             Dot(color: dot)
@@ -739,11 +814,11 @@ struct SessionRow: View {
                 Text(s.subtitle).font(.system(size: 12)).foregroundColor(Z.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
-            Text(s.time).font(mono(12)).foregroundColor(Z.secondary).lineLimit(1)
+            Text(copied ? app.f.t("copied") : s.time).font(mono(12)).foregroundColor(copied ? Z.good : Z.secondary).lineLimit(1)
         }
         .padding(.vertical, 7).padding(.horizontal, 10)
         .contentShape(Rectangle())
-        .onTapGesture { copyToPasteboard(s.command) }
+        .onTapGesture { copy(s.command, $copied) }
         .help(app.f.t("main.copyCommand") + ": " + s.command)
     }
 }

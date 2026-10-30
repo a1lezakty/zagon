@@ -62,9 +62,7 @@ struct WorklogScreen: View {
                             }
                         }
                         PillButton(title: f.t("worklog.edit"), height: 38, radius: 10, fontSize: 14) {}
-                        PillButton(title: f.t("worklog.copy"), height: 38, radius: 10, fontSize: 14) {
-                            copyToPasteboard(vm.copyText)
-                        }
+                        CopyButton(title: f.t("worklog.copy"), height: 38, radius: 10, fontSize: 14) { vm.copyText }
                     }
                     .padding(.top, 4)
                 }

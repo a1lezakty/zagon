@@ -14,7 +14,7 @@ final class StoreDataProviderTests: XCTestCase {
         let f = Fmt(lang: .en, timeZone: TimeZone(identifier: "UTC")!, now: p.now)
 
         let main = MainVM(p, f)
-        XCTAssertEqual(main.statusLabel, "62%")
+        XCTAssertEqual(main.five?.pct, 62)
         XCTAssertEqual(main.five?.resetLine, "resets at 14:20")
         XCTAssertEqual(main.week?.resetLine, "resets Mon 09:00")
         XCTAssertEqual(main.forecast?.plain, "At this pace the 5-hour limit runs out at 13:50, 30m before the reset.")

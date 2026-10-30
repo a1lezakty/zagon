@@ -62,7 +62,7 @@ final class ZagonUIModelTests: XCTestCase {
     func testMain() {
         let (p, f) = env(.en)
         let vm = MainVM(p, f)
-        XCTAssertEqual(vm.statusLabel, "62%")
+        XCTAssertEqual(vm.five?.pct, 62)
         XCTAssertEqual(vm.five?.resetLine, "resets at 14:20")
         XCTAssertEqual(vm.five?.inLine, "in 2h 38m")
         XCTAssertEqual(vm.week?.resetLine, "resets Mon 09:00")

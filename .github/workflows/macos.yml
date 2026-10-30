@@ -37,6 +37,8 @@ jobs:
       # The signed update zip and the appcast come only from release.yml, the one workflow with the Sparkle key.
       - name: App and DMG
         run: scripts/build-app.sh "0.1.0" "0"
+      - name: Launch
+        run: scripts/launch-check.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -44,6 +46,8 @@ jobs:
           path: apps/macos/build/snapshots
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: Zagon-dmg
           path: apps/macos/build/Zagon.dmg
+          if-no-files-found: ignore
