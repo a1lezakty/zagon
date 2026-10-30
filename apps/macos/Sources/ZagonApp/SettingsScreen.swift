@@ -150,7 +150,7 @@ struct SettingsScreen: View {
     /// When the services of the checked servers write the day summary (the Mac has none): the servers' time when they
     /// answered, else this Mac's config.toml for the switch and "as on the server" for the time.
     func summary(_ f: Fmt) -> some View {
-        let servers = app.remoteHosts, known = app.summaries.serverAt(servers)
+        let servers = app.remoteHosts, known = app.summaries.sharedAt(servers)
         let at = known.map { NotifySettings.minutes($0) } ?? app.notify.summaryAt
         let text = Binding(get: { summaryTime ?? known.flatMap(NotifySettings.minutes).map(NotifySettings.clock) ?? "" },
                            set: { summaryTime = $0; summaryTimeBad = false })

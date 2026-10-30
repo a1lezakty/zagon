@@ -44,6 +44,8 @@ public struct DaySummary {
     /// Where Claude Code transcripts live (to find typed messages and edited files of the day).
     public var claudeRoot: String
     public var searchPath: String? = Sys.env("PATH")
+    /// System-wide install places of the AI CLIs, after the user's own (`cliPath`).
+    public var systemBins = ["/usr/local/bin", "/opt/homebrew/bin"]
     /// Runs a command: (argv, stdin, cwd, timeout) → (status, stdout). Replaced in tests.
     public var runner: ([String], [UInt8], String?, Double) -> (status: Int32, out: [UInt8]) = {
         Sys.capture($0, stdin: $1, cwd: $2, timeout: $3, env: HookSpool.internalEnv)
@@ -365,8 +367,8 @@ public struct DaySummary {
         let nvm = paths.home + "/.nvm/versions/node"
         func version(_ v: String) -> [Int] { v.dropFirst().split(separator: ".").map { Int($0) ?? 0 } }
         let node = Sys.listDir(nvm).filter { $0.hasPrefix("v") }.sorted { version($1).lexicographicallyPrecedes(version($0)) }
-        return ([searchPath] + [".local/bin", ".claude/local", ".npm-global/bin"].map { paths.home + "/" + $0 }
-                + node.map { nvm + "/" + $0 + "/bin" } + ["/usr/local/bin", "/opt/homebrew/bin"]).compactMap { $0 }.joined(separator: ":")
+        let own = [".local/bin", ".claude/local", ".npm-global/bin"].map { paths.home + "/" + $0 } + node.map { nvm + "/" + $0 + "/bin" }
+        return ((searchPath.map { [$0] } ?? []) + own + systemBins).joined(separator: ":")
     }
 
     /// The configured AI engine's CLI; nil when the engine is off or its CLI is not installed.
@@ -414,7 +416,7 @@ public struct DaySummary {
         let f = try facts(day, now: now)
         var doc = DaySummary.plain(f, words), engine = "none"
         if let r = ai(f) { (doc, engine) = r }
-        doc.hosts = f.hosts
+        doc.hosts = f.hosts.isEmpty ? nil : f.hosts
         try save(doc, engine: engine, now: now)
         if engine != "none" {
             let tasks = Tasks(store: store)

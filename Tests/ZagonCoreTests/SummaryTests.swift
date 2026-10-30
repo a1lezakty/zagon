@@ -80,6 +80,7 @@ import Testing
         let dir = makeTempDir()
         var s = DaySummary(store: store, config: c, paths: ZagonPaths(home: dir, dir: dir + "/.zagon"), claudeRoot: dir + "/none")
         s.searchPath = "/usr/bin:/bin"
+        s.systemBins = []  // a claude installed on this machine is not the test's
         return s
     }
 
@@ -142,6 +143,17 @@ import Testing
         #expect(n.complete("x")?.text == "new" && n.missingCLI == nil && n.calls(missing: 2) == 3)
         n.config.summaryEngine = "none"
         #expect(n.missingCLI == nil && n.engineCLI == nil)
+    }
+
+    @Test func hostsOfTheDaysSessions() throws {
+        let store = try Store(path: ":memory:"), (start, _) = Time.dayBounds("2026-10-30")!
+        try store.mergeSession(SessionMeta(id: "claude:a", tool: .claude, project: "alpha"))
+        try store.mergeSession(SessionMeta(id: "claude:b", tool: .claude, project: "beta"), host: "zz-box")
+        for id in ["claude:a", "claude:b"] {
+            try store.addActivity(sessionId: id, start: start + 9 * 3600, end: start + 10 * 3600, kind: "working")
+        }
+        #expect(try summary(store).facts("2026-10-30").hosts == [store.host, "zz-box"].sorted())
+        #expect(try summary(store).make("2026-10-31").doc.hosts == nil)  // no sessions: it does not say
     }
 
     @Test func taskTextsSkipCardsWithoutPoints() {

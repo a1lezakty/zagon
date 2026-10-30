@@ -144,7 +144,7 @@ public struct SummaryState: Sendable {
     public init() {}
 
     /// The time all these servers have, "HH:MM" or "off"; nil when one is not known or they differ.
-    public func serverAt(_ hosts: [String]) -> String? {
+    public func sharedAt(_ hosts: [String]) -> String? {
         let all = Set(hosts.map { serverAt[$0] })
         return all.count == 1 ? all.first! : nil
     }

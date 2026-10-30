@@ -195,10 +195,10 @@ final class SummaryTests: XCTestCase {
         XCTAssertEqual(calls.args.last, ["summary", "--at", "show", "--json", "@120"])
         var st = SummaryState()
         st.serverAt = ["a": "21:15", "b": "21:15", "c": "off"]
-        XCTAssertEqual(st.serverAt(["a", "b"]), "21:15")
-        XCTAssertNil(st.serverAt(["a", "c"]))
-        XCTAssertNil(st.serverAt(["a", "d"]))  // d not asked yet
-        XCTAssertEqual(st.serverAt(["c"]), "off")
+        XCTAssertEqual(st.sharedAt(["a", "b"]), "21:15")
+        XCTAssertNil(st.sharedAt(["a", "c"]))
+        XCTAssertNil(st.sharedAt(["a", "d"]))  // d not asked yet
+        XCTAssertEqual(st.sharedAt(["c"]), "off")
     }
 
     func testNewestOfStoreAndAnswer() {
