@@ -164,10 +164,10 @@ final class ReportTools {
         let limit = min(max(try a.int("limit") ?? 10, 1), 50)
         var list: [SessionLine]
         if let d = try a.day("day"), let (s, e) = Time.dayBounds(d) {
-            list = try reports.sessions(from: s, to: e, limit: limit)
+            list = try reports.sessions(from: s, to: e, limit: limit, now: now())
             if list.isEmpty { return "No sessions on \(d)." }
         } else {
-            list = try reports.sessions(limit: limit)
+            list = try reports.sessions(limit: limit, now: now())
             if list.isEmpty { return "No sessions yet." }
         }
         let extras = try Dictionary(uniqueKeysWithValues: list.map { ($0.id, try extra($0.id)) })

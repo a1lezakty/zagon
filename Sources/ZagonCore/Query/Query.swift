@@ -112,7 +112,7 @@ extension Query {
         try db.query("""
             SELECT id, tool, title, \(Projects.sessionSQL("session")), cwd, host, model, status, status_at, last_at,
                    (SELECT max(start) FROM activity a WHERE a.session_id = session.id AND a.kind = 'working'),
-                   \(UserTime.driverSQL("session"))
+                   \(UserTime.driverSQL("session", now: now))
             FROM session
             WHERE max(coalesce(last_at, 0), coalesce(status_at, 0)) >= ?1 AND coalesce(archived, 0) = 0
               AND coalesce(status, '') <> 'ended'

@@ -79,7 +79,7 @@ import Testing
             try SpoolIngest.run(store: store, spoolDir: root + "/spool", now: t)
             for pre in (e["ZAGON_REPLAY_TRACE"] ?? "").split(separator: ",") {
                 guard let id = try store.db.one("SELECT id FROM session WHERE id LIKE ?", [.text("claude:\(pre)%")], { $0.text(0) }) ?? nil,
-                      let row = try n.session(id) else { continue }
+                      let row = try n.session(id, now: t) else { continue }
                 var xs: [Interval] = []
                 try store.db.query("SELECT start, \"end\" FROM activity WHERE kind = 'working' AND session_id = ? AND \"end\" > ?",
                                    [.text(id), .real(t - 12 * 3600)]) { xs.append(Interval($0.real(0), $0.real(1))) }

@@ -153,7 +153,9 @@ public struct Reports {
 
     /// Sessions with tokens or working time in [from, to), most tokens first (archived ones included: history).
     /// Without a range: the live list, by last activity, archived sessions left out.
-    public func sessions(from: Timestamp? = nil, to: Timestamp? = nil, limit: Int = 50) throws -> [SessionLine] {
+    /// `now`: when a driver silent for `UserTime.driverIdle` stops counting.
+    public func sessions(from: Timestamp? = nil, to: Timestamp? = nil, limit: Int = 50, now: Timestamp = Time.now())
+        throws -> [SessionLine] {
         let s = from ?? -Double.greatestFiniteMagnitude, e = to ?? Double.greatestFiniteMagnitude
         var tokens: [String: TokenTotals] = [:], cost: [String: Double] = [:], unpriced: [String: Int] = [:]
         try db.query("""
@@ -184,7 +186,7 @@ public struct Reports {
         for id in ids {
             try db.query("""
                 SELECT id, tool, title, \(Projects.sessionSQL("session")), git_branch, model, status, started_at, last_at,
-                       user_msgs, archived, status_detail, \(UserTime.driverSQL("session")) FROM session WHERE id=?
+                       user_msgs, archived, status_detail, \(UserTime.driverSQL("session", now: now)) FROM session WHERE id=?
                 """, [.text(id)]) { r in
                 out.append(SessionLine(id: id, tool: r.text(1) ?? "", title: r.text(2), project: r.text(3), gitBranch: r.text(4),
                                        model: r.text(5), status: r.text(6), statusDetail: r.text(11), drivenBy: r.text(12),

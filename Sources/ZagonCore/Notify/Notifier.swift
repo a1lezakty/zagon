@@ -167,9 +167,9 @@ public final class Notifier {
         var drivenBy: String? = nil
     }
 
-    func session(_ id: String) throws -> SessionRow? {
+    func session(_ id: String, now: Double) throws -> SessionRow? {
         try store.db.one("""
-            SELECT id, tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at, \(UserTime.driverSQL("session"))
+            SELECT id, tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at, \(UserTime.driverSQL("session", now: now))
             FROM session WHERE id = ?
             """, [.text(id)]) {
             SessionRow(id: $0.text(0) ?? "", tool: $0.text(1) ?? "", title: $0.text(2), project: $0.text(3), status: $0.text(4),
@@ -187,7 +187,7 @@ public final class Notifier {
             SELECT id, tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at FROM session
             WHERE status IN ('waiting_input', 'waiting_permission') AND status_at <= ? AND status_at > ?
               AND last_at >= status_at - 600 AND coalesce(archived, 0) = 0
-              AND NOT (status = 'waiting_input' AND \(UserTime.driverSQL("session")) IS NOT NULL)  -- waits for its driver, not you
+              AND NOT (status = 'waiting_input' AND \(UserTime.driverSQL("session", now: now)) IS NOT NULL)  -- waits for its driver, not you
             """, [.real(now - wait), .real(now - wait - 86400)]) {
             rows.append(SessionRow(id: $0.text(0) ?? "", tool: $0.text(1) ?? "", title: $0.text(2), project: $0.text(3),
                                    status: $0.text(4), statusAt: $0.optReal(5), lastAt: $0.optReal(6)))
@@ -216,7 +216,7 @@ public final class Notifier {
             try store.db.query("SELECT start, \"end\" FROM activity WHERE kind = 'working' AND session_id = ? AND \"end\" > ?",
                                [.text(id), .real(now - 12 * 3600)]) { xs.append(Interval($0.real(0), $0.real(1))) }
             guard let last = Intervals.merge(xs).last, last.length >= config.longWorkMinutes * 60,
-                  let s = try session(id), s.drivenBy == nil else { continue }  // a driven worker: its driver watches it
+                  let s = try session(id, now: now), s.drivenBy == nil else { continue }  // a driven worker: its driver watches it
             let hookAt = s.statusAt.flatMap { $0 >= last.start ? $0 : nil }
             let doneAt: Double
             if let h = hookAt {

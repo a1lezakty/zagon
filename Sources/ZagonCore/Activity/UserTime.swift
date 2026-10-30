@@ -75,13 +75,17 @@ enum UserTime {
                 drivers.filter { $0.value.named || messages[$0.key, default: 0] == 0 }.mapValues(\.by))
     }
 
+    /// A driver silent for this long (killed without its `SessionEnd`, or left alone) drives no more.
+    static let driverIdle: Double = 2 * 3600
+
     /// SQL for the name of the session that typed the last typed message of session `s` (`session.driver`): its title,
-    /// else its project, '' = neither. NULL = the human, also when that session has ended or is archived (no one else
-    /// will answer).
-    static func driverSQL(_ s: String = "s") -> String {
+    /// else its project, '' = neither. NULL = the human, also when that session has ended, is archived or has been
+    /// silent for `driverIdle` before `now` (no one else will answer).
+    static func driverSQL(_ s: String = "s", now: Timestamp) -> String {
         """
         (SELECT coalesce(d.title, \(Projects.sessionSQL("d")), '') FROM session d
-         WHERE d.id = \(s).driver AND coalesce(d.status, '') <> 'ended' AND coalesce(d.archived, 0) = 0)
+         WHERE d.id = \(s).driver AND coalesce(d.status, '') <> 'ended' AND coalesce(d.archived, 0) = 0
+           AND max(coalesce(d.last_at, 0), coalesce(d.status_at, 0)) > \(now - driverIdle))
         """
     }
 
