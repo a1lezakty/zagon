@@ -88,6 +88,9 @@ public struct LiveSessionInfo: Sendable, Equatable {
     public var host: String?
     public var model: String?
     public var state: LiveState
+    /// Another session typed its last typed message (a worker driven over `tmux send-keys`): waiting for input, it waits
+    /// for that session, not for you. Its title, "" = untitled; nil = the human typed it.
+    public var driver: String?
     /// When the current state began.
     public var since: Timestamp
     public var lastAt: Timestamp?
@@ -108,7 +111,8 @@ extension Query {
         var out: [LiveSessionInfo] = []
         try db.query("""
             SELECT id, tool, title, \(Projects.sessionSQL("session")), cwd, host, model, status, status_at, last_at,
-                   (SELECT max(start) FROM activity a WHERE a.session_id = session.id AND a.kind = 'working')
+                   (SELECT max(start) FROM activity a WHERE a.session_id = session.id AND a.kind = 'working'),
+                   \(UserTime.driverSQL("session"))
             FROM session
             WHERE max(coalesce(last_at, 0), coalesce(status_at, 0)) >= ?1 AND coalesce(archived, 0) = 0
               AND coalesce(status, '') <> 'ended'
@@ -130,8 +134,8 @@ extension Query {
                 break
             }
             out.append(LiveSessionInfo(id: r.text(0) ?? "", tool: r.text(1) ?? "", title: r.text(2), project: r.text(3),
-                                       cwd: r.text(4), host: r.text(5), model: r.text(6), state: state, since: since,
-                                       lastAt: lastAt))
+                                       cwd: r.text(4), host: r.text(5), model: r.text(6), state: state, driver: r.text(11),
+                                       since: since, lastAt: lastAt))
         }
         return out.sorted { $0.since < $1.since }
     }

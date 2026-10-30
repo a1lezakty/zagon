@@ -328,7 +328,8 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 }
                 return LiveSession(id: s.id, title: Self.title(s.title, s.project, s.id), host: shown(s.host),
                                    tool: s.tool == "codex" ? .codex : .claude, model: Self.modelName(s.model), status: status,
-                                   since: Self.date(s.since), command: command(tool: s.tool, id: s.nativeId, cwd: s.cwd, host: shown(s.host)))
+                                   since: Self.date(s.since), command: command(tool: s.tool, id: s.nativeId, cwd: s.cwd, host: shown(s.host)),
+                                   driver: s.driver)
             }
         }
     }

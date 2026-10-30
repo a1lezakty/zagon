@@ -184,6 +184,15 @@ let day0 = Time.dayBounds("2026-10-30")!.start
                      [.of(file), .text(id), .real(t - minutes * 60), .real(t)])
     }
 
+    @Test func aWorkerDrivenByAnotherSessionDoesNotWaitForYou() throws {
+        let (s, n, _) = try setUp()
+        let t = day0 + 11 * 3600
+        try session(s, "claude:w", status: "waiting_input", at: t, lastAt: t - 5)
+        try session(s, "claude:me", status: "waiting_input", at: t, lastAt: t - 5)
+        try s.db.run("UPDATE session SET driver = 'claude:me' WHERE id = 'claude:w'")
+        #expect(try n.tick(now: t + 11 * 60) == ["wait:claude:me"])
+    }
+
     @Test func doneWaitsForTheSessionsOwnSubAgent() throws {
         let (s, n, _) = try setUp()
         let t = day0 + 12 * 3600

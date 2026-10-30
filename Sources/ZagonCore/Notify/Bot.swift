@@ -148,8 +148,8 @@ public final class Bot {
     func sessions(now: Double) throws -> String {
         var lines: [String] = []
         try store.db.query("""
-            SELECT tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at FROM session
-            WHERE coalesce(archived, 0) = 0 AND coalesce(status, '') <> 'ended' AND max(coalesce(status_at, 0), coalesce(last_at, 0)) > ?
+            SELECT tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at, \(UserTime.driverSQL("session"))
+            FROM session WHERE coalesce(archived, 0) = 0 AND coalesce(status, '') <> 'ended' AND max(coalesce(status_at, 0), coalesce(last_at, 0)) > ?
             ORDER BY CASE WHEN status LIKE 'waiting%' THEN 0 WHEN status = 'working' THEN 1 ELSE 2 END,
                      max(coalesce(status_at, 0), coalesce(last_at, 0)) DESC LIMIT 12
             """, [.real(now - 86400)]) { r in
@@ -157,7 +157,13 @@ public final class Bot {
             let state: String
             switch r.text(3) {
             case "waiting_permission": state = w.t("⏳ ждёт разрешения ", "⏳ waits for permission ") + w.dur(now - since)
-            case "waiting_input": state = w.t("⏳ ждёт тебя ", "⏳ waits for you ") + w.dur(now - since)
+            case "waiting_input":
+                if let d = r.text(6) {  // a worker waits for the session that drives it
+                    state = (d.isEmpty ? w.t("· ждёт другую сессию ", "· waits for another session ")
+                             : w.t("· ждёт сессию \(d) ", "· waits for session \(d) ")) + w.dur(now - since)
+                } else {
+                    state = w.t("⏳ ждёт тебя ", "⏳ waits for you ") + w.dur(now - since)
+                }
             case "working": state = w.t("▶ работает", "▶ working")
             default: state = "· " + w.t("\(w.dur(now - (r.optReal(5) ?? since))) назад", "\(w.dur(now - (r.optReal(5) ?? since))) ago")
             }

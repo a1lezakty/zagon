@@ -57,6 +57,9 @@ public struct SessionLine: Codable, Sendable {
     public var status: String?
     /// The tool waiting for approval in `waiting_permission`.
     public var statusDetail: String?
+    /// The title of the session that typed its last typed message ("" = untitled), nil = the human: waiting for input,
+    /// it waits for that session.
+    public var driver: String?
     public var startedAt: Timestamp?
     public var lastAt: Timestamp?
     public var userMsgs: Int
@@ -181,10 +184,10 @@ public struct Reports {
         for id in ids {
             try db.query("""
                 SELECT id, tool, title, \(Projects.sessionSQL("session")), git_branch, model, status, started_at, last_at,
-                       user_msgs, archived, status_detail FROM session WHERE id=?
+                       user_msgs, archived, status_detail, \(UserTime.driverSQL("session")) FROM session WHERE id=?
                 """, [.text(id)]) { r in
                 out.append(SessionLine(id: id, tool: r.text(1) ?? "", title: r.text(2), project: r.text(3), gitBranch: r.text(4),
-                                       model: r.text(5), status: r.text(6), statusDetail: r.text(11),
+                                       model: r.text(5), status: r.text(6), statusDetail: r.text(11), driver: r.text(12),
                                        startedAt: r.optReal(7), lastAt: r.optReal(8),
                                        userMsgs: r.int(9), archived: r.optInt(10).map { $0 != 0 },
                                        tokens: tokens[id] ?? TokenTotals(), workingSec: working[id] ?? 0,

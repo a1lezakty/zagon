@@ -95,15 +95,22 @@ public struct MainVM: Sendable {
             SessionRowVM(id: s.id, title: s.title, subtitle: s.host + " · " + detail,
                          time: f.duration(f.now.timeIntervalSince(s.since)), command: s.command)
         }
+        // A worker driven by another session waits for that session, not for you: listed with the idle ones.
+        func driven(_ s: LiveSession) -> Bool { s.status == .waitingInput && s.driver != nil }
         waiting = sessions.compactMap {
             switch $0.status {
             case .waitingPermission: return row($0, f.t("status.permission"))
-            case .waitingInput: return row($0, f.t("status.input"))
+            case .waitingInput where !driven($0): return row($0, f.t("status.input"))
             default: return nil
             }
         }
         working = sessions.filter { $0.status == .working }.map { row($0, $0.model) }
-        idle = sessions.filter { $0.status == .idle }.map { row($0, $0.model) }
+        idle = sessions.compactMap {
+            if driven($0), let d = $0.driver {
+                return row($0, d.isEmpty ? f.t("status.otherSession") : f.t("status.session", d))
+            }
+            return $0.status == .idle ? row($0, $0.model) : nil
+        }
         waitingHeader = f.t("sessions.waiting", String(waiting.count)).uppercased()
         workingHeader = f.t("sessions.working", String(working.count)).uppercased()
         idleHeader = f.t("sessions.idle", String(idle.count)).uppercased()

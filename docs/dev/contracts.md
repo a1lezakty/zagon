@@ -83,7 +83,12 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   started in (its earliest `activity.cwd`; a later `cd` does not move it), else the last one a parser reported.
   `project` stays the parser's name (the folder's last component); reports, the live list and MCP show the project
   of `cwd` in `dir_project` instead, when there is one (`Projects.sessionSQL`).
-  `user_msgs` = the human's messages (`msg` not relayed, plus `channel`).
+  `user_msgs` = the human's messages (`msg` not relayed, plus `channel`). `driver` (v6) = the session that typed
+  its last typed message (the sender of the relay that made it relayed, see Time rules), NULL = the human; set
+  with `user_msgs`. A session waiting for input with a `driver` waits for that session, not for you: the live list
+  (`LiveSessionInfo.driver`), `sessions` (`SessionLine.driver`, both the driver's title, "" = untitled), the bot and
+  MCP say "waits for session <title>" / "another session", the Mac lists it with the idle ones, and no "waiting for
+  you" notification is sent for it.
 - `activity(kind = working | waiting)`, `user_action(kind = msg | channel | read)`, `user_activity` (derived: your
   time, see Time rules).
 - `relay(file_id, session_id, ts, target)` (v5) — one row per `Relay` target.
@@ -167,7 +172,7 @@ NDJSON on stdout, keys in snake_case, one consistent read snapshot; the Mac app 
   `--since`; `version` is what `zagon --version` prints (`0.1.0`, `dev` for a local build); a zagon without the key
   predates the releases (it has no `zagon update`);
 - `{"type":"session", id, tool, host, project, cwd, git_branch, title, model, started_at, last_at, status, status_at,
-  status_detail, user_msgs, archived, seq}` for every session with `seq > since` (missing keys = NULL), each followed
+  status_detail, user_msgs, archived, seq, driver}` for every session with `seq > since` (missing keys = NULL), each followed
   by `{"type":"activity","session_id","kind","start","end","cwd"}` lines — the session's complete `working` /
   `waiting` intervals, merged per kind and directory (no overlaps inside one; `cwd` missing = not known): on a
   `session` line the client drops every interval it holds for that session and stores the ones that follow (none =

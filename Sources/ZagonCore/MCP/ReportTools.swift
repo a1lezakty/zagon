@@ -155,7 +155,10 @@ final class ReportTools {
         } ?? SessionExtra()
     }
 
-    static func waiting(_ s: SessionLine) -> Bool { s.status?.hasPrefix("waiting") == true }
+    /// Waiting for the user: a driven worker waiting for input waits for its driver.
+    static func waiting(_ s: SessionLine) -> Bool {
+        s.status == "waiting_permission" || (s.status == "waiting_input" && s.driver == nil)
+    }
 
     func sessions(_ a: MCPArgs) throws -> String {
         let limit = min(max(try a.int("limit") ?? 10, 1), 50)
@@ -184,7 +187,8 @@ final class ReportTools {
             var parts = ["\(s.tool) \(Txt.shortId(s.id))", s.title.map { "\"\(Txt.oneLine($0, 60))\"" } ?? "(untitled)"]
             parts.append((s.project ?? "?") + (s.gitBranch.map { " (\($0))" } ?? ""))
             if let st = s.status {
-                let label = ["waiting_input": "waiting for input", "waiting_permission": "waiting for permission"][st] ?? st
+                var label = ["waiting_input": "waiting for input", "waiting_permission": "waiting for permission"][st] ?? st
+                if st == "waiting_input", let d = s.driver { label = d.isEmpty ? "waiting for another session" : "waiting for session \(d)" }
                 parts.append(label + (x.statusAt.map { " \(Txt.dur(t - $0))" } ?? ""))
             }
             if let l = s.lastAt { parts.append("last active \(Txt.when(l, now: t))") }

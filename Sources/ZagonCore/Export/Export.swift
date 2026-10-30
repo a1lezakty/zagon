@@ -23,6 +23,8 @@ public enum Export {
         var model: String?, startedAt: Double?, lastAt: Double?, status: String?, statusAt: Double?, statusDetail: String?
         var userMsgs: Int
         var archived: Bool?, seq: Int
+        /// The session that typed its last typed message (v6); nil = the human.
+        var driver: String?
     }
     struct DayRow: Encodable {
         var tool: String, project: String, model: String
@@ -74,14 +76,14 @@ public enum Export {
         var sessions: [SessionLine] = []
         try db.query("""
             SELECT id, tool, host, project, cwd, git_branch, title, model, started_at, last_at, status, status_at, user_msgs,
-                   archived, seq, status_detail FROM session WHERE seq > ? ORDER BY seq
+                   archived, seq, status_detail, driver FROM session WHERE seq > ? ORDER BY seq
             """, [.int(Int64(since))]) { r in
             sessions.append(SessionLine(id: r.text(0) ?? "", tool: r.text(1) ?? "", host: r.text(2), project: r.text(3),
                                         cwd: r.text(4), gitBranch: r.text(5), title: r.text(6), model: r.text(7),
                                         startedAt: r.optReal(8), lastAt: r.optReal(9), status: r.text(10),
                                         statusAt: r.optReal(11), statusDetail: r.text(15), userMsgs: r.int(12),
                                         archived: r.optInt(13).map { $0 != 0 },
-                                        seq: r.int(14)))
+                                        seq: r.int(14), driver: r.text(16)))
         }
         for s in sessions {
             try out(s)

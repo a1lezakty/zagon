@@ -39,14 +39,14 @@ public final class ExportImport {
             let archived: SQLValue = v["archived"].map { $0 == .bool(true) ? .int(1) : $0 == .bool(false) ? .int(0) : .null } ?? .null
             try db.run("""
                 INSERT INTO session(id, tool, host, project, cwd, git_branch, title, model, started_at, last_at, status, status_at,
-                                    status_detail, user_msgs, archived, seq)
-                VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                                    status_detail, user_msgs, archived, seq, driver)
+                VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
                 ON CONFLICT(id) DO UPDATE SET tool = ?2, host = ?3, project = ?4, cwd = ?5, git_branch = ?6, title = ?7,
                   model = ?8, started_at = ?9, last_at = ?10, status = ?11, status_at = ?12, status_detail = ?13,
-                  user_msgs = ?14, archived = ?15, seq = ?16
+                  user_msgs = ?14, archived = ?15, seq = ?16, driver = ?17
                 """, [.text(id), s("tool"), s("host"), s("project"), s("cwd"), s("git_branch"), s("title"), s("model"),
                       d("started_at"), d("last_at"), s("status"), d("status_at"), s("status_detail"), .int(i("user_msgs")),
-                      archived, .int(i("seq"))])
+                      archived, .int(i("seq")), s("driver")])
             // Its activity lines follow: they are the complete set.
             try db.run("DELETE FROM activity WHERE file_id = ? AND session_id = ?", [.int(file), .text(id)])
         case "activity":

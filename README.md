@@ -215,7 +215,9 @@ and carry numbers; a long one, such as a day exported to Markdown, goes to a fil
 
 The service sends alerts through your own Telegram bot or an [ntfy](https://ntfy.sh) topic:
 - a limit at 80 % and 95 % (5-hour and weekly, Claude and Codex), and a limit reset;
-- a session waiting for you longer than 10 minutes (unless "finished" was already sent for that stop);
+- a session waiting for you longer than 10 minutes (unless "finished" was already sent for that stop); a worker that
+  another session drives over `tmux send-keys` waits for that session, not for you, so it is shown as "waits for
+  session …" and sends no such alert;
 - a turn that worked longer than 15 minutes has finished, and its sub-agents and background commands too;
 - the day summary at 20:00, with a picture of the day.
 

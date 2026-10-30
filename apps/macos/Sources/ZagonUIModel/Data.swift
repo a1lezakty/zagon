@@ -55,10 +55,13 @@ public struct LiveSession: Sendable, Identifiable {
     public var since: Date
     /// Command that brings the session back (`ssh … -t tmux attach -t …`, `claude --resume …`).
     public var command: String
+    /// Another session typed its last message (a worker driven over tmux): waiting for input, it waits for that session.
+    /// Its title, "" = untitled; nil = you typed it.
+    public var driver: String?
     public init(id: String, title: String, host: String, tool: Tool = .claude, model: String, status: SessionStatus,
-                since: Date, command: String) {
+                since: Date, command: String, driver: String? = nil) {
         self.id = id; self.title = title; self.host = host; self.tool = tool; self.model = model
-        self.status = status; self.since = since; self.command = command
+        self.status = status; self.since = since; self.command = command; self.driver = driver
     }
 }
 

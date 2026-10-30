@@ -65,6 +65,7 @@ enum Strings {
         "sessions.idle.show": "Idle · {0} — show", "sessions.idle.hide": "Idle · {0} — hide",
         "sessions.one": "{0} session", "sessions.many": "{0} sessions",
         "status.permission": "asks for permission", "status.input": "answered, waiting for input",
+        "status.session": "waits for session {0}", "status.otherSession": "waits for another session",
 
         "stat.sessionsWorked": "sessions worked", "stat.tokensToday": "tokens today", "stat.apiPrices": "at API prices",
         "stat.you": "you replied and reviewed", "stat.tokens": "tokens",
@@ -206,6 +207,7 @@ enum Strings {
         "sessions.idle.show": "Простаивают · {0} — показать", "sessions.idle.hide": "Простаивают · {0} — скрыть",
         "sessions.one": "{0} сессия", "sessions.few": "{0} сессии", "sessions.many": "{0} сессий",
         "status.permission": "просит разрешение", "status.input": "ответил, ждёт ввода",
+        "status.session": "ждёт сессию {0}", "status.otherSession": "ждёт другую сессию",
 
         "stat.sessionsWorked": "сессии работали", "stat.tokensToday": "токенов сегодня", "stat.apiPrices": "по ценам API",
         "stat.you": "ты отвечал и смотрел", "stat.tokens": "токенов",

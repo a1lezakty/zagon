@@ -1,6 +1,13 @@
 /// Schema migrations; `PRAGMA user_version` = number of applied entries. Append only, never edit a shipped entry.
 enum Schema {
-    static let migrations: [String] = [v1, v2, v3, v4, v5]
+    static let migrations: [String] = [v1, v2, v3, v4, v5, v6]
+
+    /// v6: the session that typed a session's last typed message (`driver`, NULL = the human): a worker driven over
+    /// `tmux send-keys` that waits for input waits for that session, not for you. Filled by the next recount of user
+    /// actions (`Ingest.dayRules` 4).
+    static let v6 = """
+    ALTER TABLE session ADD COLUMN driver TEXT;
+    """
 
     /// v5: cache writes kept for an hour (`cache_write_1h`, part of `cache_write`: priced 2x input instead of 1.25x);
     /// usage by the working directory of each request; points where an agent typed into a terminal (`relay`). Every

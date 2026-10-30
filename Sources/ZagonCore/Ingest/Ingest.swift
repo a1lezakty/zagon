@@ -99,8 +99,8 @@ public final class Ingest {
 
     /// Bumped when the rules that build day rows change, so every day is rebuilt once as for a new zone. 2: a directory
     /// outside the session's start folder counts for its git checkout. 3: projects by repository name, temporary folders
-    /// as one (`dir_project` resolved again).
-    static let dayRules = 3
+    /// as one (`dir_project` resolved again). 4: `session.driver` (user actions counted again).
+    static let dayRules = 4
 
     /// Days are cut in the zone of this process. When it differs from the one the day rows were built in (or that
     /// is unknown), or the rows were built by older `dayRules`, every day of this host is rebuilt by the next `finish()`.
@@ -111,6 +111,7 @@ public final class Ingest {
         guard stored != id || rules < Self.dayRules else { return }
         try db.transaction {
             if rules < 3 { try resolveDirsAgain() }
+            if rules < 4 { userActionsChanged = true }
             // Days this host has are rebuilt in the new zone, not deleted: one left empty keeps a zero totals row
             // (DayAggregator), so `export` tells clients to drop it.
             try db.query("SELECT DISTINCT day FROM day_agg WHERE host=?", [.text(host)]) { r in
@@ -695,16 +696,16 @@ public final class Ingest {
                 for iv in Intervals.chain(human.points, gap: options.idleGap) {
                     try db.run("INSERT INTO user_activity(start, \"end\") VALUES(?, ?)", [.real(iv.start), .real(iv.end)])
                 }
-                var stored: [String: Int] = [:]
-                try db.query("SELECT id, user_msgs FROM session WHERE coalesce(host, ?1) = ?1", [.text(host)]) {
-                    stored[$0.text(0) ?? ""] = $0.int(1)
+                var stored: [String: (msgs: Int, driver: String?)] = [:]
+                try db.query("SELECT id, user_msgs, driver FROM session WHERE coalesce(host, ?1) = ?1", [.text(host)]) {
+                    stored[$0.text(0) ?? ""] = ($0.int(1), $0.text(2))
                 }
-                let changed = stored.filter { human.messages[$0.key, default: 0] != $0.value }
+                let changed = stored.filter { human.messages[$0.key, default: 0] != $0.value.msgs || human.drivers[$0.key] != $0.value.driver }
                 if !changed.isEmpty {
                     let seq = try store.nextSeq()
                     for (id, _) in changed {
-                        try db.run("UPDATE session SET user_msgs = ?, seq = ? WHERE id = ?",
-                                   [.int(Int64(human.messages[id, default: 0])), .int(Int64(seq)), .text(id)])
+                        try db.run("UPDATE session SET user_msgs = ?, driver = ?, seq = ? WHERE id = ?",
+                                   [.int(Int64(human.messages[id, default: 0])), .of(human.drivers[id]), .int(Int64(seq)), .text(id)])
                     }
                 }
             }
