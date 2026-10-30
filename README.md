@@ -223,7 +223,7 @@ you need macOS 13 or later.
 
 ```sh
 swift build -c release            # .build/release/zagon
-swift test
+TZ=UTC swift test                 # the tests expect to start in UTC, as CI does
 ```
 
 Static Linux binary, with the Static Linux SDK 6.4.1:
