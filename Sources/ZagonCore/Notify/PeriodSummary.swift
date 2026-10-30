@@ -78,8 +78,10 @@ extension DaySummary {
             for i in all { if let k = i.key { tasks[k] = i.title } }
             if var (d, unused) = SummaryDoc.parse(answer: r.text, refs: all.map { .init(project: $0.project, sec: $0.sec, cost: $0.cost) },
                                                   tasks: tasks, lang: w.en ? "en" : "ru", from: from, to: to) {
-                if !unused.isEmpty {
-                    d.items += DaySummary.merge([SummaryDoc(lang: d.lang, from: from, to: to, overview: "", items: unused.map { all[$0] })],
+                // Cards the AI left out keep their own (from 5 minutes of work, as for a day).
+                let rest = unused.map { all[$0] }.filter { $0.sec >= 300 }
+                if !rest.isEmpty {
+                    d.items += DaySummary.merge([SummaryDoc(lang: d.lang, from: from, to: to, overview: "", items: rest)],
                                                 from: from, to: to, w).items
                 }
                 (doc, engine) = (d, r.engine)

@@ -140,7 +140,8 @@ import Testing
         try s.save(doc("2026-10-26", [.init(project: "alpha", key: "PROJ-1", title: "Parser", was: "It crashed", done: ["fixed"], sec: 3600, cost: 2)]),
                    engine: "claude", now: 1)
         try s.save(doc("2026-10-27", [.init(project: "alpha", key: "PROJ-1", title: "Parser", done: ["tests", "fixed"], left: "docs", sec: 1800, cost: 1),
-                                      .init(project: "beta", title: "Docs", done: ["readme"], sec: 600)]), engine: "none", now: 2)
+                                      .init(project: "beta", title: "Docs", done: ["readme"], sec: 600),
+                                      .init(project: "gamma", title: "Peek", done: ["looked"], sec: 60)]), engine: "none", now: 2)
         let (worked, missing) = try s.days("2026-10-26", "2026-11-01")
         #expect(worked == ["2026-10-26", "2026-10-27", "2026-10-28"] && missing == ["2026-10-27", "2026-10-28"])
         #expect(s.calls(missing: 2) == 3)
@@ -148,7 +149,7 @@ import Testing
         s.config.summaryEngine = "none"
         #expect(try s.days("2026-10-26", "2026-11-01").missing == ["2026-10-28"] && s.calls(missing: 1) == 0)
         let plain = try s.period("2026-10-26", "2026-11-01", make: false, now: 3).doc
-        #expect(plain.key == "2026-10-26..2026-11-01" && plain.items.map(\.heading) == ["PROJ-1 Parser", "Docs"])
+        #expect(plain.key == "2026-10-26..2026-11-01" && plain.items.map(\.heading) == ["PROJ-1 Parser", "Docs", "Peek"])
         #expect(plain.items[0].sec == 5400 && plain.items[0].cost == 3 && plain.items[0].done == ["fixed", "tests"]
                 && plain.items[0].was == "It crashed" && plain.items[0].left == "docs")
         #expect(plain.main.first == "alpha · PROJ-1 Parser — 1 h 30 min" && plain.overview.hasPrefix("Days with work: 2"))
@@ -167,7 +168,8 @@ import Testing
         let (week, engine) = try s.period("2026-10-26", "2026-11-01", make: false, now: 4)
         #expect(engine == "claude" && prompts.count == 1)
         #expect(prompts[0].contains("[1] alpha · PROJ-1 Parser — 1 h") && prompts[0].contains("[3] beta · Docs — 10 min"))
-        #expect(week.main == ["Parser fixed"] && week.items.map(\.heading) == ["PROJ-1 Parser", "Docs"])  // ref 3 got its own card
+        // Ref 3 the AI left out keeps its card; ref 4 (a minute) does not.
+        #expect(week.main == ["Parser fixed"] && week.items.map(\.heading) == ["PROJ-1 Parser", "Docs"])
         #expect(week.items[0].sec == 5400 && week.items[1].sec == 600)
         #expect(try s.kept(week.key)?.engine == "claude")
     }

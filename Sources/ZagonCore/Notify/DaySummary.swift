@@ -286,7 +286,8 @@ public struct DaySummary {
     var words: Words { config.lang.words() }
 
     /// The AI's cards for the day's facts; nil when the engine is off, missing, failed, timed out or answered
-    /// something unreadable. Sessions no card named and that have no card of their project get a plain one.
+    /// something unreadable. Sessions no card named and that have no card of their project get a plain one (from 5
+    /// minutes of work).
     public func ai(_ f: Facts) -> (doc: SummaryDoc, engine: String)? {
         let w = words
         guard !f.sessions.isEmpty, let r = complete(DaySummary.instruction(w) + DaySummary.digest(f, w)) else { return nil }
@@ -297,7 +298,8 @@ public struct DaySummary {
         }
         if !unused.isEmpty {
             var rest = f
-            rest.sessions = unused.map { f.sessions[$0] }; rest.commits = []
+            // Short ones (a look, a quick question) would only add empty cards.
+            rest.sessions = unused.map { f.sessions[$0] }.filter { $0.workingSec >= 300 }; rest.commits = []
             doc.items += DaySummary.plain(rest, w).items
         }
         return (doc, r.engine)
