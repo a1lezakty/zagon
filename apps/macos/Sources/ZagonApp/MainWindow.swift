@@ -4,7 +4,7 @@ import ZagonUIModel
 
 /// Opening Zagon (Finder, Launchpad, Spotlight, the Dock) shows the window, the first time and again while it runs: a
 /// status item alone can be hidden behind the notch or a full menu bar, and a launch that shows nothing looks broken.
-/// Opened at login, it stays in the menu bar.
+/// Opened at login, it stays in the menu bar (`Launch.showsWindow`).
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The one AppState; the menu bar scene takes it as its StateObject.
@@ -16,7 +16,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let e = NSAppleEventManager.shared().currentAppleEvent
         let atLogin = e?.eventID == AEEventID(kAEOpenApplication)
             && e?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == OSType(keyAELaunchedAsLogInItem)
-        if !atLogin { MainWindow.shared.show(Self.state) }
+        // Users of an earlier version have dismissed the welcome: theirs is not the first launch.
+        let d = UserDefaults.standard, first = !d.bool(forKey: "launched") && !d.bool(forKey: "welcomeDone")
+        d.set(true, forKey: "launched")
+        let since = Self.loginTime().map { Date().timeIntervalSince($0) }
+        Log.shared.write("launch: login item mark \(atLogin), \(since.map { "\(Int($0)) s after login" } ?? "login time unknown")")
+        if Launch.showsWindow(first: first, loginItem: atLogin, sinceLogin: since) { MainWindow.shared.show(Self.state) }
+    }
+
+    /// When the user logged in to this GUI session: their newest console login in utmpx (nil: none there).
+    static func loginTime() -> Date? {
+        func text<T>(_ t: T) -> String { withUnsafeBytes(of: t) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) } }
+        let me = NSUserName()
+        var newest: Date?
+        setutxent()
+        defer { endutxent() }
+        while let u = getutxent()?.pointee {
+            guard Int32(u.ut_type) == USER_PROCESS, text(u.ut_line) == "console", text(u.ut_user) == me else { continue }
+            let t = Date(timeIntervalSince1970: TimeInterval(u.ut_tv.tv_sec))
+            if newest.map({ t > $0 }) ?? true { newest = t }
+        }
+        return newest
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

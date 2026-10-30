@@ -83,6 +83,17 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertEqual(ru.waitingHeader, "ЖДУТ ТЕБЯ · 2")
     }
 
+    func testLaunchWindow() {
+        XCTAssertFalse(Launch.showsWindow(first: false, loginItem: true, sinceLogin: nil))
+        XCTAssertFalse(Launch.showsWindow(first: true, loginItem: true, sinceLogin: 5000))
+        // No login item mark: a launch just after the login is still one.
+        XCTAssertFalse(Launch.showsWindow(first: false, loginItem: false, sinceLogin: 30))
+        XCTAssertFalse(Launch.showsWindow(first: false, loginItem: false, sinceLogin: -3))
+        XCTAssertTrue(Launch.showsWindow(first: true, loginItem: false, sinceLogin: 30))
+        XCTAssertTrue(Launch.showsWindow(first: false, loginItem: false, sinceLogin: 120))
+        XCTAssertTrue(Launch.showsWindow(first: false, loginItem: false, sinceLogin: nil))
+    }
+
     func testRingTurnsRedNearTheLimit() {
         let (p, f) = env(.en)
         let w = LimitWindow(usedPct: 96, resetsAt: p.now.addingTimeInterval(3600))
