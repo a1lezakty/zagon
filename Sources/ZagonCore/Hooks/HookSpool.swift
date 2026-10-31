@@ -50,7 +50,7 @@ public enum HookSpool {
         let tool = args.count > 0 ? args[0] : "unknown"
         let event = args.count > 1 ? args[1] : "unknown"
         let payload = isatty(stdinFD) == 1 ? [] : Sys.readAll(fd: stdinFD)
-        if fromCursor(payload) { return }
+        if fromOtherAgent(payload) { return }
         let ts = Sys.now()
         if tool == "claude", event == "SessionStart", let out = HandoffStore(paths: paths).sessionStart(payload: payload) {
             Sys.writeAll(fd: 1, Array((out + "\n").utf8))
@@ -59,12 +59,19 @@ public enum HookSpool {
         append(line, paths: paths, ts: ts)
     }
 
-    /// A call from Cursor's own agent: Cursor runs the hooks of `~/.claude/settings.json` too ("third-party hooks", on
-    /// by default) for its conversations, which are not Claude Code sessions. Every hook input from Cursor has
-    /// `cursor_version` (cursor.com/docs/hooks, common schema); Claude Code and Codex never send it. Not the
-    /// `CURSOR_*` environment: `claude` started in Cursor's terminal may inherit it.
-    static func fromCursor(_ payload: [UInt8]) -> Bool {
-        JValue.topLevelStrings(payload, keys: ["cursor_version"])?["cursor_version"] != nil
+    /// A call from another editor's own agent: Cursor (on by default), Devin / ex-Windsurf (on by default), Trae and
+    /// VS Code's agent (each when allowed) run the hooks of `~/.claude/settings.json` too, for conversations that are
+    /// not Claude Code sessions. Told by the keys of their hook input, as their docs give it: `cursor_version` (Cursor),
+    /// `workspace_roots` (Cursor, Trae), `timestamp` (VS Code), neither `cwd` nor `transcript_path` (Devin). Claude Code
+    /// always sends both and none of the others, Codex too (its `transcript_path` may be null); `CLAUDE_CONFIG_DIR`
+    /// changes values only. Not the environment (`CURSOR_*`…): `claude` started in such an editor's terminal may
+    /// inherit it.
+    /// ponytail: keys from the editors' docs; should Claude Code ever send one of them, its live statuses stop: match
+    /// on values then.
+    static func fromOtherAgent(_ payload: [UInt8]) -> Bool {
+        guard let keys = JValue.topLevelKeys(payload) else { return false }
+        return !keys.isDisjoint(with: ["cursor_version", "workspace_roots", "timestamp"])
+            || (!keys.contains("cwd") && !keys.contains("transcript_path"))
     }
 
     /// Set (`ZAGON_INTERNAL=1`) for the `claude -p` / `codex exec` runs Zagon starts itself (day summary): their hooks

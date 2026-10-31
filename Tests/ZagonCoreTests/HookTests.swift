@@ -93,31 +93,37 @@ let hookPayload = Array("""
         }
     }
 
-    /// Cursor's agent runs the hooks of `~/.claude/settings.json` with its own input (cursor.com/docs/hooks, common
-    /// schema): nothing is recorded and a waiting handoff stays for Claude Code. Claude Code with its config elsewhere
-    /// (`CLAUDE_CONFIG_DIR`) still counts.
-    @Test func cursorAgentCallsAreIgnored() throws {
+    /// Other editors' agents run the hooks of `~/.claude/settings.json` with their own input (shapes from their docs):
+    /// nothing is recorded and a waiting handoff stays for Claude Code. Claude Code with its config elsewhere
+    /// (`CLAUDE_CONFIG_DIR`) and Codex without a transcript still count.
+    @Test func otherAgentsCallsAreIgnored() throws {
         let dir = makeTempDir(), cwd = makeTempDir()
         let paths = ZagonPaths(home: dir, dir: dir)
-        func feed(_ event: String, _ payload: String) {
+        func feed(_ event: String, _ payload: String, tool: String = "claude") {
             var fds: [Int32] = [0, 0]
             #expect(pipe(&fds) == 0)
             let b = Array(payload.utf8)
             _ = b.withUnsafeBytes { write(fds[1], $0.baseAddress, b.count) }
             close(fds[1])
-            HookSpool.handleHook(args: ["claude", event], stdinFD: fds[0], paths: paths)
+            HookSpool.handleHook(args: [tool, event], stdinFD: fds[0], paths: paths)
             close(fds[0])
         }
         #expect(HandoffStore(paths: paths).markPending("h-1", cwd: cwd))
         let roots = js(cwd)
         feed("SessionStart", #"{"conversation_id":"c-1","generation_id":"g-1","model":"default","hook_event_name":"sessionStart","cursor_version":"1.7.2","workspace_roots":[\#(roots)],"user_email":null,"transcript_path":null,"session_id":"c-1","is_background_agent":false,"composer_mode":"agent","cwd":\#(roots)}"#)
         feed("Stop", #"{"conversation_id":"c-1","generation_id":"g-2","model":"default","hook_event_name":"stop","cursor_version":"1.7.2","workspace_roots":[\#(roots)],"user_email":null,"transcript_path":"/h/.cursor/projects/p/agent-transcripts/c-1.txt","status":"completed","loop_count":0}"#)
+        // Devin (ex-Windsurf): no cwd, no transcript. Trae: workspace roots. VS Code's agent: a timestamp.
+        feed("SessionStart", #"{"hook_event_name":"SessionStart","session_id":"d-1","prompt_id":"p-1"}"#)
+        feed("Stop", #"{"session_id":"t-1","cwd":\#(roots),"hook_event_name":"Stop","workspace_roots":[\#(roots)]}"#)
+        feed("UserPromptSubmit", #"{"timestamp":"2026-10-20T10:00:00.000Z","cwd":\#(roots),"session_id":"v-1","hook_event_name":"UserPromptSubmit","transcript_path":"/h/v-1.json","prompt":"x"}"#)
         #expect(spoolLines(dir).isEmpty)
         #expect(Sys.listDir(dir + "/handoffs/pending").count == 1)
         #expect(!Sys.listDir(dir + "/handoffs/pending").contains { $0.hasSuffix(".used") })
 
-        feed("Stop", #"{"session_id":"s-2","transcript_path":"/h/other-config/projects/p/s-2.jsonl","cwd":\#(roots),"hook_event_name":"Stop","stop_hook_active":false}"#)
-        #expect(spoolLines(dir).compactMap { JValue.parse($0)?["session_id"]?.string } == ["s-2"])
+        // Claude Code's input as 2.1.x builds it, its config elsewhere; Codex with no transcript.
+        feed("Stop", #"{"session_id":"s-2","transcript_path":"/h/other-config/projects/p/s-2.jsonl","cwd":\#(roots),"scratchpad_dir":"/tmp/x","permission_mode":"default","agent_type":"main","effort":"high","hook_event_name":"Stop","stop_hook_active":false}"#)
+        feed("Stop", #"{"session_id":"x-1","transcript_path":null,"cwd":\#(roots),"hook_event_name":"Stop","model":"gpt-5","turn_id":"u-1"}"#, tool: "codex")
+        #expect(spoolLines(dir).compactMap { JValue.parse($0)?["session_id"]?.string } == ["s-2", "x-1"])
     }
 
     @Test(.enabled(if: Sys.exists(zagonBin))) func binaryAlwaysExitsZeroSilently() throws {
