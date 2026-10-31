@@ -23,7 +23,7 @@ final class AppState: ObservableObject {
     /// Initial text of the session search (snapshots); typing lives in the screen's own state.
     var initialQuery = ""
     /// Bumped when new data arrived (or a minute passed), so the screens read the store again.
-    @Published private(set) var revision = 0
+    @Published private(set) var revision = 0 { didSet { refreshIcon() } }
     /// The main window is on screen: refresh every 5 s instead of every 60 s.
     var windowOpen = false
     /// Servers pulled over ssh (aliases from ~/.ssh/config), kept in UserDefaults.
@@ -31,17 +31,63 @@ final class AppState: ObservableObject {
     /// Menu bar settings; saved to UserDefaults only for the real app (the samples set them directly).
     @Published var pace = false { didSet { save(pace, "limitsPace") } }
     @Published var paceWeekdays = false { didSet { save(paceWeekdays, "paceWeekdays") } }
-    @Published var monoIcon = false { didSet { save(monoIcon, "monoIcon") } }
+    @Published var monoIcon = false { didSet { save(monoIcon, "monoIcon"); refreshIcon() } }
     @Published var showLeft = false { didSet { save(showLeft, "limitsShowLeft") } }
     /// Ring colours per AI (menu bar, panel), set in settings.
-    @Published var claudeColors = RingColors.standard(.claude) { didSet { if persist { claudeColors.save(.claude) } } }
-    @Published var codexColors = RingColors.standard(.codex) { didSet { if persist { codexColors.save(.codex) } } }
+    @Published var claudeColors = RingColors.standard(.claude) {
+        didSet { if persist { claudeColors.save(.claude) }; refreshIcon() }
+    }
+    @Published var codexColors = RingColors.standard(.codex) {
+        didSet { if persist { codexColors.save(.codex) }; refreshIcon() }
+    }
     func colors(_ tool: Tool) -> RingColors { tool == .codex ? codexColors : claudeColors }
     func setColors(_ tool: Tool, _ c: RingColors) { if tool == .codex { codexColors = c } else { claudeColors = c } }
-    /// The status item as it is now.
-    var menuBar: MenuBarVM {
+
+    /// The status item's picture: drawn by `refreshIcon` when new data, a setting or the bar's shade changes it; the
+    /// label only shows it. Off until the app has launched (`startIcon`).
+    let icon: StatusIcon<NSImage>
+    private var iconOn = false
+    var statusImage: NSImage { icon.image ?? Self.noIcon }
+    private static let noIcon = NSImage(size: NSSize(width: 44, height: 20))
+
+    func startIcon() {
+        iconOn = true
+        refreshIcon()
+        attachIcon(tries: 60)
+    }
+
+    /// MenuBarExtra makes the button when it likes: until then, a look every second. Found, the icon is drawn again if
+    /// it was drawn for another shade than the bar's (or not at all), and the button gets its tooltip.
+    private func attachIcon(tries: Int) {
+        guard StatusButton.button != nil else {
+            guard tries > 1 else { return }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                self?.attachIcon(tries: tries - 1)
+            }
+            return
+        }
+        if icon.look?.dark != StatusButton.dark { refreshIcon() } else { syncStatusButton() }
+    }
+
+    /// Timers and events call this (new data, settings, the bar's shade), never the label: one read of the limits, and
+    /// a drawing only when the picture changes.
+    func refreshIcon() {
+        guard iconOn else { return }
         let claude = claudeColors, codex = codexColors
-        return MenuBarVM(provider.limits(), colors: { $0 == .codex ? codex : claude }, f)
+        if icon.update(colors: { $0 == .codex ? codex : claude }, mono: monoIcon, dark: StatusButton.dark, f) {
+            objectWillChange.send()
+        }
+        syncStatusButton()
+    }
+
+    /// The button's tooltip and VoiceOver label, and its shade watched, once MenuBarExtra has made it (the 5 s timer
+    /// looks too).
+    func syncStatusButton() {
+        guard iconOn, let b = StatusButton.button, let vm = icon.look?.vm else { return }
+        if b.toolTip != vm.tip { b.toolTip = vm.tip }
+        if b.accessibilityLabel() != vm.spoken { b.setAccessibilityLabel(vm.spoken) }
+        StatusButton.watch { [weak self] in self?.refreshIcon() }
     }
     /// System notifications on this Mac (on by default) and the same through Telegram / ntfy (off: servers send those).
     @Published var macNotify = true { didSet { save(macNotify, "macNotify") } }
@@ -82,6 +128,7 @@ final class AppState: ObservableObject {
     init(provider: any ZagonDataProvider, lang: Lang, homeBack: Double = 0) {
         self.provider = provider; self.lang = lang; self.homeBack = homeBack
         day = Fmt(lang: lang, now: provider.now).startOfDay(provider.now.addingTimeInterval(-homeBack * 86400))
+        icon = StatusIcon(limits: { provider.limits() }, draw: drawStatusIcon)
     }
 
     /// The zone days are cut and times shown in, for this Mac and the servers alike; nil = the Mac's own (it follows
@@ -332,6 +379,7 @@ final class AppState: ObservableObject {
             Task { @MainActor in
                 self?.tick(p, force: false)
                 self?.pullServers(p, force: false)
+                self?.syncStatusButton()
             }
         }
     }
@@ -505,8 +553,8 @@ struct ZagonApp: App {
         MenuBarExtra {
             MainPanel().environmentObject(state).preferredColorScheme(.dark)
         } label: {
-            // ponytail: rebuilt on every AppState change; give the status item its own observable if that shows in a profile
-            let icon = statusIcon(state)
+            // Rebuilt on every AppState change: takes the picture as it is, drawing and reading nothing.
+            let icon = state.statusImage
             Image(nsImage: icon).accessibilityLabel(Text(icon.accessibilityDescription ?? "Zagon"))
         }
         .menuBarExtraStyle(.window)
@@ -517,12 +565,13 @@ struct ZagonApp: App {
 /// The status item, rasterised because a menu bar label shows only images and text. Monochrome without a warning is
 /// a template image (the menu bar tints it); otherwise it is drawn in the bar's text colour. Drawn at 1x and 2x: the bar
 /// is on every screen, and each picks its own. 44 × 20 pt either way: a pair of rings or two ring-in-rings.
+///
+/// Only `StatusIcon` calls this, when the picture changes; nil if nothing got drawn.
 @MainActor
-func statusIcon(_ app: AppState) -> NSImage {
-    let vm = app.menuBar
-    let template = app.monoIcon && !vm.alarm
-    let tint: Color = template ? .black : StatusButton.dark ? .white : .black.opacity(0.85)
-    let r = ImageRenderer(content: MenuBarLabel(vm: vm, colored: !app.monoIcon, tint: tint))
+func drawStatusIcon(_ look: StatusIcon<NSImage>.Look) -> NSImage? {
+    let vm = look.vm, template = look.mono && !vm.alarm
+    let tint: Color = template ? .black : look.dark ? .white : .black.opacity(0.85)
+    let r = ImageRenderer(content: MenuBarLabel(vm: vm, colored: !look.mono, tint: tint))
     let image = NSImage(size: NSSize(width: 44, height: 20))
     for scale in [1, 2] as [CGFloat] {
         r.scale = scale
@@ -532,11 +581,9 @@ func statusIcon(_ app: AppState) -> NSImage {
         image.size = rep.size
         image.addRepresentation(rep)
     }
+    guard !image.representations.isEmpty else { return nil }
     image.isTemplate = template
     image.accessibilityDescription = vm.spoken
-    StatusButton.button?.toolTip = vm.tip
-    StatusButton.button?.setAccessibilityLabel(vm.spoken)
-    StatusButton.watch { [weak app] in app?.objectWillChange.send() }
     return image
 }
 

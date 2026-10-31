@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let state = AppState.local()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Self.state.startIcon()
         AppState.openMain = { MainWindow.shared.show(AppDelegate.state) }
         // macOS marks the login item's launch in its open event.
         let e = NSAppleEventManager.shared().currentAppleEvent
@@ -158,8 +159,9 @@ struct WelcomeBar: View {
             HStack(alignment: .top, spacing: 16) {
                 Banner.blue(Emphasis(before: f.t("welcome.text") + (hider ? "\n" + f.t("welcome.settings") : "")))
                 HStack(alignment: .top, spacing: 6) {
-                    MenuBarLabel(vm: app.menuBar, colored: !app.monoIcon, tint: Z.text)
-                        .scaleEffect(2).frame(width: 88, height: 40)
+                    if let vm = app.icon.look?.vm {
+                        MenuBarLabel(vm: vm, colored: !app.monoIcon, tint: Z.text).scaleEffect(2).frame(width: 88, height: 40)
+                    }
                     Image(systemName: "arrow.up.right").font(.system(size: 16, weight: .semibold)).foregroundColor(Z.secondary)
                 }
                 .padding(.top, 4)
