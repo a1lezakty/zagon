@@ -1,7 +1,7 @@
 #if canImport(Glibc)
 import Glibc
 #elseif canImport(Musl)
-import Musl
+@preconcurrency import Musl
 #elseif canImport(Darwin)
 import Darwin
 #endif
