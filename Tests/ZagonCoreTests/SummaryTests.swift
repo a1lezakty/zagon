@@ -145,6 +145,25 @@ import Testing
         #expect(n.missingCLI == nil && n.engineCLI == nil)
     }
 
+    /// Only the editor extension installed: the newest Claude Code it bundles in any VS Code fork (2.1.40 after 2.1.9 by
+    /// name), and only after a claude installed the usual way.
+    @Test func findsTheCLIOfTheEditorExtensionLast() throws {
+        let s = summary(try Store(path: ":memory:"), engine: "claude")
+        for (dir, answer) in [(".vscode/extensions/anthropic.claude-code-2.1.9-darwin-arm64", "old"),
+                              (".windsurf/extensions/anthropic.claude-code-2.1.40-darwin-arm64", "new"),
+                              (".cursor/extensions/anthropic.claude-code-2.1.12", "mid"),
+                              (".vscode-oss/extensions/anthropic.claude-code-2.1.30-linux-x64", "oss")] {
+            let bin = s.paths.home + "/" + dir + "/resources/native-binary"
+            Sys.mkdirs(bin)
+            #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"is_error\":false,\"result\":\"\(answer)\"}'\n"))
+        }
+        #expect(s.complete("x")?.text == "new" && s.missingCLI == nil)
+        let local = s.paths.home + "/.local/bin"
+        Sys.mkdirs(local)
+        #expect(writeScript(local + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"is_error\":false,\"result\":\"cli\"}'\n"))
+        #expect(s.complete("x")?.text == "cli")
+    }
+
     /// A failed AI call keeps why (`zagon summary --json` sends it) and logs it, never with the prompt codex echoes.
     @Test func aFailedCallSaysWhy() throws {
         var s = summary(try Store(path: ":memory:"), engine: "claude")

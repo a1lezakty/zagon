@@ -394,7 +394,19 @@ public struct DaySummary {
         func version(_ v: String) -> [Int] { v.dropFirst().split(separator: ".").map { Int($0) ?? 0 } }
         let node = Sys.listDir(nvm).filter { $0.hasPrefix("v") }.sorted { version($1).lexicographicallyPrecedes(version($0)) }
         let own = [".local/bin", ".claude/local", ".npm-global/bin"].map { paths.home + "/" + $0 } + node.map { nvm + "/" + $0 + "/bin" }
-        return ((searchPath.map { [$0] } ?? []) + own + systemBins).joined(separator: ":")
+        return ((searchPath.map { [$0] } ?? []) + own + systemBins + editorBins).joined(separator: ":")
+    }
+
+    /// The last resort, when only the editor extension is installed: the Claude Code it bundles, in
+    /// `~/.<editor>/extensions/anthropic.claude-code-<version>[-<platform>]/resources/native-binary`, the newest first.
+    /// Every VS Code fork keeps its extensions so (`.vscode`, `.vscode-insiders`, `.vscode-oss` of VSCodium, `.cursor`,
+    /// `.windsurf`, `.positron`, `.antigravity-ide`, the `-server` folders of remote SSH…), each in its own folder.
+    var editorBins: [String] {
+        let prefix = "anthropic.claude-code-"
+        func version(_ d: String) -> [Int] { d.dropFirst(prefix.count).prefix { $0 != "-" }.split(separator: ".").map { Int($0) ?? 0 } }
+        let roots = Sys.listDir(paths.home).filter { $0.hasPrefix(".") }.map { paths.home + "/" + $0 + "/extensions" }
+        return roots.flatMap { r in Sys.listDir(r).filter { $0.hasPrefix(prefix) }.map { (dir: r + "/" + $0, v: version($0)) } }
+            .sorted { $1.v.lexicographicallyPrecedes($0.v) }.map { $0.dir + "/resources/native-binary" }
     }
 
     /// The configured AI engine's CLI; nil when the engine is off or its CLI is not installed.

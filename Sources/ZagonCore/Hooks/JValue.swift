@@ -67,6 +67,30 @@ public enum JValue: Equatable, Sendable {
         }
     }
 
+    /// The keys of a top-level object, values skipped unparsed; nil if `bytes` is not one.
+    public static func topLevelKeys(_ bytes: [UInt8], maxDepth: Int = 256) -> Set<String>? {
+        bytes.withUnsafeBufferPointer { b in
+            var p = Parser(b: b, maxDepth: maxDepth)
+            p.ws()
+            guard p.eat(0x7B) else { return nil }
+            var out = Set<String>()
+            p.ws()
+            if p.eat(0x7D) { return out }
+            while true {
+                p.ws()
+                guard let k = p.str() else { return nil }
+                p.ws()
+                guard p.eat(0x3A) else { return nil }
+                p.ws()
+                guard p.skip(1) else { return nil }
+                out.insert(k)
+                p.ws()
+                if p.eat(0x2C) { continue }
+                return p.eat(0x7D) ? out : nil
+            }
+        }
+    }
+
     private struct Parser {
         let b: UnsafeBufferPointer<UInt8>
         let maxDepth: Int

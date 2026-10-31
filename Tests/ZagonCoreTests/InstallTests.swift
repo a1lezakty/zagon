@@ -197,6 +197,32 @@ import Testing
         #expect(offCalls.argv.isEmpty)
     }
 
+    /// `doctor`'s info lines: the status line's last limit reading, the summary engine's CLI, Jira without its token.
+    @Test func doctorInfo() throws {
+        var (home, o) = setUp()
+        let none = try Installer(o).info()
+        #expect(none[0].hasPrefix("claude limits: no reading in 7 days"))
+        if Sys.which("claude", path: "/usr/local/bin:/opt/homebrew/bin") == nil {  // a claude installed on this machine is not the test's
+            #expect(none[1] == "summary engine: claude CLI not found (summaries and task suggestions are made without AI)")
+        }
+        #expect(none[2] == "jira: not configured ([jira] in \(home)/.zagon/config.toml)")
+
+        Sys.mkdirs(o.paths.spool)
+        Sys.writeFile(o.paths.spool + "/.limits-s-1", Array("1.000 {}".utf8))
+        Sys.mkdirs(home + "/.local/bin")
+        Sys.writeFile(home + "/.local/bin/claude", [0], mode: 0o755)
+        Sys.writeFile(o.paths.config, Array("[jira]\nurl = \"https://jira.example.com\"\nemail = \"a@example.com\"\ntoken_file = \"\(home)/tok\"\n".utf8))
+        o.now = Sys.now() + 7 * 60 + 5
+        let some = try Installer(o).info()
+        #expect(some == ["claude limits: last reading 7 min ago", "summary engine: claude \(home)/.local/bin/claude",
+                         "jira token: cannot read \(home)/tok"])
+        Sys.writeFile(home + "/tok", Array("not-a-real-token\n".utf8), mode: 0o600)
+        let jira = try Installer(o).info()[2]
+        #expect(jira == "jira: configured, jira.example.com")
+        o.now += 3 * 86400
+        #expect(try Installer(o).info()[0] == "claude limits: last reading 3 days ago")
+    }
+
     /// `zagon update` keeps the old binary as .prev and leaves no .prev.new behind, also when .prev is already a link
     /// to it (rename between two links of one file does nothing).
     @Test func keepPreviousLeavesNoTemporaryFile() throws {

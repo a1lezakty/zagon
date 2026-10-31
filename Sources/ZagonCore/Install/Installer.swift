@@ -524,4 +524,37 @@ public struct Installer {
         }
         return out
     }
+
+    /// Facts beside the checks, about what install cannot set up: where Claude's limits come from (the status line),
+    /// the AI of summaries and task suggestions, Jira (never its token).
+    public func info() throws -> [String] {
+        var out: [String] = []
+        // The status line keeps each session's last reading in `spool/.limits-<session>` (StatusLine.shouldSpool),
+        // rewritten at least once a minute while it runs; SpoolIngest drops them after 7 days.
+        let spool = o.paths.spool
+        let last = Sys.listDir(spool).filter { $0.hasPrefix(".limits-") }.compactMap { Sys.mtime(spool + "/" + $0) }.max()
+        out.append("claude limits: " + (last.map { "last reading " + Self.ago(o.now - $0) }
+            ?? "no reading in 7 days: the status line has not run (the Claude Code extension of VS Code, Cursor and other editors never runs it; claude in a terminal does)"))
+        let config = NotifyConfig.load(o.paths)
+        // An empty database: the engine lookup reads only the config and the disk.
+        var summary = DaySummary(store: try Store(path: ":memory:"), config: config, paths: o.paths, claudeRoot: "")
+        summary.searchPath = o.searchPath
+        out.append("summary engine: " + (summary.engineCLI.map { "\(config.summaryEngine) \($0)" }
+            ?? summary.missingCLI.map { "\($0) CLI not found (summaries and task suggestions are made without AI)" }
+            ?? "\(config.summaryEngine) (no AI)"))
+        let text = Sys.readFile(o.paths.config).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        if let c = JiraConfig.load(configText: text) {
+            do {
+                _ = try JiraClient(c)
+                out.append("jira: configured, " + (c.baseURL.split(separator: "/").dropFirst().first.map(String.init) ?? c.baseURL))
+            } catch { out.append("\(error)") }  // "jira: …" / "jira token: …"
+        } else {
+            out.append("jira: not configured ([jira] in \(o.paths.config))")
+        }
+        return out
+    }
+
+    static func ago(_ s: Double) -> String {
+        s < 3600 ? "\(Int(s / 60)) min ago" : s < 48 * 3600 ? "\(Int(s / 3600)) h ago" : "\(Int(s / 86400)) days ago"
+    }
 }

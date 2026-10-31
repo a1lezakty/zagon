@@ -175,7 +175,7 @@ public struct ClaudeParser: LineParser {
             guard !isSub, let ts, let a = r.attachment, a.type == "queued_command", a.commandMode == "prompt" else { return }
             let kind = a.origin?.kind
             guard kind == "human" || kind == "channel" || kind == nil else { return }  // not `peer`, `task-notification`
-            var text = a.text ?? a.blocks?.first(where: { $0.type == "text" })?.text ?? ""
+            var text = a.text ?? a.blocks.map(Self.typedText) ?? ""
             if kind == nil, Self.markers.contains(where: { text.hasPrefix($0) }) { return }
             if kind == "channel" { text = Self.channelBody(text) }
             out.userMessages.append(UserMessage(sessionId: sessionId, ts: ts, text: Self.clip(text), cwd: r.cwd,
@@ -207,13 +207,22 @@ public struct ClaudeParser: LineParser {
         if let s = m.text { text = s }
         else if let bs = m.blocks {
             if bs.contains(where: { $0.type == "tool_result" }) { return nil }
-            guard let t = bs.first(where: { $0.type == "text" }) else { return bs.isEmpty ? nil : "" }
-            text = t.text ?? ""
+            guard bs.contains(where: { $0.type == "text" }) else { return bs.isEmpty ? nil : "" }
+            text = Self.typedText(bs)
         } else { return nil }
         if r.turnOrigin == nil && !channel, Self.markers.contains(where: { text.hasPrefix($0) }) { return nil }
         if channel { text = Self.channelBody(text) }
         return Self.clip(text)
     }
+
+    /// The first text block that is not editor context: the VS Code / Cursor extension sends the open file, the
+    /// selection, a terminal or browser as text blocks of their own (each wrapped in its tag) before the typed text.
+    /// Matched by the opening tag only: a long block is clipped before its closing one. "" when there is none.
+    static func typedText(_ bs: [ClaudeRecord.Block]) -> String {
+        bs.first { b in b.type == "text" && !editorContext.contains { (b.text ?? "").hasPrefix($0) } }?.text ?? ""
+    }
+
+    static let editorContext = ["<ide_", "<terminal name=\"", "<browser tabGroupId=\"", "<browser_instruction>"]
 
     /// Prefixes of generated user records in versions that do not say who started the turn.
     static let markers = ["<task-notification", "<local-command-stdout", "<local-command-caveat", "<system-reminder", "<channel"]
