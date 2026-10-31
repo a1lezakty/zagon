@@ -570,8 +570,7 @@ public struct Installer {
     /// A settings file that is a symbolic link, or in a linked folder (dotfiles, home-manager): another machine may read
     /// it, where this script's path does not exist and the panel could not start. enable leaves it to the user.
     static func linked(_ f: String) -> Bool {
-        var st = stat()
-        return [f, Sys.dirname(f)].contains { lstat($0, &st) == 0 && st.st_mode & S_IFMT == S_IFLNK }
+        HandoffStore.isLink(f) || HandoffStore.isLink(Sys.dirname(f))
     }
 
     func linkNote(_ f: String) -> String {
@@ -609,7 +608,7 @@ public struct Installer {
                 if Self.linked(f) { log("editor: " + linkNote(f)); continue }
                 let nl = cur.firstIndex(of: 0x0A).map { $0 > 0 && cur[$0 - 1] == 0x0D } == true ? "\r\n" : "\n"
                 new = Array(cur[..<s.open]) + Array((nl + Self.indent(cur, after: s.open) + line + (s.empty ? "" : ",")).utf8)
-                    + cur[s.open...]
+                    + Array(cur[s.open...])
             } else if Self.linked(f) { log("editor: " + linkNote(f)); continue }
             guard let bak = editorBackup(f, cur) else { log("editor: cannot back up \(f); left untouched"); failed.append(f); continue }
             // The editor may be saving it right now: what was read must still be there.
