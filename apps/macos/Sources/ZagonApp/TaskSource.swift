@@ -20,7 +20,7 @@ extension AppState {
         return f.t("source.local")
     }
 
-    enum TaskLoad { case list, card(String), plan(String), drafts }
+    enum TaskLoad { case list, card(String), plan(String), drafts, reconcile(String, String) }
 
     /// The issue type a new task gets in Jira project `project` of the current source (nil: not known).
     func jiraType(_ project: String) async -> String? {
@@ -46,6 +46,9 @@ extension AppState {
         case .plan(let day):
             guard force || have.plans[day] == nil else { return }
             work(s, { try $0.plan(day) }) { $0.plans[day] = $1 }
+        case .reconcile(let from, let to):
+            guard force || have.reconciles[from + "|" + to] == nil else { return }
+            work(s, { try $0.reconcile(from: from, to: to) }) { $0.reconciles[from + "|" + to] = $1 }
         case .drafts:
             guard force || have.drafts == nil else { return }
             // With them, whether the source has the AI engine suggestions are made with.
@@ -99,8 +102,8 @@ extension AppState {
     }
 
     /// Writes the plan shown for `day` to Jira (after the confirmation on screen); a plan that changed meanwhile is
-    /// shown instead and nothing is written.
-    func commitPlan(_ day: String) {
+    /// shown instead and nothing is written. `then` runs after the answer (the period reloads its reconciliation).
+    func commitPlan(_ day: String, then: @escaping () -> Void = {}) {
         guard let s = currentTaskSource, let shown = taskCache[s]?.plans[day] else { return }
         let f = self.f
         // Its failures go next to the button, not to the source's line.
@@ -118,6 +121,8 @@ extension AppState {
             case .failure(let e): cache.message = f.t("worklog.commitFailed", Remote.scrubHomes(String(describing: e)))
             }
             if let after = v.1 { cache.plans[day] = after }
+            // After `work` has stored this cache: a load started from here bumps its own counter.
+            DispatchQueue.main.async(execute: then)
         }
     }
 

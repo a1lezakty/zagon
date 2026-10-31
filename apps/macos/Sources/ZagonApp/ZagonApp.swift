@@ -22,6 +22,11 @@ final class AppState: ObservableObject {
     var problem: String?
     /// Initial text of the session search (snapshots); typing lives in the screen's own state.
     var initialQuery = ""
+    /// The worklog screen's period (nil: one day and its plan) and the open task row of its reconciliation.
+    @Published var worklogPeriod: ClosedRange<Date>?
+    @Published var reconcileOpen: String?
+    /// What the period shows with no task source (the design sample, snapshots).
+    var sampleReconcile: Reconciliation?
     /// Bumped when new data arrived (or a minute passed), so the screens read the store again.
     @Published private(set) var revision = 0 { didSet { refreshIcon() } }
     /// The main window is on screen: refresh every 5 s instead of every 60 s.
@@ -313,6 +318,7 @@ final class AppState: ObservableObject {
         state.remoteHosts = ["build-box", "gpu-box"]
         state.serverJira = ["build-box": .on, "gpu-box": .off]
         state.jira = sampleJira
+        state.sampleReconcile = .sample(now: state.provider.now, zone: state.zone)
         return state
     }
 

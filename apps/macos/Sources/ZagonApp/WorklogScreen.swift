@@ -8,6 +8,10 @@ struct WorklogScreen: View {
     @State private var confirm = false
 
     var body: some View {
+        if app.worklogPeriod != nil { ReconcileScreen() } else { dayBody }
+    }
+
+    @ViewBuilder var dayBody: some View {
         let f = app.f
         let d = day ?? f.now
         let key = TaskBackend.day(d, app.zone), cache = app.tasksNow
@@ -16,7 +20,7 @@ struct WorklogScreen: View {
                 ?? WorklogData(day: f.startOfDay(d), workStart: nil, workEnd: nil, userSec: 0, sessionSec: 0, rows: [], splits: [])
         let vm = WorklogVM(data, f)
         Page(spacing: 18) {
-            Header(vm.title, prev: { day = f.addDays(-1, to: d) }, next: { day = f.addDays(1, to: d) })
+            Header(vm.title, prev: { day = f.addDays(-1, to: d) }, next: { day = f.addDays(1, to: d) }) { WorklogMode() }
             SourceBar { app.loadTasks(.plan(key), force: true) }
             StatsRow(stats: vm.stats, highlightLast: true)
             if vm.rows.isEmpty {
@@ -121,6 +125,21 @@ struct WorklogScreen: View {
                 .foregroundColor(r.kind == .alreadyLogged ? Z.muted : Z.text)
                 .padding(.vertical, 10).padding(.horizontal, 6)
                 .overlay(alignment: .top) { Divider1(color: Z.border) }
+            }
+        }
+    }
+}
+
+/// "Day | Period" over the worklog screen; a period starts as this month.
+struct WorklogMode: View {
+    @EnvironmentObject private var app: AppState
+    var body: some View {
+        let f = app.f
+        Segmented(items: [f.t("rec.mode.day"), f.t("rec.mode.period")], selected: app.worklogPeriod == nil ? 0 : 1, height: 30,
+                  fontSize: 13) { i in
+            if i == 0 { app.worklogPeriod = nil } else if app.worklogPeriod == nil {
+                let r = RecPeriod.thisMonth.range(f)
+                app.worklogPeriod = r.from...r.to
             }
         }
     }
