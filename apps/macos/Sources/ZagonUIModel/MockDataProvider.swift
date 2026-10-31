@@ -57,7 +57,7 @@ public struct MockDataProvider: ZagonDataProvider {
         if claudeUnread {
             l.claude = AILimits()
             l.claudeSeen = ago(4)
-            l.claudeWrapper = "/Users/you/.zagon/claude-wrap"
+            l.claudeWrapper = "/Users/you/.zagon/bin/claude-wrap"
         }
         return l
     }

@@ -1,4 +1,5 @@
 import Foundation
+import ZagonCore
 
 /// The status item. Both AIs with a current reading (or Claude under `Limits.claudeHint`): a ring-in-ring each, Claude
 /// left, Codex right (outer the week, inner 5 hours, the 5-hour number inside). One AI, or none: its pair of rings,
@@ -70,12 +71,9 @@ extension Limits {
         claudeWrapper.map { f.t("limit.hint.wrapper", $0) } ?? f.t("limit.hint.terminal")
     }
 
-    /// The line for the editor's settings.json that "Copy setting" gives.
+    /// The line for the editor's settings.json that "Copy setting" gives (as `Installer.editorSetting` prints it).
     public var claudeSetting: String? {
-        claudeWrapper.map { p in
-            let json = p.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-            return "\"claudeCode.claudeProcessWrapper\": \"\(json)\""
-        }
+        claudeWrapper.map { "\"claudeCode.claudeProcessWrapper\": " + JValue.string($0).compact }
     }
 }
 

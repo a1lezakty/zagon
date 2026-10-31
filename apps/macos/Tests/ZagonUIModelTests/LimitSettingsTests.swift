@@ -89,7 +89,7 @@ final class LimitSettingsTests: XCTestCase {
     func testClaudeHint() {
         var p = MockDataProvider(lang: .ru, timeZone: utc)
         let f = Fmt(lang: .ru, timeZone: utc, now: p.now)
-        let wrap = "/Users/you/.zagon/claude-wrap"
+        let wrap = "/Users/you/.zagon/bin/claude-wrap"
         let hint = "Лимиты Claude из панели Cursor или VS Code: задай в настройках редактора claudeCode.claudeProcessWrapper = "
             + wrap + ". Или включи claudeCode.useTerminal."
         let terminal = "Лимиты Claude приходят из claude в терминале. В Cursor и VS Code включи claudeCode.useTerminal."
