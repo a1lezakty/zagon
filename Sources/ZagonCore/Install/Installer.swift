@@ -163,15 +163,19 @@ public struct Installer {
                 if o.statusLine {
                     // Wrapping now: remember the user's command (nil = there was none) for the wrapper and uninstall.
                     let orig = try statusCommand(cur)
-                    if orig.map({ !isOurs($0, "statusline") }) ?? true { try setConfig(orig) }
+                    if orig.map({ !isOurs($0, "statusline") }) ?? true {
+                        try setConfig(StatusLine.configSection, StatusLine.configKey, orig)
+                    }
                 }
                 Sys.mkdirs(o.claudeDir)
                 guard Sys.writeFile(claudeSettings, new!) else { throw InstallError("cannot write \(claudeSettings)") }
                 log("claude: hooks\(o.statusLine ? " and status line" : "") installed in \(claudeSettings)")
             } else { log("claude: already installed") }
         }
-        if o.claude && o.editorPanels { try enableEditorPanels() }
+        if o.claude && o.editorPanels && !editorPanelsOff { try enableEditorPanels() }
         else if o.claude {
+            // --no-editor-panels is remembered like `editor-panels off`: a later install leaves the editors alone too.
+            if !o.editorPanels { try setConfig("editor", "panels", "off") }
             try writeWrapScript(zagon: o.zagon)
             if editorState().on.isEmpty { log("claude: " + setUpHint) }
         }
@@ -201,9 +205,9 @@ public struct Installer {
         if let backupDir { log("backup: \(backupDir)") }
     }
 
-    func setConfig(_ original: String?) throws {
+    func setConfig(_ section: String, _ key: String, _ value: String?) throws {
         let cur = Sys.readFile(o.paths.config).map { String(decoding: $0, as: UTF8.self) } ?? ""
-        let new = TOMLLite.setting(cur, section: StatusLine.configSection, key: StatusLine.configKey, to: original)
+        let new = TOMLLite.setting(cur, section: section, key: key, to: value)
         guard new != cur else { return }
         Sys.mkdirs(o.paths.dir)
         guard Sys.writeFile(o.paths.config, Array(new.utf8), mode: 0o600) else { throw InstallError("cannot write \(o.paths.config)") }
@@ -317,7 +321,7 @@ public struct Installer {
             try restore(path: claudeSettings, name: "claude-settings.json",
                         redo: { try installed($0, tool: "claude", statusLine: o.statusLine) },
                         strip: { try stripped($0, statusOriginal: original) })
-            try setConfig(nil)
+            try setConfig(StatusLine.configSection, StatusLine.configKey, nil)
             if o.editorPanels { try disableEditorPanels() }
             if Sys.exists(wrapScript) {
                 try writeWrapScript(zagon: nil)
@@ -370,6 +374,9 @@ public struct Installer {
         "\"claudeCode.claudeProcessWrapper\": " + JValue.string(wrapScript(paths)).compact
     }
 
+    /// `zagon editor-panels off` (or install --no-editor-panels) was the last word: install does not add the setting.
+    var editorPanelsOff: Bool { TOMLLite.string(at: o.paths.config, section: "editor", key: "panels") == "off" }
+
     var setUpHint: String {
         "for limits from the Claude Code panel of VS Code, Cursor and other forks, run zagon editor-panels on, or add "
             + Self.editorSetting(o.paths) + " to the editor's user settings (over Remote-SSH: to the Remote settings of this host)"
@@ -410,8 +417,10 @@ public struct Installer {
     /// servers (`~/.<editor>-server[-insiders]/data/Machine`, not there yet counts too).
     var editorTargets: [String] {
         let h = o.paths.home
+        // Apple's own folders hold no editor; some are privacy-protected (contacts, call history), not to be touched.
+        let apple: Set = ["AddressBook", "CallHistoryDB", "CallHistoryTransactions", "Knowledge", "MobileSync"]
         let user = [h + "/Library/Application Support", h + "/.config"].flatMap { root in
-            Sys.listDir(root).flatMap { e -> [String] in
+            Sys.listDir(root).filter { !$0.hasPrefix("com.apple.") && !apple.contains($0) }.flatMap { e -> [String] in
                 let u = root + "/" + e + "/User"
                 let own = Sys.exists(u + "/settings.json") || Sys.isDir(u + "/globalStorage") ? [u + "/settings.json"] : []
                 return own + Sys.listDir(u + "/profiles").map { u + "/profiles/" + $0 + "/settings.json" }.filter(Sys.exists)
@@ -427,7 +436,7 @@ public struct Installer {
     /// precede it on its line) through the value and a comma after it.
     struct SettingsScan { var open: Int, empty = false, value: String?, span: Range<Int>? }
 
-    /// nil when the text is not an object.
+    /// nil when the text is not a whole object.
     static func scanSettings(_ b: [UInt8]) -> SettingsScan? {
         let n = b.count, key = Array("\"claudeCode.claudeProcessWrapper\"".utf8)
         var i = b.starts(with: [0xEF, 0xBB, 0xBF]) ? 3 : 0
@@ -469,14 +478,15 @@ public struct Installer {
             }
             let k = i
             guard string() else { break }
-            guard depth == 1, keyNext, b[k..<i].elementsEqual(key) else { keyNext = false; continue }
+            guard depth == 1, keyNext, scan.value == nil, b[k..<i].elementsEqual(key) else { keyNext = false; continue }
             keyNext = false
             skip()
             guard i < n, b[i] == 0x3A else { continue }
             i += 1
             skip()
             let v = i
-            guard i < n, b[i] == 0x22, string() else { scan.value = ""; break }
+            guard i < n, b[i] == 0x22 else { scan.value = ""; continue }
+            guard string() else { break }
             scan.value = JValue.parse(Array(b[v..<i]))?.string ?? ""
             var end = i, start = k
             while end < n && blank(b[end]) { end += 1 }
@@ -484,9 +494,8 @@ public struct Installer {
             while start > 0 && blank(b[start - 1]) { start -= 1 }
             if start > 0 && b[start - 1] == 0x0A { start -= start > 1 && b[start - 2] == 0x0D ? 2 : 1 } else { start = k }
             scan.span = start..<end
-            break
         }
-        return scan
+        return depth == 0 ? scan : nil  // cut off (or caught half-written): not touched
     }
 
     /// The value of `"claudeCode.claudeProcessWrapper"` in a settings.json, nil when absent or empty (the extension
@@ -511,9 +520,15 @@ public struct Installer {
         for f in editorTargets {
             let b = Sys.readFile(f)
             if b == nil && Sys.exists(f) { s.other.append("\(f) cannot be read"); continue }
-            guard let b, b.contains(where: { $0 > 0x20 }) else { s.off.append(f); continue }
+            guard let b, b.contains(where: { $0 > 0x20 }) else {
+                if Self.linked(f) { s.other.append(linkNote(f)) } else { s.off.append(f) }
+                continue
+            }
             guard let v = Self.scanSettings(b).map({ $0.value }) else { s.other.append("\(f) is not a JSON object"); continue }
-            guard let v else { s.off.append(f); continue }
+            guard let v else {
+                if Self.linked(f) { s.other.append(linkNote(f)) } else { s.off.append(f) }
+                continue
+            }
             if v == wrapScript && Sys.exists(v) { s.on.append(f) }
             else if v.isEmpty { s.other.append("\(f) sets claudeCode.claudeProcessWrapper to nothing: no limits from that panel") }
             else if !Sys.exists(v) { s.other.append("\(f) names \(v), which does not exist: that editor's panel cannot start Claude") }
@@ -536,9 +551,27 @@ public struct Installer {
     }
 
     /// `zagon editor-panels on|off`: `enableEditorPanels` / `disableEditorPanels` in the user's home.
+    /// The choice is remembered (`[editor] panels` in config.toml) for later installs. Throws when a file could not be
+    /// changed, or when `on` leaves no editor with the setting.
     public func setEditorPanels(_ on: Bool) throws {
         if on { try checkZagon() }
-        try asUser { on ? try enableEditorPanels() : try disableEditorPanels() }
+        try asUser {
+            try setConfig("editor", "panels", on ? nil : "off")
+            let failed = on ? try enableEditorPanels() : try disableEditorPanels()
+            if !failed.isEmpty { throw InstallError("not changed: " + failed.joined(separator: ", ")) }
+            if on && editorState().on.isEmpty { throw InstallError("no VS Code or fork found here to set it in") }
+        }
+    }
+
+    /// A settings file that is a symbolic link, or in a linked folder (dotfiles, home-manager): another machine may read
+    /// it, where this script's path does not exist and the panel could not start. enable leaves it to the user.
+    static func linked(_ f: String) -> Bool {
+        var st = stat()
+        return [f, Sys.dirname(f)].contains { lstat($0, &st) == 0 && st.st_mode & S_IFMT == S_IFLNK }
+    }
+
+    func linkNote(_ f: String) -> String {
+        "\(f) is a symbolic link (shared settings?): Zagon leaves it alone; add " + Self.editorSetting(o.paths) + " there yourself"
     }
 
     /// The file a settings.json that was not there (or empty) becomes.
@@ -548,17 +581,19 @@ public struct Installer {
     /// `editorTargets` that lacks it: one line right after the top-level `{`, in the file's indentation, the rest of
     /// the text byte for byte. A file naming another wrapper, or not JSON, is left alone and reported. Each changed
     /// file is copied first to `<file>.zagon-bak-<ts>` next to it.
-    func enableEditorPanels() throws {
+    /// Returns the files that could not be changed.
+    @discardableResult
+    func enableEditorPanels() throws -> [String] {
         try writeWrapScript(zagon: o.zagon)
         let targets = editorTargets, line = Self.editorSetting(o.paths)
         if targets.isEmpty {
             log("editor: no VS Code or fork found here; for one elsewhere, add " + line
                 + " to the editor's user settings (over Remote-SSH: run zagon install on that host)")
         }
-        var changed = false
+        var changed = false, failed: [String] = []
         for f in targets {
             let cur = Sys.readFile(f)
-            if cur == nil && Sys.exists(f) { log("editor: cannot read \(f)"); continue }
+            if cur == nil && Sys.exists(f) { log("editor: cannot read \(f)"); failed.append(f); continue }
             var new = createdSettings
             if let cur, cur.contains(where: { $0 > 0x20 }) {
                 guard let s = Self.scanSettings(cur) else { log("editor: \(f) is not a JSON object; left untouched"); continue }
@@ -567,33 +602,45 @@ public struct Installer {
                         : "editor: \(f) has claudeCode.claudeProcessWrapper \(JValue.string(v).compact); left untouched")
                     continue
                 }
+                if Self.linked(f) { log("editor: " + linkNote(f)); continue }
                 let nl = cur.firstIndex(of: 0x0A).map { $0 > 0 && cur[$0 - 1] == 0x0D } == true ? "\r\n" : "\n"
                 new = Array(cur[..<s.open]) + Array((nl + Self.indent(cur, after: s.open) + line + (s.empty ? "" : ",")).utf8)
                     + cur[s.open...]
-            }
-            guard let bak = editorBackup(f, cur) else { log("editor: cannot back up \(f); left untouched"); continue }
-            guard Sys.writeFile(f, new) else { log("editor: cannot write \(f)"); continue }
+            } else if Self.linked(f) { log("editor: " + linkNote(f)); continue }
+            guard let bak = editorBackup(f, cur) else { log("editor: cannot back up \(f); left untouched"); failed.append(f); continue }
+            // The editor may be saving it right now: what was read must still be there.
+            guard Sys.readFile(f) == cur else { log("editor: \(f) changed meanwhile; left untouched"); failed.append(f); continue }
+            guard Sys.writeFile(f, new) else { log("editor: cannot write \(f)"); failed.append(f); continue }
             log("editor: claudeCode.claudeProcessWrapper " + (cur == nil ? "set in new \(f)" : "added to \(f)")
                 + (bak.isEmpty ? "" : " (backup \(bak))"))
             changed = true
         }
-        if changed { log("editor: open windows pick it up after Developer: Reload Window") }
+        if changed {
+            log("editor: open windows pick it up after Developer: Reload Window. With it, a new panel session starts in the "
+                + "default permission mode unless you pick one, and the panel lists SDK sessions of other programs too; "
+                + "zagon editor-panels off takes it out")
+        }
+        return failed
     }
 
     /// Removes exactly the entry naming this script from each editor settings file (after a backup next to it). A file
     /// that is just what enable created goes back to how it was: removed, or the empty file of the latest backup.
-    func disableEditorPanels() throws {
+    @discardableResult
+    func disableEditorPanels() throws -> [String] {
+        var failed: [String] = []
         for f in editorTargets {
             guard let cur = Sys.readFile(f), let s = Self.scanSettings(cur), s.value == wrapScript, let span = s.span else { continue }
             var new: [UInt8]? = Array(cur[..<span.lowerBound]) + cur[span.upperBound...]
-            if cur == createdSettings {
+            if cur == createdSettings && !Self.linked(f) {
                 let last = Sys.listDir(Sys.dirname(f)).filter { $0.hasPrefix(Sys.basename(f) + ".zagon-bak-") }.last
                 new = last.flatMap { Sys.readFile(Sys.dirname(f) + "/" + $0) }.flatMap { $0.contains { $0 > 0x20 } ? nil : $0 }
             }
-            guard let bak = editorBackup(f, cur) else { log("editor: cannot back up \(f); left untouched"); continue }
-            guard new.map({ Sys.writeFile(f, $0) }) ?? Sys.remove(f) else { log("editor: cannot write \(f)"); continue }
+            guard let bak = editorBackup(f, cur) else { log("editor: cannot back up \(f); left untouched"); failed.append(f); continue }
+            guard Sys.readFile(f) == cur else { log("editor: \(f) changed meanwhile; left untouched"); failed.append(f); continue }
+            guard new.map({ Sys.writeFile(f, $0) }) ?? Sys.remove(f) else { log("editor: cannot write \(f)"); failed.append(f); continue }
             log("editor: claudeCode.claudeProcessWrapper removed from \(f) (backup \(bak))")
         }
+        return failed
     }
 
     /// Copies `cur` to `<file>.zagon-bak-<ts>[-n]` (never over an older one); "" when there is nothing to copy, nil on failure.

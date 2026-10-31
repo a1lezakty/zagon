@@ -292,7 +292,8 @@ import Testing
     }
 
     /// install adds the setting to each editor found as one line after the top-level `{` (the rest byte for byte, mode
-    /// and symlink kept, a backup next to each file); again changes nothing; uninstall takes exactly that line out.
+    /// kept, a backup next to each file; a symlinked file left to the user); again changes nothing; uninstall takes
+    /// exactly that line out; off is remembered.
     @Test func editorPanelsOnOff() throws {
         let (home, o) = setUp()
         let script = home + "/.zagon/bin/claude-wrap", entry = "\"claudeCode.claudeProcessWrapper\": \"\(script)\""
@@ -313,7 +314,7 @@ import Testing
         put(profile, profileText)
         let windsurf = mac + "/Windsurf/User/settings.json"  // has run, no settings yet
         Sys.mkdirs(Sys.dirname(windsurf) + "/globalStorage")
-        let codium = mac + "/VSCodium/User/settings.json", dot = home + "/dotfiles/codium.json"  // a symlink
+        let codium = mac + "/VSCodium/User/settings.json", dot = home + "/dotfiles/codium.json"  // a symlink: not edited
         put(dot, "{}")
         Sys.mkdirs(Sys.dirname(codium))
         symlink(dot, codium)
@@ -339,15 +340,17 @@ import Testing
         #expect(text(code) == "{\n  \(entry)\n}" && text(code + ".zagon-bak-" + stamp) == "")
         #expect(text(profile) == "\u{FEFF}{\r\n    \(entry),\r\n    \"a\": [1, {\"b\": \"}\"}]\r\n}")
         #expect(text(windsurf) == "{\n  \(entry)\n}" && text(remote) == "{\n  \(entry)\n}")
-        #expect(text(dot) == "{\n  \(entry)}" && Sys.realPath(codium) == Sys.realPath(dot))
+        #expect(text(dot) == "{}" && Sys.realPath(codium) == Sys.realPath(dot))
+        let linkNote = "\(codium) is a symbolic link (shared settings?): Zagon leaves it alone; add \(entry) there yourself"
+        #expect(lines.contains("editor: " + linkNote))
         #expect(untouched())
         #expect(lines.contains("editor: \(other) has claudeCode.claudeProcessWrapper \"/opt/wrap\"; left untouched"))
         #expect(lines.contains("editor: \(array) is not a JSON object; left untouched"))
         #expect(lines.contains("editor: claudeCode.claudeProcessWrapper set in new \(windsurf)"))
-        #expect(lines.contains("editor: open windows pick it up after Developer: Reload Window"))
-        let on = [code, profile, cursor, codium, windsurf, remote]
+        #expect(lines.contains { $0.hasPrefix("editor: open windows pick it up after Developer: Reload Window. With it,") })
+        let on = [code, profile, cursor, windsurf, remote]
         #expect(Installer(o).editorState() == .init(on: on, other: [
-            "\(array) is not a JSON object", "\(other) names /opt/wrap, which does not exist: that editor's panel cannot start Claude"]))
+            linkNote, "\(array) is not a JSON object", "\(other) names /opt/wrap, which does not exist: that editor's panel cannot start Claude"]))
         for f in [code, cursor] {
             #expect(Installer.wrapperSetting(text(f)!) == script)
         }
@@ -375,15 +378,21 @@ import Testing
         #expect(lines.contains("editor: claudeCode.claudeProcessWrapper removed from \(remote) (backup \(remote).zagon-bak-\(stamp))"))
         #expect(Installer(o).editorState().on.isEmpty)
 
-        // --no-editor-panels leaves the editors alone; `editor-panels on` then adds it, off removes it.
+        // --no-editor-panels leaves the editors alone, and so does a later plain install; `editor-panels on` adds it,
+        // off removes it, and install after off leaves them alone again.
         var no = o
         no.editorPanels = false
         try installer(no).install()
+        try inst.install()
         #expect(text(profile) == profileText)
         try installer(no).setEditorPanels(true)
         #expect(Installer(o).editorState().on == on)
+        try inst.install()
         try installer(no).setEditorPanels(false)
         #expect(text(profile) == profileText && text(code) == "" && !Sys.exists(windsurf))
+        try inst.install()
+        #expect(text(profile) == profileText)
+        #expect(throws: InstallError.self) { try installer(setUp().1).setEditorPanels(true) }  // no editor here
     }
 
     /// The JSONC scan: only a top-level key counts; comments, nested objects and strings do not.
@@ -397,7 +406,7 @@ import Testing
         #expect(value("{\"s\": \"\\\" \(k.replacingOccurrences(of: "\"", with: "\\\"")): \\\"/a\"}") == .some(nil))
         #expect(value("{\(k): null}") == .some(""))
         #expect(value("[]") == nil && value("// none") == nil && value("") == nil)
-        #expect(value("{\(k): \"/a") == .some(""))  // cut off: left alone
+        #expect(value("{\(k): \"/a") == nil && value("{\"a\": 1") == nil)  // cut off: left alone
     }
 
     /// `zagon update` keeps the old binary as .prev and leaves no .prev.new behind, also when .prev is already a link

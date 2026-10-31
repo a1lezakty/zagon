@@ -104,6 +104,8 @@ final class StoreDataProviderTests: XCTestCase {
         try FileManager.default.createDirectory(atPath: home + "/.zagon/bin", withIntermediateDirectories: true)
         try "#!/bin/sh\n".write(toFile: script, atomically: true, encoding: .utf8)
         try #"{"claudeCode.claudeProcessWrapper": "\#(script)"}"#.write(toFile: user + "/settings.json", atomically: true, encoding: .utf8)
+        XCTAssertEqual(p.limits().claudeEditors, Installer.EditorPanels(off: [user + "/settings.json"]))  // read a minute ago
+        p.forgetEditors()
         XCTAssertEqual(p.limits().claudeEditors, Installer.EditorPanels(on: [user + "/settings.json"]))
     }
 

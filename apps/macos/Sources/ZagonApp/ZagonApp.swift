@@ -495,6 +495,7 @@ final class AppState: ObservableObject {
                 self.cliBusy = false
                 // install / uninstall change the editors too; the panel's hint and the icon read them again.
                 if command != nil {
+                    (self.provider as? StoreDataProvider)?.forgetEditors()
                     self.readEditors()
                     self.refreshIcon()
                 }

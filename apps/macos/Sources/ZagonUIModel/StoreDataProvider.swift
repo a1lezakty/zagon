@@ -34,6 +34,9 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
     public var dbPath: String?
     /// Whose editors' settings `limits()` reads (`Limits.claudeEditors`).
     var paths = ZagonPaths()
+    /// `Limits.claudeEditors` and when it was read: the icon reads the limits every few seconds, the editors' files are
+    /// read at most once a minute (`forgetEditors` after a change). `queue` only.
+    private var editors: (at: Date, state: Installer.EditorPanels)?
     private var zone = TimeZone.autoupdatingCurrent
 
     /// The zone days are cut in, for this Mac's data and the servers' alike (the Mac's own unless one is chosen).
@@ -305,11 +308,19 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
             // For `Limits.claudeHint`; a failed read loses only the hint.
             try? query.db.query("SELECT max(last_at) FROM session WHERE tool = 'claude' AND last_at >= ?",
                                 [.real(now.timeIntervalSince1970 - 7 * 86400)]) { r in l.claudeSeen = r.optReal(0).map(Self.date) }
-            // A few small files, and only under the hint; a failure loses only the hint.
-            if l.claudeHint(at: now) { l.claudeEditors = Installer(Installer.Options(paths: paths)).editorState() }
+            // A few small files, only under the hint and at most once a minute; a failure loses only the hint.
+            if l.claudeHint(at: now) {
+                if editors.map({ abs(Date().timeIntervalSince($0.at)) >= 60 }) ?? true {
+                    editors = (Date(), Installer(Installer.Options(paths: paths)).editorState())
+                }
+                l.claudeEditors = editors?.state
+            }
             return l
         }
     }
+
+    /// The editors' settings changed (`zagon editor-panels`, connect): the next `limits()` reads them again.
+    public func forgetEditors() { queue.sync { editors = nil } }
 
     public func limitHistory(_ kind: LimitKind) -> [LimitPoint] {
         read([]) {

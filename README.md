@@ -117,8 +117,12 @@ What `zagon install` changes:
     settings of Remote-SSH servers on this host (`~/.<editor>-server/data/Machine`): one line after the opening `{`,
     the rest of the file byte for byte, a copy `settings.json.zagon-bak-<time>` next to it first. A file that names
     another wrapper is left alone;
-  - reload open editor windows (Developer: Reload Window);
-  - opt out with `--no-editor-panels`; later `zagon editor-panels on` / `off` adds or removes it;
+  - a settings file that is a symbolic link (shared dotfiles) is left to you;
+  - reload open editor windows (Developer: Reload Window). With the setting, a new panel session starts in the
+    `default` permission mode unless you pick one in the panel, and the panel's session list also shows sessions of
+    other programs started through the SDK;
+  - opt out with `--no-editor-panels`; later `zagon editor-panels on` / `off` adds or removes it. Off (either way) is
+    remembered in `~/.zagon/config.toml` (`[editor] panels = "off"`), so a later install leaves the editors alone;
   - uninstall removes the line and keeps the script, which then runs Claude Code directly.
 - **`~/.codex/hooks.json`**, if `~/.codex` exists:
   - hooks for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PostToolUse`, `Stop`, `Interrupt` and
