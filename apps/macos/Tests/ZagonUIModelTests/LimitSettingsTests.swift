@@ -84,6 +84,50 @@ final class LimitSettingsTests: XCTestCase {
         XCTAssertEqual([none.tip, none.spoken], ["5 ч: – · неделя: –", "Zagon: нет данных"])
     }
 
+    /// The status item's picture is drawn when what it shows changes, not each time the label asks for it (0.1.2 drew it
+    /// on every update of the app, and a redraw set off the next one: a busy core).
+    @MainActor
+    func testStatusIconDrawsOnlyOnChange() async {
+        var p = MockDataProvider(lang: .ru, timeZone: utc)
+        let f = Fmt(lang: .ru, timeZone: utc, now: p.now)
+        var reads = 0, draws = 0, fail = false
+        let icon = StatusIcon<Int>(limits: { reads += 1; return p.limits() }) { _ in
+            if fail { return nil }
+            draws += 1
+            return draws
+        }
+        let update = { (mono: Bool, dark: Bool) in icon.update(colors: RingColors.standard, mono: mono, dark: dark, f) }
+        XCTAssertNil(icon.image)
+        XCTAssertTrue(update(false, true))
+        XCTAssertEqual(icon.look?.vm.ais.map(\.five), [62])
+
+        // The label asks on every change of the app: no reading, no drawing.
+        for _ in 0..<100 { XCTAssertEqual(icon.image, 1) }
+        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(draws, 1)
+        // The timer with nothing new: one reading, the same picture.
+        XCTAssertFalse(update(false, true))
+        XCTAssertEqual(reads, 2)
+        XCTAssertEqual(draws, 1)
+
+        // New numbers, the mode, the bar's shade, a colour: drawn again, once each.
+        p.codexLimits = true
+        XCTAssertTrue(update(false, true))
+        XCTAssertTrue(update(true, true))
+        XCTAssertTrue(update(true, false))
+        XCTAssertTrue(icon.update(colors: { _ in RingColors(five: Palette.violet, week: Palette.week) }, mono: true, dark: false, f))
+        XCTAssertEqual(draws, 5)
+        XCTAssertEqual(icon.image, 5)
+
+        // A failed drawing keeps the last picture and is tried again.
+        fail = true
+        XCTAssertFalse(update(false, false))
+        XCTAssertEqual(icon.image, 5)
+        fail = false
+        XCTAssertTrue(update(false, false))
+        XCTAssertEqual(icon.image, 6)
+    }
+
     func testRingColors() throws {
         XCTAssertEqual(RingColors.standard(.claude), RingColors(five: Palette.fiveHour, week: Palette.week))
         let codex = RingColors.standard(.codex)

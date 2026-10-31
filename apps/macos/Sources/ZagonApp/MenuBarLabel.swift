@@ -99,11 +99,21 @@ enum StatusButton {
     }
 
     private static var watching: (button: NSStatusBarButton, kvo: NSKeyValueObservation)?
+    private static var wasDark: Bool?
 
     /// Calls `changed` when the bar turns dark or light (wallpaper, appearance), once the button exists; a new button
-    /// (MenuBarExtra made the item again) is watched instead.
+    /// (MenuBarExtra made the item again) is watched instead. KVO fires on every `setAppearance` too: AppKit sets one on
+    /// the button to draw the item's copies for other menu bars after each new image. Passed on unchecked, that drew a
+    /// new image, which got new copies drawn, and so on: a busy core (0.1.2, macOS 27).
     static func watch(_ changed: @escaping @MainActor () -> Void) {
         guard let b = button, watching?.button !== b else { return }
-        watching = (b, b.observe(\.effectiveAppearance) { _, _ in Task { @MainActor in changed() } })
+        wasDark = dark
+        watching = (b, b.observe(\.effectiveAppearance) { _, _ in
+            Task { @MainActor in
+                guard dark != wasDark else { return }
+                wasDark = dark
+                changed()
+            }
+        })
     }
 }

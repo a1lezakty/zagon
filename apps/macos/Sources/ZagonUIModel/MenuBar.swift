@@ -55,3 +55,35 @@ public struct MenuBarVM: Sendable, Equatable {
             .joined(separator: "; ")
     }
 }
+
+/// The status item's picture, drawn only when what it shows changes: timers and events call `update` (it reads the
+/// limits), the menu bar label only takes `image`. Both scales go into one picture, so the screen is not part of it.
+@MainActor
+public final class StatusIcon<Image> {
+    public struct Look: Equatable, Sendable {
+        public var vm: MenuBarVM
+        public var mono: Bool
+        /// The bar is dark: a picture that is not a template draws its own text colour.
+        public var dark: Bool
+    }
+
+    public private(set) var look: Look?
+    public private(set) var image: Image?
+    private let limits: @MainActor () -> Limits
+    private let draw: @MainActor (Look) -> Image?
+
+    public init(limits: @escaping @MainActor () -> Limits, draw: @escaping @MainActor (Look) -> Image?) {
+        self.limits = limits; self.draw = draw
+    }
+
+    /// Reads the limits and draws if the picture would differ; a failed drawing (nil) is tried again next time. True
+    /// when `image` changed.
+    @discardableResult
+    public func update(colors: (Tool) -> RingColors, mono: Bool, dark: Bool, _ f: Fmt) -> Bool {
+        let next = Look(vm: MenuBarVM(limits(), colors: colors, f), mono: mono, dark: dark)
+        guard next != look, let drawn = draw(next) else { return false }
+        look = next
+        image = drawn
+        return true
+    }
+}

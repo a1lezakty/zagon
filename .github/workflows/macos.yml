@@ -39,6 +39,9 @@ jobs:
         run: scripts/build-app.sh "0.1.0" "0"
       - name: Launch
         run: scripts/launch-check.sh
+      # ~2.5 min: two 60 s idle runs, CPU under 3 s each (a redraw loop kept a core busy in 0.1.2)
+      - name: Idle CPU
+        run: scripts/idle-cpu.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
