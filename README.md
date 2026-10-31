@@ -110,10 +110,16 @@ What `zagon install` changes:
   - the status line command becomes `zagon statusline`. Your previous command is saved in `~/.zagon/config.toml`
     (`[statusline] original_command`) and still runs with the same input, so your status line looks the same.
   - Opt out with `--no-claude` or `--no-statusline`.
-- **`~/.zagon/bin/claude-wrap`**: the script for the editor setting `claudeCode.claudeProcessWrapper`, which brings
-  Claude limits from the extension panel of VS Code, Cursor and other forks (see [Editors](#editors-vs-code-cursor-and-other-forks-jetbrains)).
-  Install prints the line for the editor's settings and never edits them; uninstall keeps the script, which then runs
-  Claude Code directly.
+- **`~/.zagon/bin/claude-wrap`** and the editor setting `claudeCode.claudeProcessWrapper` naming it, which bring
+  Claude limits from the extension panel of VS Code, Cursor and other forks (see [Editors](#editors-vs-code-cursor-and-other-forks-jetbrains)):
+  - the setting goes into the user settings (and profiles with their own) of every such editor found here
+    (`~/Library/Application Support/<editor>/User` on macOS, `~/.config/<editor>/User` on Linux) and into the machine
+    settings of Remote-SSH servers on this host (`~/.<editor>-server/data/Machine`): one line after the opening `{`,
+    the rest of the file byte for byte, a copy `settings.json.zagon-bak-<time>` next to it first. A file that names
+    another wrapper is left alone;
+  - reload open editor windows (Developer: Reload Window);
+  - opt out with `--no-editor-panels`; later `zagon editor-panels on` / `off` adds or removes it;
+  - uninstall removes the line and keeps the script, which then runs Claude Code directly.
 - **`~/.codex/hooks.json`**, if `~/.codex` exists:
   - hooks for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PostToolUse`, `Stop`, `Interrupt` and
     `SessionEnd`;
@@ -140,8 +146,9 @@ that is already in place. Unknown keys and the formatting of your JSON files are
 - A file you have not touched since install is restored from the backup byte for byte. In a file you changed since,
   only Zagon's entries are removed.
 - The database in `~/.zagon` stays. Delete that directory yourself if you want it gone; if an editor's
-  `claudeCode.claudeProcessWrapper` names `~/.zagon/bin/claude-wrap`, remove that setting first (uninstall leaves the
-  script running Claude Code directly, so the panel keeps working until then).
+  `claudeCode.claudeProcessWrapper` still names `~/.zagon/bin/claude-wrap` (an editor not found here, or
+  `--no-editor-panels`), remove that setting first (uninstall leaves the script running Claude Code directly, so the
+  panel keeps working until then).
 
 ### Update
 
@@ -265,9 +272,11 @@ by `zagon install`). The Claude Code extension for VS Code and its forks (Cursor
 Kiro…) runs Claude Code headless and never calls the status line. Its sessions are counted as usual (tokens, time,
 tasks: their transcripts land in `~/.claude/projects`), but the limits need one editor setting:
 
-- Experimental (checked with the extension's own Claude Code binary, not yet in every editor): add
-  `"claudeCode.claudeProcessWrapper": "/Users/you/.zagon/bin/claude-wrap"` to the editor's user settings
-  (`zagon install` prints the exact line; over Remote-SSH it goes into the Remote settings of that host). The extension
+- Experimental (checked with the extension's own Claude Code binary, not yet in every editor): `zagon install` (or
+  Connect in the Mac app, or `zagon editor-panels on`) adds
+  `"claudeCode.claudeProcessWrapper": "/Users/you/.zagon/bin/claude-wrap"` to the settings of the editors it finds
+  (over Remote-SSH: run `zagon install` on that host); for an editor it does not find, add that line to its user
+  settings yourself. `zagon editor-panels off` (or `zagon uninstall`) takes it out again. The extension
   then starts its bundled Claude Code through this script; Zagon passes the panel's stream on unchanged and records
   the limit readings in it. Without zagon (or with a zagon older than 0.1.4) the script runs Claude Code directly, so
   a setting left behind does no harm while the script itself stays.

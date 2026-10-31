@@ -19,6 +19,7 @@ struct Zagon: ParsableCommand {
             StatusLineCommand.self,
             InstallCommand.self,
             UninstallCommand.self,
+            EditorPanelsCommand.self,
             DoctorCommand.self,
             NotifyCommand.self,
             SummaryCommand.self,
