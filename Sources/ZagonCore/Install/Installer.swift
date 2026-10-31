@@ -570,7 +570,7 @@ public struct Installer {
     /// A settings file that is a symbolic link, or in a linked folder (dotfiles, home-manager): another machine may read
     /// it, where this script's path does not exist and the panel could not start. enable leaves it to the user.
     static func linked(_ f: String) -> Bool {
-        HandoffStore.isLink(f) || HandoffStore.isLink(Sys.dirname(f))
+        Handoff.isLink(f) || Handoff.isLink(Sys.dirname(f))
     }
 
     func linkNote(_ f: String) -> String {
