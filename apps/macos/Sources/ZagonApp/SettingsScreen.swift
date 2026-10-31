@@ -43,6 +43,7 @@ struct SettingsScreen: View {
             }
             .font(.system(size: 13)).foregroundColor(Z.text)
             .frame(maxWidth: 640, alignment: .leading)
+            JiraCard()
             ZoneCard()
             Card(spacing: 12) {
                 Text(f.t("settings.view")).font(.system(size: 15, weight: .semibold))

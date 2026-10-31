@@ -115,6 +115,10 @@ final class AppState: ObservableObject {
     @Published private(set) var notify = NotifySettings()
     /// Why the last read or write of config.toml failed (shown in settings; the controls then show the file's state).
     @Published private(set) var notifyError: String?
+    /// `[jira]` of this Mac's config.toml (nil: not connected), and what each checked server says of its own
+    /// (`JiraCard.swift`).
+    @Published var jira: JiraSettings?
+    @Published var serverJira: [String: JiraSettings.Server] = [:]
     private var persist = false
     /// `~/.ssh/config` text for the settings list; nil = read the file.
     var sshConfig: String?
@@ -288,6 +292,7 @@ final class AppState: ObservableObject {
             do { state.notify = try NotifySettings.load(NotifySettings.configPath) } catch {
                 state.notifyError = Log.scrub(String(describing: error))
             }
+            state.jira = JiraSettings.load(NotifySettings.configPath)
             state.persist = true
             state.keepFresh(p)
             return state
@@ -306,8 +311,13 @@ final class AppState: ObservableObject {
                                         "MCP: claude", "hooks: ~/.codex/hooks.json"])
         state.sshConfig = "Host build-box\nHost gpu-box\nHost ci-runner\n"
         state.remoteHosts = ["build-box", "gpu-box"]
+        state.serverJira = ["build-box": .on, "gpu-box": .off]
+        state.jira = sampleJira
         return state
     }
+
+    /// The samples' Jira (their tasks have Jira data).
+    static let sampleJira = JiraSettings(url: "https://example.atlassian.net", email: "me@example.com", tokenFile: "~/.zagon/jira-token")
 
     /// A store scanned from the test fixtures (snapshots); its detailed day is yesterday too.
     static func fixture(_ root: String, _ lang: Lang) throws -> AppState {
@@ -317,6 +327,7 @@ final class AppState: ObservableObject {
         state.taskBackend = { _ in tasks }
         state.hasLocalCLI = true
         state.taskSource = .local
+        state.jira = sampleJira
         state.loadTasksNow(day: TaskBackend.day(p.now))
         return state
     }

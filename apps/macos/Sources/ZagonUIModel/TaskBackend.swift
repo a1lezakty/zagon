@@ -219,6 +219,9 @@ public struct TaskCache: Sendable {
     /// Suggested new tasks; `jira`: where they may be made in Jira (nil: not connected there, or nothing to suggest).
     public var drafts: [NewTaskDraft]?
     public var jira: TaskBackend.JiraProjects?
+    /// The AI engine whose CLI the source does not have: its suggestions are made without AI (nil: it has one, or not
+    /// known).
+    public var noCli: String?
     /// What the last accept or reject answered.
     public var draftNote: String?
     public var loading = 0

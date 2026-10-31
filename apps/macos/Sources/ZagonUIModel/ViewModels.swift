@@ -618,7 +618,8 @@ public struct TaskDetailVM: Sendable {
     public var key: String
     public var status: String
     public var state: TaskState
-    public var hasJira: Bool
+    /// The Jira issue (nil: not in Jira).
+    public var jiraKey: String?
     public var title: String
     public var description: String
     public var stats: [Stat]
@@ -672,7 +673,7 @@ public struct TasksVM: Sendable {
             jira.append(Note(color: Palette.muted, text: f.t("jira.none")))
         }
         return TaskDetailVM(
-            key: t.key, status: TasksVM.status(t, f), state: t.state, hasJira: t.jira != nil, title: t.title,
+            key: t.key, status: TasksVM.status(t, f), state: t.state, jiraKey: t.jira == nil ? nil : t.jiraKey ?? t.key, title: t.title,
             description: t.description,
             stats: [Stat(f.duration(t.userSec), f.t("task.yourTime")), Stat(f.duration(t.sessionSec), f.t("stat.sessionsWorked")),
                     Stat(f.tokens(t.tokens), f.t("stat.tokens")), Stat(f.pct(t.weekPct), f.t("task.weekShare"))],

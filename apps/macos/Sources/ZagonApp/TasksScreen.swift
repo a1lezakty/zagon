@@ -11,6 +11,7 @@ struct TasksScreen: View {
     /// The suggestion being made in Jira, with the projects shown when its sheet opened.
     @State private var jiraDraft: (draft: DraftVM, jira: TaskBackend.JiraProjects)?
     @Environment(\.isSnapshot) private var snapshot
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         let f = app.f
@@ -43,6 +44,7 @@ struct TasksScreen: View {
         .task(id: "\(String(describing: app.currentTaskSource))|\(detail?.key ?? "")") {
             app.loadTasks(.list)
             app.loadTasks(.drafts)
+            if case .server(let h) = app.currentTaskSource, app.serverJira[h] == nil { app.loadServerJira([h]) }
             if let key = detail?.key { app.loadTasks(.card(key)) }
         }
     }
@@ -55,7 +57,9 @@ struct TasksScreen: View {
                     app.loadTasks(.list, force: true)
                     app.loadTasks(.drafts, force: true)
                     if let key = vm.detail(selected)?.key { app.loadTasks(.card(key), force: true) }
+                    if case .server(let h) = app.currentTaskSource { app.loadServerJira([h]) }
                 }
+                limits(f)
                 HStack(spacing: 8) {
                     Field(placeholder: f.t("tasks.find"), text: $find)
                     Button {} label: {
@@ -87,6 +91,29 @@ struct TasksScreen: View {
             }
             .padding(.vertical, 16).padding(.horizontal, 12)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    /// What the source cannot do: suggest with AI (no CLI of its engine), read Jira (with the way to connect it).
+    @ViewBuilder
+    func limits(_ f: Fmt) -> some View {
+        if app.taskBackend != nil, let s = app.currentTaskSource {
+            let place = s == .local ? f.t("sum.src.local") : f.t("sum.src.server", app.sourceName(s))
+            if let e = app.tasksNow.noCli {
+                Text(f.t("tasks.noCLI", e, place)).font(.system(size: 12)).foregroundColor(Z.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if app.jiraOff(s) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(f.t("tasks.jiraOff", place)).font(.system(size: 12)).foregroundColor(Z.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // A server's Jira is set there, not here.
+                    if s == .local {
+                        Button(f.t("tasks.jiraConnect")) { app.screen = .settings }
+                            .buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundColor(Z.week)
+                    }
+                }
+            }
         }
     }
 
@@ -163,9 +190,8 @@ struct TasksScreen: View {
                         .accessibilityLabel(f.t("task.status"))
                     }
                     Spacer(minLength: 0)
-                    if d.hasJira {
-                        // ponytail: opens nothing until Jira settings exist
-                        Button(f.t("task.openJira")) {}.buttonStyle(.plain).font(.system(size: 13)).foregroundColor(Z.week)
+                    if let page = d.jiraKey.flatMap({ app.jiraPage($0) }) {
+                        Button(f.t("task.openJira")) { openURL(page) }.buttonStyle(.plain).font(.system(size: 13)).foregroundColor(Z.week)
                     }
                 }
                 Text(d.title).font(.system(size: 22, weight: .bold)).foregroundColor(Z.text).lineSpacing(2)
