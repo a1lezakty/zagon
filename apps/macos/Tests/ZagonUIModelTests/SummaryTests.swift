@@ -92,12 +92,12 @@ final class SummaryTests: XCTestCase {
     // MARK: the CLI
 
     /// The CLI's `--json` envelope, as `zagon summary` prints it.
-    func envelope(_ d: SummaryDoc, engine: String = "claude", noCli: String? = nil) -> String {
-        struct Kept: Encodable { var key: String, engine: String, created: Double, doc: SummaryDoc, noCli: String? }
+    func envelope(_ d: SummaryDoc, engine: String = "claude", noCli: String? = nil, aiError: String? = nil) -> String {
+        struct Kept: Encodable { var key: String, engine: String, created: Double, doc: SummaryDoc, noCli: String?, aiError: String? }
         let e = JSONEncoder()
         e.keyEncodingStrategy = .convertToSnakeCase
         e.outputFormatting = [.sortedKeys]
-        return String(decoding: try! e.encode(Kept(key: d.key, engine: engine, created: at.timeIntervalSince1970, doc: d, noCli: noCli)),
+        return String(decoding: try! e.encode(Kept(key: d.key, engine: engine, created: at.timeIntervalSince1970, doc: d, noCli: noCli, aiError: aiError)),
                       as: UTF8.self)
     }
 
@@ -162,6 +162,10 @@ final class SummaryTests: XCTestCase {
         let p = try bare.summaryPlan(from: "a", to: "b")
         XCTAssertEqual(p.noCli, "claude")
         XCTAssertFalse(p.needsConfirm)
+        // The AI did not answer: why, with the summary written without it.
+        let failedJSON = envelope(doc, engine: "none", aiError: "claude: exit 1")
+        let failed = backend(Calls()) { _ in Self.ok(failedJSON) }
+        XCTAssertEqual(try failed.summary(day: "2026-10-30", refresh: true, lang: "en").aiError, "claude: exit 1")
     }
 
     static func planJSON(_ missing: String) -> String {

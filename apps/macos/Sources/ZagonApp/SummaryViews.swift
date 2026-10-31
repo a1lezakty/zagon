@@ -72,6 +72,9 @@ extension AppState {
                     j.result = k
                     if k.doc.items.isEmpty { j.error = f.t(period ? "sum.noCards.period" : "sum.noCards", source) }
                     if let e = k.noCli { j.notice = f.t("sum.noCLI", e, source) }
+                    else if let e = k.aiError {
+                        j.notice = f.t(k.engine == "none" ? "sum.aiFailed" : "sum.aiFailed.kept", Remote.scrubHomes(e), source)
+                    }
                 case .success(.confirm(let p)): j.confirm = p
                 case .failure(let e):
                     j.error = Remote.scrubHomes(String(describing: e))

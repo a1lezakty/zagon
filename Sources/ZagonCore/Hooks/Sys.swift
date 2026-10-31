@@ -267,19 +267,28 @@ public enum Sys {
         return sig == 0 ? (status >> 8) & 0xff : 128 + sig
     }
 
-    /// Spawns `argv` (argv[0] must be a path) in its own process group, writes `stdin`, collects stdout (stderr goes
-    /// to /dev/null). The whole group is killed after `timeout` seconds (status 124). `cwd` runs it in that directory;
-    /// `env` is added to (or replaces entries of) this process's environment.
+    /// How much of a command's stderr `capture` keeps: its end, where errors are.
+    public static let maxErr = 4096
+
+    /// Spawns `argv` (argv[0] must be a path) in its own process group, writes `stdin`, collects stdout and the last
+    /// `maxErr` bytes of stderr. The whole group is killed after `timeout` seconds (status 124). `cwd` runs it in that
+    /// directory; `env` is added to (or replaces entries of) this process's environment.
     // ponytail: stdin is written in full before stdout is read; fine for inputs under the 64 KB pipe buffer
     // (curl configs, prompts), interleave the two if a caller ever passes more.
     public static func capture(_ argv: [String], stdin input: [UInt8] = [], cwd: String? = nil,
-                               timeout: Double = 60, env: [String: String] = [:]) -> (status: Int32, out: [UInt8]) {
-        guard !argv.isEmpty else { return (127, []) }
+                               timeout: Double = 60, env: [String: String] = [:]) -> (status: Int32, out: [UInt8], err: [UInt8]) {
+        guard !argv.isEmpty else { return (127, [], []) }
         signal(SIGPIPE, SIG_IGN)
         let args = cwd.map { ["/bin/sh", "-c", "cd \"$0\" && exec \"$@\"", $0] + argv } ?? argv
         var inP: [Int32] = [-1, -1], outP: [Int32] = [-1, -1]
-        guard pipeCloexec(&inP) else { return (127, []) }
-        guard pipeCloexec(&outP) else { close(inP[0]); close(inP[1]); return (127, []) }
+        guard pipeCloexec(&inP) else { return (127, [], []) }
+        guard pipeCloexec(&outP) else { close(inP[0]); close(inP[1]); return (127, [], []) }
+        // stderr goes to a file deleted at once (read back after the exit): unlike a pipe it never blocks the child,
+        // and a process left behind holding it open does not keep this waiting. /dev/null when none can be made.
+        var name = Array(((Sys.env("TMPDIR") ?? "/tmp") + "/zagon-err-XXXXXX").utf8CString)
+        let errFd = mkstemp(&name)
+        if errFd >= 0 { unlink(name); _ = fcntl(errFd, F_SETFD, FD_CLOEXEC) }
+        defer { if errFd >= 0 { close(errFd) } }
         #if canImport(Darwin)
         var fa: posix_spawn_file_actions_t?, attr: posix_spawnattr_t?
         #else
@@ -292,7 +301,7 @@ public enum Sys {
         posix_spawnattr_setpgroup(&attr, 0)
         posix_spawn_file_actions_adddup2(&fa, inP[0], 0)
         posix_spawn_file_actions_adddup2(&fa, outP[1], 1)
-        posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0)
+        if errFd >= 0 { posix_spawn_file_actions_adddup2(&fa, errFd, 2) } else { posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0) }
         for fd in inP + outP { posix_spawn_file_actions_addclose(&fa, fd) }
         let cargs = args.map { strdup($0) } + [nil]
         defer { cargs.forEach { free($0) } }
@@ -310,7 +319,7 @@ public enum Sys {
         close(inP[0]); close(outP[1])
         if rc == 0 { writeAll(fd: inP[1], input) }
         close(inP[1])
-        guard rc == 0 else { close(outP[0]); return (127, []) }
+        guard rc == 0 else { close(outP[0]); return (127, [], []) }
         var out: [UInt8] = [], buf = [UInt8](repeating: 0, count: 65536), timedOut = false
         let deadline = now() + timeout
         while true {
@@ -328,9 +337,13 @@ public enum Sys {
         close(outP[0])
         var status: Int32 = 0
         while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
-        if timedOut { return (124, out) }
+        var err = [UInt8](repeating: 0, count: maxErr)
+        let size = errFd >= 0 ? Int(lseek(errFd, 0, SEEK_END)) : 0
+        let n = size > 0 ? err.withUnsafeMutableBytes { pread(errFd, $0.baseAddress, maxErr, off_t(max(0, size - maxErr))) } : 0
+        err.removeSubrange(max(0, n)...)
+        if timedOut { return (124, out, err) }
         let sig = status & 0x7f
-        return (sig == 0 ? (status >> 8) & 0xff : 128 + sig, out)
+        return (sig == 0 ? (status >> 8) & 0xff : 128 + sig, out, err)
     }
 
     /// Single-quotes `s` for a POSIX shell when needed.

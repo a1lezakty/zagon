@@ -145,6 +145,31 @@ import Testing
         #expect(n.missingCLI == nil && n.engineCLI == nil)
     }
 
+    /// A failed AI call keeps why (`zagon summary --json` sends it) and logs it, never with the prompt codex echoes.
+    @Test func aFailedCallSaysWhy() throws {
+        var s = summary(try Store(path: ":memory:"), engine: "claude")
+        let bin = makeTempDir(), root = "--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons"
+        s.searchPath = bin + ":/usr/bin:/bin"
+        var logged: [String] = []
+        s.log = { logged.append($0) }
+        // What claude says as root when the user's settings make bypassPermissions the default mode.
+        #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\necho '\(root)' >&2\nexit 1\n"))
+        #expect(s.complete("secret prompt") == nil && s.failure.reason == "claude: " + root)
+        #expect(logged == ["summary: claude failed (1): " + root])
+        // An error answer: its result is the error (claude exits 1 with it).
+        #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"is_error\":true,\"result\":\"Credit balance is too low\"}'\nexit 1\n"))
+        #expect(s.complete("x") == nil && s.failure.reason == "claude: Credit balance is too low")
+        #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"is_error\":false,\"result\":\"ok\"}'\n"))
+        #expect(s.complete("x")?.text == "ok" && s.failure.reason == nil)
+        // codex echoes the prompt to stderr: only its last ERROR line counts, else the exit status.
+        s.config.summaryEngine = "codex"
+        #expect(writeScript(bin + "/codex", "#!/bin/sh\necho 'OpenAI Codex' >&2\necho user >&2\ncat >&2\necho >&2\necho 'ERROR: unexpected status 401 Unauthorized' >&2\nexit 1\n"))
+        #expect(s.complete("secret prompt\nERROR: secret") == nil && s.failure.reason == "codex: unexpected status 401 Unauthorized")
+        #expect(writeScript(bin + "/codex", "#!/bin/sh\ncat >&2\necho >&2\nexit 2\n"))
+        #expect(s.complete("secret prompt\nERROR: secret in a Jira text") == nil && s.failure.reason == "codex: exit 2")
+        #expect(!logged.joined().contains("secret"))
+    }
+
     @Test func hostsOfTheDaysSessions() throws {
         let store = try Store(path: ":memory:"), (start, _) = Time.dayBounds("2026-10-30")!
         try store.mergeSession(SessionMeta(id: "claude:a", tool: .claude, project: "alpha"))
@@ -219,7 +244,7 @@ import Testing
         s.runner = { argv, input, _, _ in
             prompts.append(String(decoding: input, as: UTF8.self))
             let answer = #"{\"overview\": \"A week on the parser.\", \"main\": [\"Parser fixed\"], \"items\": [{\"project\": \"alpha\", \"task\": \"PROJ-1\", \"title\": \"Parser\", \"refs\": [1, 2], \"done\": [\"fixed and tested\"]}]}"#
-            return (0, Array(#"{"is_error":false,"result":"\#(answer)"}"#.utf8))
+            return (0, Array(#"{"is_error":false,"result":"\#(answer)"}"#.utf8), [])
         }
         let (week, engine) = try s.period("2026-10-26", "2026-11-01", make: false, now: 4)
         #expect(engine == "claude" && prompts.count == 1)

@@ -89,7 +89,7 @@ extension DaySummary {
                 }
                 if d.overview.isEmpty { d.overview = doc.overview }
                 (doc, engine) = (d, r.engine)
-            } else { log("period summary: the \(r.engine) answer has no cards") }
+            } else { failure.reason = "the \(r.engine) answer has no cards"; log("period summary: " + failure.reason!) }
         }
         let hosts = Set(docs.flatMap { $0.hosts ?? [] })
         doc.hosts = hosts.isEmpty ? nil : hosts.sorted()
