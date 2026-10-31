@@ -88,6 +88,25 @@ final class StoreDataProviderTests: XCTestCase {
         XCTAssertNil(p.limits().claudeSeen)
     }
 
+    /// Under the hint, the editors' settings of the home folder: off in the editor found, then on.
+    func testClaudeEditors() throws {
+        let p = try StoreDataProvider.fixture(Self.fixtures)
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("zagon-editors-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let user = home + "/Library/Application Support/Cursor/User"
+        try FileManager.default.createDirectory(atPath: user, withIntermediateDirectories: true)
+        try "{}".write(toFile: user + "/settings.json", atomically: true, encoding: .utf8)
+        p.paths = ZagonPaths(home: home, dir: home + "/.zagon")
+        XCTAssertNil(p.limits().claudeEditors)  // current readings: no hint, not read
+        _ = try p.query.db.run("DELETE FROM limit_snapshot")
+        XCTAssertEqual(p.limits().claudeEditors, Installer.EditorPanels(off: [user + "/settings.json"]))
+        let script = Installer.wrapScript(p.paths)
+        try FileManager.default.createDirectory(atPath: home + "/.zagon/bin", withIntermediateDirectories: true)
+        try "#!/bin/sh\n".write(toFile: script, atomically: true, encoding: .utf8)
+        try #"{"claudeCode.claudeProcessWrapper": "\#(script)"}"#.write(toFile: user + "/settings.json", atomically: true, encoding: .utf8)
+        XCTAssertEqual(p.limits().claudeEditors, Installer.EditorPanels(on: [user + "/settings.json"]))
+    }
+
     /// Today's price per AI adds up to the day's; the tokens of a Codex session count for Codex.
     func testCostPerTool() throws {
         let p = try StoreDataProvider.fixture(Self.fixtures)

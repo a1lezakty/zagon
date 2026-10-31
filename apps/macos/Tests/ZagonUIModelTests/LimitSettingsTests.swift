@@ -89,13 +89,12 @@ final class LimitSettingsTests: XCTestCase {
     func testClaudeHint() {
         var p = MockDataProvider(lang: .ru, timeZone: utc)
         let f = Fmt(lang: .ru, timeZone: utc, now: p.now)
-        let wrap = "/Users/you/.zagon/bin/claude-wrap"
-        let hint = "Лимиты Claude из панели Cursor или VS Code: задай в настройках редактора claudeCode.claudeProcessWrapper = "
-            + wrap + ". Или включи claudeCode.useTerminal."
+        let hint = "Лимиты Claude из панели Cursor или VS Code появятся, когда Zagon включён в редакторах. Или включи claudeCode.useTerminal."
+        let reload = "Лимиты Claude из панели редактора появятся после следующего сообщения в ней (в окне, открытом раньше, — Developer: Reload Window)."
         let terminal = "Лимиты Claude приходят из claude в терминале. В Cursor и VS Code включи claudeCode.useTerminal."
         let fixed = { (l: Limits) in MainVM(ZagonUIModelTests.Fixed(base: p, l: l), f) }
 
-        // Sessions, no reading: Claude alone, its pair of rings with "–", and the wrapper setting to copy.
+        // Sessions, no reading: Claude alone, its pair of rings with "–"; editors found without the setting: turn it on.
         p.claudeUnread = true
         var unread = p.limits()
         XCTAssertTrue(unread.claudeHint(at: p.now))
@@ -105,15 +104,23 @@ final class LimitSettingsTests: XCTestCase {
         XCTAssertTrue(alone.spoken.hasSuffix("нет данных. " + hint))
         let panel = MainVM(p, f)
         XCTAssertEqual(panel.claudeHint, hint)
-        XCTAssertEqual(panel.claudeSetting, "\"claudeCode.claudeProcessWrapper\": \"" + wrap + "\"")
+        XCTAssertTrue(panel.claudeEnable)
         XCTAssertTrue(panel.limitsMissing)
         XCTAssertTrue(panel.ais.isEmpty)
         XCTAssertNil(panel.five)
         XCTAssertEqual(panel.limitsHeader, "ЛИМИТЫ CLAUDE")
-        // No wrapper script (not installed): only the terminal, nothing to copy.
-        unread.claudeWrapper = nil
-        XCTAssertEqual(MenuBarVM(unread, f).tip, "Claude: 5 ч –, неделя –\n" + terminal)
-        XCTAssertEqual([fixed(unread).claudeHint, fixed(unread).claudeSetting], [terminal, nil])
+        // On in one editor (off in another): the panel's next message brings them, nothing to turn on.
+        unread.claudeEditors?.on = ["/Users/you/.cursor-server/data/Machine/settings.json"]
+        XCTAssertEqual(MenuBarVM(unread, f).tip, "Claude: 5 ч –, неделя –\n" + reload)
+        XCTAssertEqual(fixed(unread).claudeHint, reload)
+        XCTAssertFalse(fixed(unread).claudeEnable)
+        // No editors (not read, or only files left alone): only the terminal, nothing to turn on.
+        for editors in [nil, Installer.EditorPanels(other: ["/Users/you/.config/Code/User/settings.json is not a JSON object"])] {
+            unread.claudeEditors = editors
+            XCTAssertEqual(MenuBarVM(unread, f).tip, "Claude: 5 ч –, неделя –\n" + terminal)
+            XCTAssertEqual(fixed(unread).claudeHint, terminal)
+            XCTAssertFalse(fixed(unread).claudeEnable)
+        }
         // A stale Codex reading stays out: Claude's rings.
         unread.codex = AILimits(week: LimitWindow(usedPct: 30, resetsAt: p.now - 60, tool: .codex))
         XCTAssertEqual(MenuBarVM(unread, f).ais.map(\.tool), [.claude])
@@ -166,8 +173,38 @@ final class LimitSettingsTests: XCTestCase {
         XCTAssertFalse(old.claudeHint(at: p.now))
         old.claude.week?.resetsAt = used + 3600
         XCTAssertTrue(old.claudeHint(at: p.now))
-        old.claudeWrapper = #"/Users/a "b"\c"#
-        XCTAssertEqual(old.claudeSetting, #""claudeCode.claudeProcessWrapper": "/Users/a \"b\"\\c""#)
+    }
+
+    /// Settings → Claude limits from the IDE panel: editors named from their paths, what on / off can change.
+    func testEditorPanelsCard() {
+        let f = Fmt(lang: .en, timeZone: utc, now: Date(timeIntervalSince1970: 0))
+        let app = "/Users/you/Library/Application Support"
+        let none = EditorPanelsVM(Installer.EditorPanels(), f)
+        XCTAssertEqual(none.lines, [.init(on: false, text: "No VS Code or Cursor editors found")])
+        XCTAssertEqual([none.canEnable, none.canDisable], [false, false])
+
+        let off = EditorPanelsVM(MockDataProvider.editors, f)
+        XCTAssertEqual(off.lines, [.init(on: false, text: "Off: Cursor, Code")])
+        XCTAssertEqual([off.canEnable, off.canDisable, off.notes.isEmpty], [true, false, true])
+
+        let some = EditorPanelsVM(Installer.EditorPanels(
+            on: [app + "/Cursor/User/settings.json", app + "/Cursor/User/profiles/1a2b/settings.json",
+                 app + "/Cursor/User/profiles/3c4d/settings.json", "/Users/you/.cursor-server/data/Machine/settings.json"],
+            off: ["/home/you/.config/Code/User/settings.json"]), f)
+        XCTAssertEqual(some.lines, [.init(on: true, text: "On: Cursor, Cursor (profile), cursor-server (Remote-SSH)"),
+                                    .init(on: false, text: "Off: Code")])
+        XCTAssertEqual([some.canEnable, some.canDisable], [true, true])
+
+        // Only files left alone: no "not found", the notes say what is there.
+        let other = EditorPanelsVM(Installer.EditorPanels(on: [app + "/Code/User/settings.json"],
+                                                          other: [app + "/Cursor/User/settings.json runs /opt/w, not /Users/you/.zagon/bin/claude-wrap: no limits from that panel"]), f)
+        XCTAssertEqual(other.lines, [.init(on: true, text: "On: Code")])
+        XCTAssertEqual(other.notes, ["~/Library/Application Support/Cursor/User/settings.json runs /opt/w, not ~/.zagon/bin/claude-wrap: no limits from that panel"])
+        XCTAssertEqual([other.canEnable, other.canDisable], [false, true])
+        let alone = EditorPanelsVM(Installer.EditorPanels(other: ["x is not a JSON object"]), f)
+        XCTAssertEqual([alone.lines.isEmpty, alone.canEnable, alone.canDisable], [true, false, false])
+        XCTAssertEqual(EditorPanelsVM(Installer.EditorPanels(), Fmt(lang: .ru, timeZone: utc, now: f.now)).lines.map(\.text),
+                       ["Редакторы VS Code и Cursor не найдены"])
     }
 
     /// The status item's picture is drawn when what it shows changes, not each time the label asks for it (0.1.2 drew it

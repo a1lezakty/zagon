@@ -1,4 +1,5 @@
 import Foundation
+import ZagonCore
 
 /// Connecting Claude Code / Codex through the CLI bundled in Zagon.app (`Contents/Helpers/zagon`):
 /// `install` / `uninstall` / `doctor --bin <its path>` (hooks, status line, MCP).
@@ -69,12 +70,54 @@ public enum Connect {
         return parseDoctor(String(decoding: r.out, as: UTF8.self))
     }
 
-    /// `install` or `uninstall`; nil = done, else why not (the CLI's error line, home folder as ~).
+    /// `install`, `uninstall`, `editor-panels on|off` (words split on spaces); nil = done, else why not (the CLI's error
+    /// line, home folder as ~).
     public static func change(_ bin: String, _ command: String, path: String) -> String? {
-        guard let r = (try? Proc.run(bin, [command, "--bin", bin], env: ["PATH": path], timeout: 120)) ?? nil else {
+        let args = command.split(separator: " ").map(String.init) + ["--bin", bin]
+        guard let r = (try? Proc.run(bin, args, env: ["PATH": path], timeout: 120)) ?? nil else {
             return "no answer in 120 s"
         }
         guard r.status != 0 else { return nil }
         return Remote.scrubHomes(Log.scrub(r.errLastLine.isEmpty ? "exit \(r.status)" : r.errLastLine))
+    }
+}
+
+/// Settings → Claude limits from the IDE panel: where `claudeCode.claudeProcessWrapper` stands in the editors found
+/// (`Installer.editorState`), editors named from their settings paths.
+public struct EditorPanelsVM: Sendable, Equatable {
+    /// Each with a dot: green when on.
+    public struct Line: Sendable, Equatable {
+        public var on: Bool
+        public var text: String
+    }
+    public var lines: [Line]
+    /// Files left alone (another wrapper, not JSON), home folder as ~.
+    public var notes: [String]
+    /// `editor-panels on` has something to add to / `off` something to remove.
+    public var canEnable: Bool
+    public var canDisable: Bool
+
+    public init(_ s: Installer.EditorPanels, _ f: Fmt) {
+        let names = { (paths: [String]) in paths.map { Self.name($0, f) }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } } }
+        lines = (s.on.isEmpty ? [] : [Line(on: true, text: f.t("editors.on", names(s.on).joined(separator: ", ")))])
+            + (s.off.isEmpty ? [] : [Line(on: false, text: f.t("editors.off", names(s.off).joined(separator: ", ")))])
+        if lines.isEmpty && s.other.isEmpty { lines = [Line(on: false, text: f.t("editors.none"))] }
+        notes = s.other.map(Remote.scrubHomes)
+        canEnable = !s.off.isEmpty
+        canDisable = !s.on.isEmpty
+    }
+
+    /// This Mac's editors now.
+    public static func local(_ f: Fmt) -> EditorPanelsVM { EditorPanelsVM(Installer(Installer.Options()).editorState(), f) }
+
+    /// `…/Cursor/User/settings.json` → Cursor, `…/Code/User/profiles/<id>/settings.json` → Code (profile),
+    /// `~/.cursor-server/data/Machine/settings.json` → cursor-server (Remote-SSH).
+    static func name(_ path: String, _ f: Fmt) -> String {
+        let c = path.split(separator: "/").map(String.init)
+        if let u = c.lastIndex(of: "User"), u > 0 {
+            return c[u - 1] + (c.count > u + 1 && c[u + 1] == "profiles" ? " (" + f.t("editors.profile") + ")" : "")
+        }
+        if let d = c.lastIndex(of: "data"), d > 0 { return String(c[d - 1].drop { $0 == "." }) + " (Remote-SSH)" }
+        return Remote.scrubHomes(path)
     }
 }

@@ -32,6 +32,8 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
     private var notifier: Notifier?
     /// The database file (diagnostics); nil in memory.
     public var dbPath: String?
+    /// Whose editors' settings `limits()` reads (`Limits.claudeEditors`).
+    var paths = ZagonPaths()
     private var zone = TimeZone.autoupdatingCurrent
 
     /// The zone days are cut in, for this Mac's data and the servers' alike (the Mac's own unless one is chosen).
@@ -209,6 +211,7 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
             return s.lines > 0 || threads > 0 || spool.lines > 0
         }
         p.dbPath = paths.dir + "/zagon.db"
+        p.paths = paths
         p.aliases = (try? Remote.aliases(db: writer.db)) ?? [:]
         return p
     }
@@ -302,9 +305,8 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
             // For `Limits.claudeHint`; a failed read loses only the hint.
             try? query.db.query("SELECT max(last_at) FROM session WHERE tool = 'claude' AND last_at >= ?",
                                 [.real(now.timeIntervalSince1970 - 7 * 86400)]) { r in l.claudeSeen = r.optReal(0).map(Self.date) }
-            // Where `zagon install` puts it (`Installer.wrapScript`).
-            let wrapper = ZagonPaths().dir + "/bin/claude-wrap"
-            l.claudeWrapper = FileManager.default.isExecutableFile(atPath: wrapper) ? wrapper : nil
+            // A few small files, and only under the hint; a failure loses only the hint.
+            if l.claudeHint(at: now) { l.claudeEditors = Installer(Installer.Options(paths: paths)).editorState() }
             return l
         }
     }

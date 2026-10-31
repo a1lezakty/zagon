@@ -148,9 +148,9 @@ public struct MainVM: Sendable {
     /// A window has no current reading: the panel says when one comes.
     public var limitsMissing: Bool
     /// Claude was used without a reading (`Limits.claudeHint`): where its limits come from, said instead of when a
-    /// reading comes; and the editor setting to copy, when the wrapper script is there.
+    /// reading comes; and whether to offer turning it on in the editors found (`Limits.claudeEnable`).
     public var claudeHint: String?
-    public var claudeSetting: String?
+    public var claudeEnable: Bool
     /// No sessions at all: one line instead of an empty block.
     public var noSessions: String?
 
@@ -158,7 +158,7 @@ public struct MainVM: Sendable {
         let limits = p.limits(), current = limits.tools(at: f.now), shown = limits.shown(at: f.now)
         let hinted = limits.claudeHint(at: f.now)
         claudeHint = hinted ? limits.claudeHintLine(f) : nil
-        claudeSetting = hinted ? limits.claudeSetting : nil
+        claudeEnable = hinted && limits.claudeEnable
         let oneTool = current.first ?? (shown.fiveHour ?? shown.week)?.tool ?? .claude, one = colors(oneTool)
         five = shown.fiveHour.map { RingVM(title: f.t("limit.five"), window: $0, base: one.five, f: f) }
         week = shown.week.map { RingVM(title: f.t("limit.week"), window: $0, base: one.week, f: f) }
