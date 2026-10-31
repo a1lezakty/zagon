@@ -64,6 +64,7 @@ struct SettingsScreen: View {
                 }
                 Text(f.t("settings.view.note")).font(.system(size: 12)).foregroundColor(Z.muted)
                     .fixedSize(horizontal: false, vertical: true)
+                colors(f)
             }
             .frame(maxWidth: 640, alignment: .leading)
             Card(spacing: 12) {
@@ -188,6 +189,89 @@ struct SettingsScreen: View {
         .task(id: servers) { app.loadSummaryTimes() }
     }
 
+    /// Ring colours per AI, 5 hours and the week: a palette swatch or the system colour panel, a live preview, a reset.
+    func colors(_ f: Fmt) -> some View {
+        let standard = Tool.allCases.allSatisfy { app.colors($0) == RingColors.standard($0) }
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(f.t("settings.colors")).font(.system(size: 13)).foregroundColor(Z.body).frame(width: 90, alignment: .leading)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Tool.allCases, id: \.self) { tool in
+                        Text(tool.name).font(.system(size: 12, weight: .semibold)).foregroundColor(Z.secondary)
+                            .padding(.top, tool == .claude ? 0 : 6)
+                        ForEach(LimitKind.allCases, id: \.self) { swatches(tool, $0, f) }
+                    }
+                }
+            }
+            HStack(alignment: .top, spacing: 12) {
+                Text(f.t("settings.colors.preview")).font(.system(size: 13)).foregroundColor(Z.body).frame(width: 90, alignment: .leading)
+                ColorPreview(claude: app.colors(.claude), codex: app.colors(.codex), colored: !app.monoIcon, f: f)
+            }
+            HStack(spacing: 12) {
+                Color.clear.frame(width: 90, height: 1)
+                PillButton(title: f.t("settings.colors.reset"), height: 28, radius: 8, fontSize: 12) {
+                    for t in Tool.allCases { app.setColors(t, .standard(t)) }
+                }
+                .disabled(standard)
+            }
+            Text(f.t("settings.colors.note")).font(.system(size: 12)).foregroundColor(Z.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    static let colorNames: [UInt32: String] = [
+        Palette.fiveHour: "color.orange", Palette.week: "color.blue", Palette.working: "color.green",
+        Palette.violet: "color.violet", Palette.good: "color.mint", Palette.link: "color.sky", Palette.muted: "color.grey",
+    ]
+    static let rainbow = AngularGradient(gradient: Gradient(colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red]),
+                                         center: .center, startAngle: .zero, endAngle: .degrees(360))
+
+    func swatches(_ tool: Tool, _ kind: LimitKind, _ f: Fmt) -> some View {
+        let app = self.app
+        let now = kind == .week ? app.colors(tool).week : app.colors(tool).five
+        let title = f.t(kind == .week ? "limit.week" : "limit.five"), custom = !RingColors.swatches.contains(now)
+        // read afresh: the colour panel calls back long after this body
+        let set = { (v: UInt32) in
+            var c = app.colors(tool)
+            if kind == .week { c.week = v } else { c.five = v }
+            app.setColors(tool, c)
+        }
+        return HStack(spacing: 4) {
+            Text(title).font(.system(size: 12)).foregroundColor(Z.body).frame(width: 64, alignment: .leading)
+            ForEach(RingColors.swatches, id: \.self) { s in
+                Button { set(s) } label: { Swatch(fill: Color(hex: s), selected: s == now) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(tool.name), \(title): \(f.t(Self.colorNames[s] ?? "settings.colors.other"))")
+                    .accessibilityAddTraits(s == now ? .isSelected : [])
+            }
+            Button { ColorPanel.shared.open("\(tool.name) · \(title)", now, set) } label: {
+                HStack(spacing: 6) {
+                    Swatch(fill: Self.rainbow, selected: custom, dot: custom ? Color(hex: now) : nil)
+                    Text(f.t("settings.colors.other")).font(.system(size: 12)).foregroundColor(Z.body)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 6)
+            .accessibilityLabel("\(tool.name), \(title): \(f.t("settings.colors.other"))")
+            .accessibilityAddTraits(custom ? .isSelected : [])
+        }
+    }
+
+    /// A colour dot, ringed when chosen; `dot` is a picked colour shown inside the rainbow one.
+    struct Swatch<S: ShapeStyle>: View {
+        let fill: S
+        let selected: Bool
+        var dot: Color?
+        var body: some View {
+            Circle().fill(fill).frame(width: 18, height: 18)
+                .overlay { if let dot { Circle().fill(dot).frame(width: 10, height: 10) } }
+                .padding(3)
+                .overlay(Circle().strokeBorder(selected ? Z.text : Color.clear, lineWidth: 2))
+                .contentShape(Circle())
+        }
+    }
+
     struct CheckRow: View {
         let title: String
         let on: Bool
@@ -213,5 +297,67 @@ struct SettingsScreen: View {
         } catch {
             app.say(f.t("settings.diag.failed", Log.scrub(String(describing: error))), error: true)
         }
+    }
+}
+
+/// The menu bar in the chosen colours, on a light and a dark bar: each AI alone (its pair of rings) and both (a
+/// ring-in-ring each). Fixed sample values, below the warnings.
+struct ColorPreview: View {
+    let claude: RingColors
+    let codex: RingColors
+    let colored: Bool
+    let f: Fmt
+    static let column: CGFloat = 100
+
+    var body: some View {
+        let a = MenuBarVM.AI(tool: .claude, five: 62, week: 35, colors: claude)
+        let b = MenuBarVM.AI(tool: .codex, five: 18, week: 71, colors: codex)
+        let samples = [(f.t("settings.colors.alone", "Claude"), [a]), (f.t("settings.colors.alone", "Codex"), [b]),
+                       (f.t("settings.colors.both"), [a, b])]
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 0) {
+                ForEach(samples.indices, id: \.self) {
+                    Text(samples[$0].0).font(.system(size: 11)).foregroundColor(Z.muted).lineLimit(1).frame(width: Self.column)
+                }
+            }
+            ForEach([true, false], id: \.self) { light in
+                HStack(spacing: 0) {
+                    ForEach(samples.indices, id: \.self) {
+                        MenuBarLabel(vm: MenuBarVM(ais: samples[$0].1, f), colored: colored,
+                                     tint: light ? .black.opacity(0.85) : .white)
+                            .frame(width: Self.column)
+                    }
+                }
+                .frame(height: 28)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color(hex: light ? 0xE6E6EA : 0x2A2A2E)))
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// The system colour panel behind "Other…". There is one panel, so it edits the colour it was last opened for.
+@MainActor
+final class ColorPanel: NSObject {
+    static let shared = ColorPanel()
+    private var apply: ((UInt32) -> Void)?
+
+    func open(_ title: String, _ color: UInt32, _ apply: @escaping (UInt32) -> Void) {
+        let p = NSColorPanel.shared
+        self.apply = nil
+        p.showsAlpha = false
+        p.color = NSColor(srgbRed: CGFloat(color >> 16 & 0xFF) / 255, green: CGFloat(color >> 8 & 0xFF) / 255,
+                          blue: CGFloat(color & 0xFF) / 255, alpha: 1)
+        p.title = title
+        p.setTarget(self)
+        p.setAction(#selector(changed(_:)))
+        self.apply = apply
+        p.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func changed(_ p: NSColorPanel) {
+        guard let c = p.color.usingColorSpace(.sRGB) else { return }
+        func byte(_ v: CGFloat) -> UInt32 { UInt32((min(1, max(0, v)) * 255).rounded()) }
+        apply?(byte(c.redComponent) << 16 | byte(c.greenComponent) << 8 | byte(c.blueComponent))
     }
 }
