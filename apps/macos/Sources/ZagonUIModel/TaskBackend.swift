@@ -48,8 +48,8 @@ public struct TaskBackend: Sendable {
         return (r.out, err.last { $0.hasPrefix("jira: ") }.map { Remote.scrubHomes(String($0.dropFirst(6))) })
     }
 
-    func decode<T: Decodable>(_ args: [String]) throws -> (T, jira: String?) {
-        let (out, jira) = try call(args)
+    func decode<T: Decodable>(_ args: [String], timeout: Double = 120) throws -> (T, jira: String?) {
+        let (out, jira) = try call(args, timeout: timeout)
         // A login banner may come first: the JSON is the last line.
         return (try Self.parse(out.split(separator: UInt8(ascii: "\n")).last.map { Data($0) } ?? out, args), jira)
     }
@@ -216,6 +216,8 @@ public struct TaskCache: Sendable {
     /// Full cards by key (time over the whole history), loaded when a task is opened.
     public var cards: [String: TaskItem] = [:]
     public var plans: [String: WorklogPlan] = [:]
+    /// Reconciliations by "from|to".
+    public var reconciles: [String: Reconciliation] = [:]
     /// Suggested new tasks; `jira`: where they may be made in Jira (nil: not connected there, or nothing to suggest).
     public var drafts: [NewTaskDraft]?
     public var jira: TaskBackend.JiraProjects?

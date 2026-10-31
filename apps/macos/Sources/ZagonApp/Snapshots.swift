@@ -135,6 +135,23 @@ enum Snapshots {
             ok = write(root, width: 1280, "\(prefix)\(screen.rawValue)-\(lang.rawValue)", dir) && ok
         }
         if prefix.isEmpty {
+            // The worklog screen over a period: the sample with PROJ-21 open, without Jira, and with no sessions at all.
+            let sample = state.sampleReconcile, now = state.f.now, zone = state.zone
+            state.screen = .worklog
+            for (name, r) in [("period", sample), ("period-nojira", .sample(now: now, zone: zone, jira: false)),
+                              ("period-empty", .sample(now: now, zone: zone, empty: true))] as [(String, Reconciliation?)] {
+                guard let r else { continue }
+                state.sampleReconcile = r
+                state.worklogPeriod = StoreDataProvider.start(r.from, zone)...StoreDataProvider.start(r.toRequested, zone)
+                state.reconcileOpen = name == "period" ? "t4" : nil
+                let root = WindowRoot().environmentObject(state).fixedSize(horizontal: false, vertical: true)
+                ok = write(root, width: 1280, "worklog-\(name)-\(lang.rawValue)", dir) && ok
+            }
+            state.sampleReconcile = sample
+            state.worklogPeriod = nil
+            state.reconcileOpen = nil
+        }
+        if prefix.isEmpty {
             // The first window (where Zagon lives, Connect) and a toast, in the window and in the panel.
             let connected = state.cli
             state.cli = Connect.Status(ok: ["hooks: ~/.claude/settings.json"], missing: ["MCP: claude"])
