@@ -31,7 +31,10 @@ extension ZagonDataProvider {
     public func hostName(_ host: String) -> String { host }
 }
 
-public enum Tool: String, Sendable { case claude, codex }
+public enum Tool: String, Sendable, CaseIterable {
+    case claude, codex
+    public var name: String { self == .codex ? "Codex" : "Claude" }
+}
 
 public struct LimitWindow: Sendable {
     public var usedPct: Double
@@ -44,12 +47,85 @@ public struct LimitWindow: Sendable {
     public init(usedPct: Double, resetsAt: Date, pctPerHour: Double? = nil, tool: Tool? = nil, readAt: Date? = nil) {
         self.usedPct = usedPct; self.resetsAt = resetsAt; self.pctPerHour = pctPerHour; self.tool = tool; self.readAt = readAt
     }
+
+    /// Used percent as the rings show it; nil when the reading is older than its reset (the window started over).
+    public func pct(at now: Date) -> Int? { resetsAt > now ? Int(usedPct.rounded()) : nil }
 }
 
-public struct Limits: Sendable {
+/// One AI's two windows.
+public struct AILimits: Sendable {
     public var fiveHour: LimitWindow?
     public var week: LimitWindow?
-    public init(fiveHour: LimitWindow?, week: LimitWindow?) { self.fiveHour = fiveHour; self.week = week }
+    public init(fiveHour: LimitWindow? = nil, week: LimitWindow? = nil) { self.fiveHour = fiveHour; self.week = week }
+
+    /// A window was read since its last reset. An older reading is stale: the window started over, usage is unknown
+    /// (`RingVM.pct` is nil then).
+    public func current(at now: Date) -> Bool { [fiveHour, week].contains { $0?.pct(at: now) != nil } }
+}
+
+/// The limits of Claude and Codex, each AI on its own.
+public struct Limits: Sendable {
+    public var claude: AILimits
+    public var codex: AILimits
+    public init(claude: AILimits = AILimits(), codex: AILimits = AILimits()) { self.claude = claude; self.codex = codex }
+
+    /// Both windows of one AI (the samples): Codex's when the first window says so, else Claude's.
+    public init(fiveHour: LimitWindow?, week: LimitWindow?) {
+        let w = AILimits(fiveHour: fiveHour, week: week)
+        self.init(claude: (fiveHour ?? week)?.tool == .codex ? AILimits() : w,
+                  codex: (fiveHour ?? week)?.tool == .codex ? w : AILimits())
+    }
+
+    public subscript(_ tool: Tool) -> AILimits { tool == .codex ? codex : claude }
+
+    /// The AIs with a current reading, Claude first. Two: both are shown, a ring-in-ring each; one: its pair of rings.
+    public func tools(at now: Date) -> [Tool] { Tool.allCases.filter { self[$0].current(at: now) } }
+    public func both(at now: Date) -> Bool { tools(at: now).count == 2 }
+
+    /// The windows shown when one AI is shown: the one with a current reading; with none (or both), as `fiveHour` /
+    /// `week`. Two AIs are shown each with its own: `self[tool]`.
+    public func shown(at now: Date) -> AILimits {
+        let t = tools(at: now)
+        return t.count == 1 ? self[t[0]] : AILimits(fiveHour: fiveHour, week: week)
+    }
+
+    /// Claude's window, Codex's where Claude has none (the week screen, the pace view).
+    public var fiveHour: LimitWindow? { claude.fiveHour ?? codex.fiveHour }
+    public var week: LimitWindow? { claude.week ?? codex.week }
+}
+
+/// The two ring colours of one AI: 5 hours and the week (in a ring-in-ring the inner and the outer ring, in a pair the
+/// left and the right one). Saved in UserDefaults next to `monoIcon`.
+public struct RingColors: Sendable, Equatable {
+    public var five: UInt32
+    public var week: UInt32
+    public init(five: UInt32, week: UInt32) { self.five = five; self.week = week }
+
+    /// Claude as before (orange, blue); Codex its own pair, so the two are not mixed up.
+    public static func standard(_ tool: Tool) -> RingColors {
+        tool == .codex ? RingColors(five: Palette.violet, week: Palette.working) : RingColors(five: Palette.fiveHour, week: Palette.week)
+    }
+
+    /// The swatches settings offer: the palette's accents without red (red is the warning).
+    public static let swatches: [UInt32] = [Palette.fiveHour, Palette.week, Palette.working, Palette.violet, Palette.good,
+                                            Palette.link, Palette.muted]
+
+    static func key(_ tool: Tool, _ kind: LimitKind) -> String { "ringColor.\(tool.rawValue).\(kind.rawValue)" }
+
+    /// The saved colours; a missing or broken value is the default.
+    public static func load(_ tool: Tool, _ d: UserDefaults = .standard) -> RingColors {
+        let standard = Self.standard(tool)
+        func color(_ kind: LimitKind, _ fallback: UInt32) -> UInt32 {
+            guard let v = d.object(forKey: key(tool, kind)) as? Int, (0...0xFFFFFF).contains(v) else { return fallback }
+            return UInt32(v)
+        }
+        return RingColors(five: color(.fiveHour, standard.five), week: color(.week, standard.week))
+    }
+
+    public func save(_ tool: Tool, _ d: UserDefaults = .standard) {
+        d.set(Int(five & 0xFFFFFF), forKey: Self.key(tool, .fiveHour))
+        d.set(Int(week & 0xFFFFFF), forKey: Self.key(tool, .week))
+    }
 }
 
 public enum SessionStatus: Sendable { case working, waitingPermission, waitingInput, idle }

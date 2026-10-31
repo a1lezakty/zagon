@@ -289,19 +289,16 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
     // MARK: menu bar
 
     public func limits() -> Limits {
-        read(Limits(fiveHour: nil, week: nil)) {
+        read(Limits()) {
             let all = try query.limits(now: now.timeIntervalSince1970)
-            func window(_ names: [(ToolKind, String)]) -> LimitWindow? {
-                for (tool, name) in names {
-                    guard let r = all.first(where: { $0.tool == tool && $0.window == name }) else { continue }
-                    let reset = r.resetsAt ?? r.ts + Double((r.windowMinutes ?? 0) * 60)
-                    return LimitWindow(usedPct: r.usedPct, resetsAt: Self.date(reset), pctPerHour: r.pctPerHour,
-                                       tool: tool == .codex ? .codex : .claude, readAt: Self.date(r.ts))
-                }
-                return nil
+            func window(_ tool: ToolKind, _ name: String) -> LimitWindow? {
+                guard let r = all.first(where: { $0.tool == tool && $0.window == name }) else { return nil }
+                let reset = r.resetsAt ?? r.ts + Double((r.windowMinutes ?? 0) * 60)
+                return LimitWindow(usedPct: r.usedPct, resetsAt: Self.date(reset), pctPerHour: r.pctPerHour,
+                                   tool: tool == .codex ? .codex : .claude, readAt: Self.date(r.ts))
             }
-            return Limits(fiveHour: window([(.claude, "five_hour"), (.codex, "primary")]),
-                          week: window([(.claude, "seven_day"), (.codex, "secondary")]))
+            return Limits(claude: AILimits(fiveHour: window(.claude, "five_hour"), week: window(.claude, "seven_day")),
+                          codex: AILimits(fiveHour: window(.codex, "primary"), week: window(.codex, "secondary")))
         }
     }
 

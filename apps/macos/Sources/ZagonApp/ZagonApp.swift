@@ -33,6 +33,16 @@ final class AppState: ObservableObject {
     @Published var paceWeekdays = false { didSet { save(paceWeekdays, "paceWeekdays") } }
     @Published var monoIcon = false { didSet { save(monoIcon, "monoIcon") } }
     @Published var showLeft = false { didSet { save(showLeft, "limitsShowLeft") } }
+    /// Ring colours per AI (menu bar, panel), set in settings.
+    @Published var claudeColors = RingColors.standard(.claude) { didSet { if persist { claudeColors.save(.claude) } } }
+    @Published var codexColors = RingColors.standard(.codex) { didSet { if persist { codexColors.save(.codex) } } }
+    func colors(_ tool: Tool) -> RingColors { tool == .codex ? codexColors : claudeColors }
+    func setColors(_ tool: Tool, _ c: RingColors) { if tool == .codex { codexColors = c } else { claudeColors = c } }
+    /// The status item as it is now.
+    var menuBar: MenuBarVM {
+        let claude = claudeColors, codex = codexColors
+        return MenuBarVM(provider.limits(), colors: { $0 == .codex ? codex : claude }, f)
+    }
     /// System notifications on this Mac (on by default) and the same through Telegram / ntfy (off: servers send those).
     @Published var macNotify = true { didSet { save(macNotify, "macNotify") } }
     @Published var macNotifyRemote = false { didSet { save(macNotifyRemote, "macNotifyRemote") } }
@@ -186,6 +196,7 @@ final class AppState: ObservableObject {
             let d = UserDefaults.standard
             state.pace = d.bool(forKey: "limitsPace"); state.paceWeekdays = d.bool(forKey: "paceWeekdays")
             state.monoIcon = d.bool(forKey: "monoIcon"); state.showLeft = d.bool(forKey: "limitsShowLeft")
+            state.claudeColors = RingColors.load(.claude, d); state.codexColors = RingColors.load(.codex, d)
             state.macNotify = d.object(forKey: "macNotify") as? Bool ?? true
             state.macNotifyRemote = d.bool(forKey: "macNotifyRemote")
             state.zoneID = d.string(forKey: "timeZone").flatMap { TimeZone(identifier: $0) == nil ? nil : $0 }
@@ -495,7 +506,8 @@ struct ZagonApp: App {
             MainPanel().environmentObject(state).preferredColorScheme(.dark)
         } label: {
             // ponytail: rebuilt on every AppState change; give the status item its own observable if that shows in a profile
-            Image(nsImage: statusIcon(state))
+            let icon = statusIcon(state)
+            Image(nsImage: icon).accessibilityLabel(Text(icon.accessibilityDescription ?? "Zagon"))
         }
         .menuBarExtraStyle(.window)
         .commands { ZagonCommands(app: state) }
@@ -504,14 +516,13 @@ struct ZagonApp: App {
 
 /// The status item, rasterised because a menu bar label shows only images and text. Monochrome without a warning is
 /// a template image (the menu bar tints it); otherwise it is drawn in the bar's text colour. Drawn at 1x and 2x: the bar
-/// is on every screen, and each picks its own.
+/// is on every screen, and each picks its own. 44 × 20 pt either way: a pair of rings or two ring-in-rings.
 @MainActor
 func statusIcon(_ app: AppState) -> NSImage {
-    let vm = MainVM(app.provider, app.f)
-    let five = vm.five?.pct, week = vm.week?.pct
-    let template = app.monoIcon && max(five ?? 0, week ?? 0) < 80
+    let vm = app.menuBar
+    let template = app.monoIcon && !vm.alarm
     let tint: Color = template ? .black : StatusButton.dark ? .white : .black.opacity(0.85)
-    let r = ImageRenderer(content: MenuBarLabel(five: five, week: week, colored: !app.monoIcon, tint: tint))
+    let r = ImageRenderer(content: MenuBarLabel(vm: vm, colored: !app.monoIcon, tint: tint))
     let image = NSImage(size: NSSize(width: 44, height: 20))
     for scale in [1, 2] as [CGFloat] {
         r.scale = scale
@@ -522,8 +533,9 @@ func statusIcon(_ app: AppState) -> NSImage {
         image.addRepresentation(rep)
     }
     image.isTemplate = template
-    let pct = { (p: Int?) in p.map { app.f.t("num.pct", "\($0)") } ?? "–" }
-    StatusButton.button?.toolTip = app.f.t("menubar.tip", pct(five), pct(week))
+    image.accessibilityDescription = vm.spoken
+    StatusButton.button?.toolTip = vm.tip
+    StatusButton.button?.setAccessibilityLabel(vm.spoken)
     StatusButton.watch { [weak app] in app?.objectWillChange.send() }
     return image
 }

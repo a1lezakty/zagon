@@ -11,6 +11,8 @@ public struct MockDataProvider: ZagonDataProvider {
 
     /// The last limit reading is from 05:12, before the 5-hour reset at 09:20: the snapshots' "no new reading" state.
     public var staleLimits = false
+    /// Codex limits next to Claude's (both AIs in the menu bar and the panel).
+    public var codexLimits = false
 
     public init(lang: Lang = .en, timeZone: TimeZone = .current) {
         var c = Calendar(identifier: .gregorian)
@@ -43,9 +45,14 @@ public struct MockDataProvider: ZagonDataProvider {
                           week: LimitWindow(usedPct: 47, resetsAt: at(33, 9), tool: .claude, readAt: ago(390)))
         }
         // 62 % now, 100 % at 13:50 — 30 minutes before the 14:20 reset.
-        return Limits(fiveHour: LimitWindow(usedPct: 62, resetsAt: at(30, 14 + 20 / 60), pctPerHour: 38 / (128 / 60),
-                                            tool: .claude, readAt: ago(2)),
-                      week: LimitWindow(usedPct: 41, resetsAt: at(33, 9), tool: .claude, readAt: ago(2)))
+        var l = Limits(fiveHour: LimitWindow(usedPct: 62, resetsAt: at(30, 14 + 20 / 60), pctPerHour: 38 / (128 / 60),
+                                             tool: .claude, readAt: ago(2)),
+                       week: LimitWindow(usedPct: 41, resetsAt: at(33, 9), tool: .claude, readAt: ago(2)))
+        if codexLimits {
+            l.codex = AILimits(fiveHour: LimitWindow(usedPct: 18, resetsAt: at(30, 16 + 5 / 60), tool: .codex, readAt: ago(6)),
+                               week: LimitWindow(usedPct: 71, resetsAt: at(34, 11), tool: .codex, readAt: ago(6)))
+        }
+        return l
     }
 
     public func limitHistory(_ kind: LimitKind) -> [LimitPoint] {
