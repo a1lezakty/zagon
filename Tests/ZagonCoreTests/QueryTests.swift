@@ -172,6 +172,8 @@ enum QueryFixture {
         #expect(io("claude-sonnet-4-5-20250929") == [3, 15, 0.3] && io("claude-sonnet-5") == [2, 10, 0.2])
         #expect(io("claude-3-5-haiku-20241022") == [0.8, 4, 0.08] && io("claude-haiku-4-5-20251001") == [1, 5, 0.1])
         #expect(io("claude-fable-5-1") == [10, 50, 0.25])
+        // Cache reads are 0.05x input on Opus 5.5 and Sonnet 5.5 (pricing page, note 2), 0.1x on Sonnet 5.
+        #expect(io("claude-sonnet-5-5") == [2, 10, 0.1])
         #expect(io("gpt-5") == [1.25, 10, 0.125] && io("gpt-5-mini-2025-08-07") == [0.25, 2, 0.025])
         #expect(io("gpt-5-nano") == [0.05, 0.4, 0.005] && io("gpt-5-codex") == [1.25, 10, 0.125])
         #expect(io("codex-mini-latest") == [1.5, 6, 0.375] && io("gpt-5.3-codex") == [1.75, 14, 0.175])
