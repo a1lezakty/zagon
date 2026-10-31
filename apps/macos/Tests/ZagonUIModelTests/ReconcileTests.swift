@@ -102,11 +102,27 @@ final class ReconcileTests: XCTestCase {
         XCTAssertEqual(vm.bars[61].kind, .future)
         XCTAssertEqual(vm.bars[10].kind, .before)
         XCTAssertEqual(vm.bars[59].kind, .counted)
-        XCTAssertEqual(vm.ticks.first?.label, "Sep 1")
-        XCTAssertTrue(vm.ticks.contains { $0.index == 30 && $0.label == "Oct 1" })
-        XCTAssertTrue(vm.ticks.contains { $0.index == 6 && $0.label == "7" })  // a Monday
-        XCTAssertFalse(vm.ticks.contains { $0.index == 27 })  // Monday 28 Sep would sit on "Oct 1"
-        XCTAssertTrue(vm.ticks.contains { $0.index == 34 && $0.label == "5" })
+        let wide = vm.ticks(slot: 11), narrow = vm.ticks(slot: 5)
+        XCTAssertEqual(wide.first?.label, "Sep 1")
+        XCTAssertTrue(wide.contains { $0.index == 30 && $0.label == "Oct 1" })
+        XCTAssertTrue(wide.contains { $0.index == 6 && $0.label == "7" })  // a Monday
+        XCTAssertTrue(wide.contains { $0.index == 34 && $0.label == "5" })
+        XCTAssertTrue(narrow.contains { $0.index == 30 })
+        XCTAssertFalse(narrow.contains { $0.index == 27 || $0.index == 34 })  // Mondays 28 Sep and 5 Oct would sit on "Oct 1"
+        for (slot, ticks) in [(11.0, wide), (5.0, narrow)] {
+            for (a, b) in zip(ticks, ticks.dropFirst()) {
+                XCTAssertLessThan(Double(a.index) * slot + Double(a.label.count) * 7, Double(b.index) * slot, "\(a.label) on \(b.label)")
+            }
+        }
+    }
+
+    func testAxisFirstDayNextToMonth() {
+        // From Aug 31: the first day's label would sit on "Sep 1", the month stays.
+        let vm = ReconcileVM(.sample(now: StoreDataProvider.start("2026-10-30", utc).addingTimeInterval(12 * 3600), zone: utc), fmt())
+        XCTAssertEqual(vm.ticks(slot: 11).prefix(2).map { $0.label }, ["Sep 1", "7"])
+        XCTAssertEqual(vm.ticks(slot: 60).prefix(2).map { $0.label }, ["Aug 31", "Sep 1"])  // room for both
+        let ru = ReconcileVM(.sample(now: StoreDataProvider.start("2026-10-30", utc).addingTimeInterval(12 * 3600), zone: utc), fmt(.ru))
+        XCTAssertEqual(ru.ticks(slot: 11).first?.index, 1)
     }
 
     func testOpenTaskDayByDay() {

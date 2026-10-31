@@ -150,7 +150,8 @@ struct ReconcileScreen: View {
                 }
             }
             if filter == nil {
-                RecColumns("", f.t("rec.total"), vm.total.sessions, vm.total.jira, vm.total.diff) { EmptyView() }
+                // Not EmptyView: its frame goes with it, and the numbers slide a column right.
+                RecColumns("", f.t("rec.total"), vm.total.sessions, vm.total.jira, vm.total.diff) { Color.clear.frame(height: 1) }
                     .font(mono(13, .semibold)).foregroundColor(Z.text)
                     .padding(.vertical, 10).padding(.horizontal, 6)
                     .overlay(alignment: .top) { Divider1(color: Z.border) }
@@ -494,10 +495,11 @@ struct DayBars: View {
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Z.laneBorder))
             GeometryReader { g in
                 let slot = g.size.width / n
+                let ticks = vm.ticks(slot: Double(slot))
                 ZStack(alignment: .topLeading) {
-                    ForEach(vm.ticks.indices, id: \.self) { i in
-                        Text(vm.ticks[i].label).font(mono(11)).foregroundColor(Z.muted).fixedSize()
-                            .offset(x: CGFloat(vm.ticks[i].index) * slot)
+                    ForEach(ticks.indices, id: \.self) { i in
+                        Text(ticks[i].label).font(mono(11)).foregroundColor(Z.muted).fixedSize()
+                            .offset(x: CGFloat(ticks[i].index) * slot)
                     }
                 }
             }
