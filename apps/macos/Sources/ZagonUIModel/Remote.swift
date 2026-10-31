@@ -24,12 +24,21 @@ public enum Remote {
         sshArguments(host: host, zagon: ["export", "--since", String(since)], controlDir: controlDir)
     }
 
-    /// `zagon <args>` on the host (each argument quoted for the remote shell).
-    public static func sshArguments(host: String, zagon args: [String], controlDir: String) -> [String] {
+    /// `zagon <args>` on the host (each argument quoted for the remote shell); `stoppable`: under `stopScript`.
+    public static func sshArguments(host: String, zagon args: [String], controlDir: String, stoppable: Bool = false) -> [String] {
         ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
          "-o", "ControlMaster=auto", "-o", "ControlPersist=10m", "-o", "ControlPath=\(controlDir)/%C", host,
-         "PATH=\"$HOME/.local/bin:$PATH\" zagon " + args.map(shellWord).joined(separator: " ")]
+         "PATH=\"$HOME/.local/bin:$PATH\" " + (stoppable ? "sh -c \(shellWord(stopScript)) sh " : "") + "zagon "
+            + args.map(shellWord).joined(separator: " ")]
     }
+
+    /// `sh -c stopScript sh <command…>` on a server: runs the command and stops it, with the processes it started (an AI
+    /// CLI), when stdin closes: the Mac cancelled (`Proc.Stop.closeInput`; a killed ssh client alone would leave the
+    /// remote command running). The exit status is the command's; the watcher, a subshell waiting in `read`, goes with
+    /// it. SIGKILL: zagon has no handler for SIGTERM anyway, and SQLite rolls an interrupted write back. Made for sshd's
+    /// children: started from a Mac's worker thread, `wait` may never see the exit (SIGCHLD blocked).
+    /// ponytail: its own children only, and only where `pgrep` is (Linux with procps, macOS); a process group if deeper.
+    public static let stopScript = #"exec 3<&0; "$@" </dev/null 3<&- & z=$!; { while read -r _ <&3; do :; done; kill -9 $z $(pgrep -P $z); } >/dev/null 2>&1 & w=$!; exec 3<&-; wait $z; s=$?; kill -9 $w 2>/dev/null; exit $s"#
 
     /// One word for a POSIX shell: as is when plain, else single-quoted.
     public static func shellWord(_ s: String) -> String {

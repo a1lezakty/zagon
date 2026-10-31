@@ -199,6 +199,24 @@ final class SummaryTests: XCTestCase {
         XCTAssertNil(st.sharedAt(["a", "c"]))
         XCTAssertNil(st.sharedAt(["a", "d"]))  // d not asked yet
         XCTAssertEqual(st.sharedAt(["c"]), "off")
+        // Asked once while the settings are shown: not again while the call runs, nor after it failed.
+        st.asking = ["d"]
+        st.unanswered = ["e"]
+        XCTAssertEqual(st.toAsk(["a", "d", "e", "f"]), ["f"])
+    }
+
+    func testCancelledPeriodStopsAfterTheDayUnderWay() async throws {
+        let calls = Calls(), day = envelope(doc)
+        // The day call is where "Cancel" lands: the period and the days after it are not asked.
+        let b = backend(calls) { args in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return Self.ok(args.contains("--plan") ? Self.planJSON("") : day)
+        }
+        let plan = SummaryPlan(key: "2026-10-26..2026-11-01", from: "2026-10-26", to: "2026-11-01", worked: ["2026-10-27", "2026-10-28"],
+                               missing: ["2026-10-27", "2026-10-28"], calls: 3)
+        let run = Task { try await b.writePeriod(plan, lang: "en") }
+        do { _ = try await run.value; XCTFail("written") } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(calls.args, [["summary", "2026-10-27", "--json", "--lang", "en", "--refresh", "@300"]])
     }
 
     func testNewestOfStoreAndAnswer() {

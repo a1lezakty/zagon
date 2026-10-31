@@ -184,6 +184,7 @@ struct SettingsScreen: View {
         .opacity(servers.isEmpty ? 0.55 : 1)
         .frame(maxWidth: 640, alignment: .leading)
         .task(id: servers) { app.loadSummaryTimes() }
+        .onDisappear { app.summaries.unanswered = [] }
     }
 
     struct CheckRow: View {

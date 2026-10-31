@@ -35,6 +35,14 @@ extension AppState {
 
     func cancelSummary(_ key: String) { summaries.jobs[key]?.confirm = nil }
 
+    /// "Cancel" while writing: the call under way stops, there too; the days written before stay.
+    func stopSummary(_ key: String) {
+        guard let t = summaries.jobs[key]?.task, summaries.jobs[key]?.stopping == false else { return }
+        t.cancel()
+        summaries.jobs[key]?.stopping = true
+        summaries.jobs[key]?.progress = f.t("sum.stopping")
+    }
+
     nonisolated static func progress(_ s: TaskBackend.SummaryStep, _ f: Fmt) -> String {
         switch s {
         case .day(let n, let of): f.t("sum.progress", String(n), String(of))
@@ -53,26 +61,32 @@ extension AppState {
         // "this Mac" / "server build-box", as the answers name it.
         let source = s == .local ? f.t("sum.src.local") : f.t("sum.src.server", sourceName(s)), period = key.contains("..")
         var j = summaryJob(key)
-        j.running = true; j.error = nil; j.notice = nil; j.confirm = nil; j.progress = f.t("sum.writing")
+        j.running = true; j.stopping = false; j.error = nil; j.notice = nil; j.confirm = nil; j.progress = f.t("sum.writing")
         summaries.jobs[key] = j
         let store = provider as? StoreDataProvider
-        Task.detached {
+        let task = Task.detached {
             let outcome: Result<SummaryOutcome, Error>
             do {
-                outcome = .success(try await job(backend, f) { text in await MainActor.run { self.summaries.jobs[key]?.progress = text } })
+                outcome = .success(try await job(backend, f) { text in
+                    await MainActor.run { if self.summaries.jobs[key]?.stopping == false { self.summaries.jobs[key]?.progress = text } }
+                })
             } catch {
                 outcome = .failure(error)
             }
+            let stopped = Task.isCancelled
             if case .success(.kept(let k)) = outcome { store?.keep(k) }
             await MainActor.run {
                 var j = self.summaryJob(key)
-                j.running = false; j.progress = nil
+                j.running = false; j.progress = nil; j.task = nil; j.stopping = false
                 switch outcome {
                 case .success(.kept(let k)):
                     j.result = k
                     if k.doc.items.isEmpty { j.error = f.t(period ? "sum.noCards.period" : "sum.noCards", source) }
                     if let e = k.noCli { j.notice = f.t("sum.noCLI", e, source) }
-                case .success(.confirm(let p)): j.confirm = p
+                case .success(.confirm(let p)): if !stopped { j.confirm = p }
+                case .failure where stopped:
+                    j.notice = f.t(period ? "sum.stopped.period" : "sum.stopped")
+                    Log.shared.write("summary \(key): cancelled")
                 case .failure(let e):
                     j.error = Remote.scrubHomes(String(describing: e))
                     Log.shared.write("summary \(key): \(j.error ?? "")")
@@ -80,6 +94,8 @@ extension AppState {
                 self.summaries.jobs[key] = j
             }
         }
+        // Set before the task's end can run on the main actor.
+        summaries.jobs[key]?.task = task
     }
 
     /// `[summary] time` in this Mac's config.toml, then `zagon summary --at` on every checked server.
@@ -103,15 +119,23 @@ extension AppState {
         }
     }
 
-    /// `[summary] time` of every checked server not asked yet (the settings show it).
+    /// `[summary] time` of every checked server not asked yet (the settings show it): one call at a time per server,
+    /// and one that did not answer is asked again only when the settings are opened again.
     func loadSummaryTimes() {
         guard let make = taskBackend else { return }
-        let ask = remoteHosts.filter { summaries.serverAt[$0] == nil }.map { ($0, make(.server($0))) }
-        guard !ask.isEmpty else { return }
+        let hosts = summaries.toAsk(remoteHosts)
+        guard !hosts.isEmpty else { return }
+        summaries.asking.formUnion(hosts)
+        let ask = hosts.map { ($0, make(.server($0))) }
         Task.detached {
             for (h, b) in ask {
-                guard let at = try? b.summaryTime() else { continue }
-                await MainActor.run { self.summaries.serverAt[h] = at }
+                let at = try? b.summaryTime()
+                await MainActor.run {
+                    self.summaries.asking.remove(h)
+                    guard let at else { self.summaries.unanswered.insert(h); return }
+                    // A time sent meanwhile is newer than this answer.
+                    if self.summaries.serverAt[h] == nil { self.summaries.serverAt[h] = at }
+                }
             }
         }
     }
@@ -132,11 +156,15 @@ struct SummaryButton: View {
                 if job.running, let p = job.progress {
                     Text(p).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1)
                 }
-                PillButton(title: f.t(has ? "sum.refresh" : "sum.make"), primary: !has, height: 30, radius: 8, fontSize: 12) {
-                    app.writeSummary(from: from, to: to, refresh: has)
+                if job.running {
+                    PillButton(title: f.t("sum.stop"), height: 30, radius: 8, fontSize: 12) { app.stopSummary(key) }
+                        .disabled(job.stopping || job.task == nil)
+                        .opacity(job.stopping ? 0.5 : 1)
+                } else {
+                    PillButton(title: f.t(has ? "sum.refresh" : "sum.make"), primary: !has, height: 30, radius: 8, fontSize: 12) {
+                        app.writeSummary(from: from, to: to, refresh: has)
+                    }
                 }
-                .disabled(job.running)
-                .opacity(job.running ? 0.5 : 1)
             }
             if let e = job.error {
                 Text(f.t("sum.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad).multilineTextAlignment(.trailing)

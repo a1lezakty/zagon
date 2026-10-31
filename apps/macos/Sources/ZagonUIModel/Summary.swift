@@ -120,6 +120,9 @@ public struct SummaryJob: Sendable {
     public var notice: String?
     /// A period's plan waiting for the yes.
     public var confirm: SummaryPlan?
+    /// The writing under way, to cancel; `stopping` once asked to.
+    public var task: Task<Void, Never>?
+    public var stopping = false
     /// The last answer, shown until the store holds one as new (the next pull brings it).
     public var result: KeptSummary?
     public init() {}
@@ -141,7 +144,15 @@ public struct SummaryState: Sendable {
     public var atMessage: String?
     /// `[summary] time` of each checked server as it answered: "HH:MM" or "off".
     public var serverAt: [String: String] = [:]
+    /// Servers whose time is being asked, and those that did not answer while the settings were shown (asked again
+    /// when they are opened again).
+    public var asking: Set<String> = [], unanswered: Set<String> = []
     public init() {}
+
+    /// The servers to ask for their time: one ssh call each while the settings are shown.
+    public func toAsk(_ hosts: [String]) -> [String] {
+        hosts.filter { serverAt[$0] == nil && !asking.contains($0) && !unanswered.contains($0) }
+    }
 
     /// The time all these servers have, "HH:MM" or "off"; nil when one is not known or they differ.
     public func sharedAt(_ hosts: [String]) -> String? {
@@ -169,14 +180,17 @@ extension TaskBackend {
         try decode(["summary", "--from", from, "--to", to, "--plan", "--json"]).0
     }
 
-    /// The period written again from its days, after the days without a summary are written one by one.
+    /// The period written again from its days, after the days without a summary are written one by one. Cancelled,
+    /// it stops the call under way (`stoppable`); the days written before stay written there.
     public func writePeriod(_ plan: SummaryPlan, lang: String,
                             progress: @Sendable (SummaryStep) async -> Void = { _ in }) async throws -> KeptSummary {
         for (i, d) in plan.missing.enumerated() {
+            try Task.checkCancellation()
             await progress(.day(i + 1, of: plan.missing.count))
             // A day kept without AI is in `missing` when an AI engine is set: written again.
             _ = try summary(day: d, refresh: true, lang: lang)
         }
+        try Task.checkCancellation()
         await progress(.period)
         // Days the AI did not answer for stay without its summary: the period is written without writing them again
         // (that could take several calls past the time limit); they are named instead.
