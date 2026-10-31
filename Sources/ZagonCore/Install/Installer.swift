@@ -177,7 +177,8 @@ public struct Installer {
             // --no-editor-panels is remembered like `editor-panels off`: a later install leaves the editors alone too.
             if !o.editorPanels { try setConfig("editor", "panels", "off") }
             try writeWrapScript(zagon: o.zagon)
-            if editorState().on.isEmpty { log("claude: " + setUpHint) }
+            if o.editorPanels { log("editor: left off as you set it ([editor] panels in \(o.paths.config)); zagon editor-panels on adds it") }
+            else if editorState().on.isEmpty { log("claude: " + setUpHint) }
         }
         if o.codex {
             let cur = Sys.readFile(codexHooks)
@@ -559,7 +560,10 @@ public struct Installer {
             try setConfig("editor", "panels", on ? nil : "off")
             let failed = on ? try enableEditorPanels() : try disableEditorPanels()
             if !failed.isEmpty { throw InstallError("not changed: " + failed.joined(separator: ", ")) }
-            if on && editorState().on.isEmpty { throw InstallError("no VS Code or fork found here to set it in") }
+            if on && editorState().on.isEmpty {
+                throw InstallError(editorTargets.isEmpty ? "no VS Code or fork found here to set it in"
+                    : "no editor could take it (see zagon doctor)")
+            }
         }
     }
 
