@@ -109,11 +109,19 @@ class H(BaseHTTPRequestHandler):
                                                     "status": {"name": issues[k]["status"],
                                                                "statusCategory": {"key": issues[k]["category"]}}}}
                               for k in page], "isLast": last}
+            if "worklog" in b.get("fields", []):
+                for i in out["issues"]:  # Jira embeds the first 20; here 2, so longer lists are read in full
+                    ws = issues[i["key"]].get("worklogs", [])
+                    i["fields"]["worklog"] = {"startAt": 0, "maxResults": 2, "total": len(ws), "worklogs": [
+                        {"id": w["id"], "author": {"accountId": w["author"]}, "started": w["started"],
+                         "timeSpentSeconds": w["seconds"], "comment": w.get("comment", "")} for w in ws[:2]]}
             if not last:
                 out["nextPageToken"] = str(at + 1)
             return self.send(200, out)
         if len(parts) >= 5 and parts[:4] == ["rest", "api", "2", "issue"]:
-            key = parts[4]
+            key = state.get("aliases", {}).get(parts[4], parts[4])  # a moved issue's old key
+            if key in state.get("worklog_404", []) and parts[-1] == "worklog":
+                return self.send(404, {"errorMessages": ["Issue does not exist"]})
             if key not in issues:
                 return self.send(404, {"errorMessages": ["Issue does not exist"]})
             i = issues[key]

@@ -231,6 +231,12 @@ public final class JiraClient {
         var fields: F?
     }
     struct WorklogPage: Decodable { var startAt: Int?; var total: Int?; var worklogs: [WorklogBean] }
+    struct WorklogSearchPage: Decodable {
+        struct Field: Decodable { var total: Int?; var worklogs: [WorklogBean]? }
+        struct F: Decodable { var summary: String?; var worklog: Field? }
+        struct I: Decodable { var key: String; var fields: F? }
+        var issues: [I]; var nextPageToken: String?; var isLast: Bool?
+    }
     struct ProjectPage: Decodable { var values: [JiraProject]; var isLast: Bool? }
     struct IssueTypes: Decodable {
         struct T: Decodable { var id: String; var name: String?; var untranslatedName: String?; var subtask: Bool? }
@@ -290,15 +296,44 @@ public final class JiraClient {
         while true {
             let p = try get("/rest/api/2/issue/\(Self.escape(key))/worklog?startedAfter=\(Int64(after * 1000))&startAt=\(at)&maxResults=1000",
                             WorklogPage.self)
-            for w in p.worklogs {
-                // Jira Cloud may ignore startedAfter here (seen 30.10: an issue returned its whole history).
-                guard let s = w.started.flatMap(Self.parseTime), s >= after else { continue }
-                out.append(JiraWorklog(id: w.id, issueKey: key, accountId: w.author?.accountId ?? "", started: s,
-                                       seconds: w.timeSpentSeconds ?? 0, comment: w.comment))
-            }
+            // Jira Cloud may ignore startedAfter here (seen 30.10: an issue returned its whole history).
+            out += p.worklogs.compactMap { Self.worklog($0, key) }.filter { $0.started >= after }
             at += p.worklogs.count
             if p.worklogs.isEmpty || at >= (p.total ?? 0) { return out }
         }
+    }
+
+    static func worklog(_ w: WorklogBean, _ key: String) -> JiraWorklog? {
+        guard let s = w.started.flatMap(Self.parseTime) else { return nil }
+        return JiraWorklog(id: w.id, issueKey: key, accountId: w.author?.accountId ?? "", started: s, seconds: w.timeSpentSeconds ?? 0,
+                           comment: w.comment)
+    }
+
+    /// Your worklogs started in [from, to) on the issues `jql` finds, and their summaries: one paged search (API v2:
+    /// plain-text comments) that carries each issue's worklogs, as Jira embeds up to 20; an issue with more is read in
+    /// full. Not one request per issue as `myWorklogs`.
+    public func myWorklogs(search jql: String, from: Timestamp, to: Timestamp) throws -> (logs: [JiraWorklog], summary: [String: String]) {
+        let me = try accountId()
+        var logs: [JiraWorklog] = [], summary: [String: String] = [:], token: String?, pages = 0
+        repeat {
+            pages += 1
+            var body: [String: JSONValue] = ["jql": .s(jql), "fields": .a([.s("summary"), .s("worklog")]), "maxResults": .n(100)]
+            if let token { body["nextPageToken"] = .s(token) }
+            let page = try JSONDecoder().decode(WorklogSearchPage.self, from: Data(try request("POST", "/rest/api/2/search/jql",
+                                                                                                 json: Array(try JSONEncoder().encode(body)))))
+            for i in page.issues {
+                summary[i.key] = i.fields?.summary ?? ""
+                let all: [JiraWorklog]
+                if let w = i.fields?.worklog, let ws = w.worklogs, ws.count >= w.total ?? .max { all = ws.compactMap { Self.worklog($0, i.key) } }
+                else {
+                    do { all = try worklogs(issue: i.key, startedAfter: from - 86400) }
+                    catch JiraError.http(404, _) { all = [] }  // gone since the search
+                }
+                logs += all.filter { $0.accountId == me && $0.started >= from && $0.started < to }
+            }
+            token = page.issues.isEmpty || page.isLast == true ? nil : page.nextPageToken
+        } while token != nil && pages < 200
+        return (logs, summary)
     }
 
     /// Your worklogs that overlap [from, to), on any issue.

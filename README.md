@@ -182,6 +182,7 @@ zagon export --since 0         # changed totals as NDJSON, read by the macOS app
 zagon handoff latest --to claude   # a summary of a session to continue it in a new one (claude|codex|gemini|cursor|clipboard|file)
 zagon task list                # tasks worked on in the last 7 days; --all; task add|show|todo|note|done|status|link|import|suggest
 zagon log plan 2026-10-29      # what to log to Jira that day; log commit writes it (asks first)
+zagon log reconcile --from 2026-09-01 --to 2026-10-31 --md   # sessions against your Jira worklogs per task and day (--csv, --json)
 zagon update                   # the latest release (see Update above)
 ```
 
@@ -242,6 +243,9 @@ url = "https://example.atlassian.net"
 email = "you@example.com"
 token_file = "~/.config/zagon/jira-token"   # an Atlassian API token, the file's last non-empty line
 # review_statuses = ["review", "qa", "test", "release"]   # optional: statuses that mean "in review"
+
+[worklog]
+# reconcile_tolerance_min = 15   # log reconcile: a task's day where sessions and Jira differ by more is a mismatch
 ```
 
 Create the token at id.atlassian.com → Security → API tokens, then keep it in a file only you can read:
@@ -301,7 +305,8 @@ and carry numbers; a long one, such as a day exported to Markdown, goes to a fil
 
 - handoff: `handoff_create`, `handoff_get`, `handoff_list`, and the prompt `/mcp__zagon__resume <id|latest>`;
 - tasks: `task_list`, `task_get`, `task_create`, `task_update`, `task_suggestions`, `task_suggestions_answer`;
-- worklogs: `worklog_plan`, `worklog_commit` (needs `confirm: true` and is meant only for an explicit request).
+- worklogs: `worklog_plan`, `worklog_reconcile` (sessions against Jira worklogs over a range, read-only), `worklog_commit`
+  (needs `confirm: true` and is meant only for an explicit request).
 
 ## Notifications
 

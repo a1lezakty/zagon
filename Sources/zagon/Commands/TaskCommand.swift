@@ -43,8 +43,12 @@ extension Common {
     func worklog(_ store: Store, base: TaskTime.Base? = nil) throws -> DayWorklog {
         var client: JiraClient?, err: String?
         do { client = try jira() } catch { err = "\(error)" }
-        return DayWorklog(store: store, linker: try linker(), jira: client, jiraSetupError: err, idleGap: idleGap * 60,
-                          base: timeBase(base))
+        var w = DayWorklog(store: store, linker: try linker(), jira: client, jiraSetupError: err, idleGap: idleGap * 60,
+                           base: timeBase(base))
+        if let m = TOMLLite.raw(in: configText, section: "worklog", key: "reconcile_tolerance_min").flatMap({ Int($0) }), m >= 0 {
+            w.reconcileToleranceMin = m
+        }
+        return w
     }
 }
 

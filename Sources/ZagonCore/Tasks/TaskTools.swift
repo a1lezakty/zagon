@@ -187,6 +187,18 @@ public final class TaskTools: TaskService {
             + "\nNothing was written. To log, the user must ask; then worklog_commit with confirm: true (and ids to pick rows)."
     }
 
+    public func worklogReconcile(from: String, to: String?, format: String) throws -> String {
+        scan()
+        let today = Time.dayString(now())
+        let r = try mapErrors { try makeWorklog().reconcile(from: from, to: to ?? today, today: today) }
+        switch format {
+        case "json": return try ReconcileText.json(r)
+        case "csv": return ReconcileText.csv(r)
+        case "text": return ReconcileText.text(r)
+        default: return ReconcileText.markdown(r)
+        }
+    }
+
     /// Writes only what this server's last worklog_plan of the day showed: the day is planned again against fresh
     /// data, and if the rows to write differ in anything (task, time, Jira issue, text) nothing is written and the new
     /// plan comes back instead.

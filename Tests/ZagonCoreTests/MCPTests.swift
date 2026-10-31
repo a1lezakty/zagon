@@ -106,7 +106,7 @@ struct MCPFixture {
         #expect(tools.compactMap { $0["name"]?.string } == [
             "limits", "sessions", "day", "week", "range", "search", "export_day",
             "handoff_create", "handoff_get", "handoff_list", "task_list", "task_get", "task_create", "task_update",
-            "worklog_plan", "worklog_commit", "task_suggestions", "task_suggestions_answer", "task_create_in_jira"])
+            "worklog_plan", "worklog_commit", "worklog_reconcile", "task_suggestions", "task_suggestions_answer", "task_create_in_jira"])
         for t in tools {
             #expect(t["inputSchema"]?["type"]?.string == "object")
             #expect((t["description"]?.string?.count ?? 0) > 30)
