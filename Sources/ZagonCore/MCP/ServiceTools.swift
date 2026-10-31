@@ -41,6 +41,9 @@ public protocol TaskService: AnyObject {
     func worklogPlan(day: String) throws -> String
     /// Writes the day's planned worklogs (all, or the rows `ids`) to Jira. Reached only with `confirm: true`.
     func worklogCommit(day: String, ids: [Int]?) throws -> String
+    /// Sessions against the user's Jira worklogs over [from, to], per task and day; `format`: md | text | csv | json.
+    /// Reads Jira only.
+    func worklogReconcile(from: String, to: String, format: String) throws -> String
     /// Tasks suggested by meaning for the day's work no key linked (made once per day, `again` asks anew); they count
     /// nowhere until accepted. Writes nothing to Jira.
     func suggestions(day: String, again: Bool) throws -> String
@@ -54,6 +57,9 @@ public protocol TaskService: AnyObject {
 }
 
 extension TaskService {
+    public func worklogReconcile(from: String, to: String, format: String) throws -> String {
+        throw ServiceTools.unavailable("worklog_reconcile", "reconcile")
+    }
     public func suggestions(day: String, again: Bool) throws -> String { throw ServiceTools.unavailable("task_suggestions", "suggestions") }
     public func answerSuggestions(accept: [String], reject: [String]) throws -> String {
         throw ServiceTools.unavailable("task_suggestions_answer", "suggestions")
@@ -201,6 +207,21 @@ enum ServiceTools {
                 }
                 guard let day = try a.day("date") else { throw MCPToolError("date is required") }
                 return try t("worklog_commit").worklogCommit(day: day, ids: try a.ints("ids"))
+            },
+            MCPTool(name: "worklog_reconcile", title: "Sessions against Jira worklogs",
+                    description: "For a range of days, per task and day: the user's working time in sessions against their "
+                        + "Jira worklogs. Status only_sessions = work with no worklog, only_jira = a worklog with no work in "
+                        + "Zagon, mismatch = apart by more than the tolerance, match; with totals and, per day, the sessions "
+                        + "and worklogs. Reads Jira only, writes nothing.",
+                    inputSchema: MCPSchema.object([
+                        "from": MCPSchema.day("First day"),
+                        "to": MCPSchema.day("Last day (default today)"),
+                        "format": MCPSchema.string("md (default): totals, tasks, days; text: short; csv; json", enum: ["md", "text", "csv", "json"]),
+                    ], required: ["from"])) { a in
+                guard let from = try a.day("from") else { throw MCPToolError("from is required") }
+                let format = try a.string("format") ?? "md"
+                guard ["md", "text", "csv", "json"].contains(format) else { throw MCPToolError("format must be md, text, csv or json") }
+                return try t("worklog_reconcile").worklogReconcile(from: from, to: try a.day("to") ?? Time.dayString(Time.now()), format: format)
             },
             MCPTool(name: "task_suggestions", title: "Suggested tasks",
                     description: "Tasks suggested by meaning for the day's work that no task key linked (one AI call per "

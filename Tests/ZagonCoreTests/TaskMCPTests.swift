@@ -73,6 +73,18 @@ private let day = "2026-10-29"
         let c = try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#)
         #expect(c.isError && c.text.contains("Jira is not connected") && c.text.contains("nothing was written"))
     }
+
+    @Test func reconcileWithoutJira() throws {
+        let m = try TaskMCP()
+        _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)
+        let r = try m.call("worklog_reconcile", #"{"from":"\#(day)","to":"2026-11-05"}"#)
+        #expect(!r.isError && r.text.hasPrefix("# Worklogs against sessions: 2026-10-29 – 2026-10-29") && r.text.contains("| PROJ-1 | PROJ-1 | Parser work |")
+                && r.text.contains("Jira not connected"), "\(r.text)")
+        let j = try m.call("worklog_reconcile", #"{"from":"\#(day)","format":"json"}"#).text
+        #expect(JValue.parse(j)?["tasks"]?.array?.first?["status"]?.string == "only_sessions", "\(j)")
+        #expect(try m.call("worklog_reconcile", #"{"from":"\#(day)","format":"xml"}"#).isError)
+        #expect(try m.call("worklog_reconcile", "{}").isError)
+    }
 }
 
 @Suite(.enabled(if: hasTool("python3") && hasTool("curl"), "needs python3 and curl"), .timeLimit(.minutes(1)))

@@ -7,6 +7,8 @@ public struct DayWorklog {
     public var jiraSetupError: String?
     public var idleGap: Double
     public var base: TaskTime.Base
+    /// `[worklog] reconcile_tolerance_min`: a task's day where sessions and worklogs differ by more is a mismatch.
+    public var reconcileToleranceMin = Reconcile.defaultToleranceMin
 
     public init(store: Store, linker: TaskLinker, jira: JiraClient?, jiraSetupError: String? = nil, idleGap: Double = 20 * 60,
                 base: TaskTime.Base = .sessions) {

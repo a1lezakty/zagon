@@ -109,6 +109,12 @@ class H(BaseHTTPRequestHandler):
                                                     "status": {"name": issues[k]["status"],
                                                                "statusCategory": {"key": issues[k]["category"]}}}}
                               for k in page], "isLast": last}
+            if "worklog" in b.get("fields", []):
+                for i in out["issues"]:  # Jira embeds the first 20; here 2, so longer lists are read in full
+                    ws = issues[i["key"]].get("worklogs", [])
+                    i["fields"]["worklog"] = {"startAt": 0, "maxResults": 2, "total": len(ws), "worklogs": [
+                        {"id": w["id"], "author": {"accountId": w["author"]}, "started": w["started"],
+                         "timeSpentSeconds": w["seconds"], "comment": w.get("comment", "")} for w in ws[:2]]}
             if not last:
                 out["nextPageToken"] = str(at + 1)
             return self.send(200, out)

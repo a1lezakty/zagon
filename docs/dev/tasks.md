@@ -121,6 +121,23 @@ was written before → `logged`, no second POST; an overlap → not written. A 4
 it `writing`. `settle` (at the start of every plan with Jira and of every write) looks such rows up on their issue:
 found → `logged`; not found and the claim older than 5 min → `planned` again; newer → left (may be in flight). Blank fields from MCP or CLI mean "not given".
 
+## Reconcile (`DayWorklog.reconcile`, Worklog/Reconcile.swift)
+
+`zagon log reconcile --from --to [--json|--md|--csv]`, MCP `worklog_reconcile`, the Mac app: your time per task and
+day over a range (at most 400 days; days after today are not counted, `to` says the last one) against your worklogs
+started in it, matched by Jira key and local day. Links are refreshed once for the range, then `TaskTime.compute` per
+day (as `log plan` counts it). Jira is only read: the `worklogAuthor` search a day wider (paged), then each issue's own
+worklog list (one request per issue, not per day); the issues of tasks worked in the range and of rows Zagon logged
+are read directly too (the search index lags a new worklog). Jira failing or not connected leaves the sessions part,
+with `jira` = `failed` / `not_connected`.
+Status of a task's day: `only_sessions`, `only_jira`, `mismatch` (apart by more than `[worklog]
+reconcile_tolerance_min`, default 15), `match`; over the range a task matches only when every day does. A task with
+no Jira key is `zagon_only`, work with no task is `no_task`, a row per project and branch (its time split by each
+session's working time that day). `coverage_from`: Claude Code deletes transcripts after `cleanupPeriodDays`, so
+history is whole from the earliest end of a Claude session on (no Claude sessions: the first session); earlier days are
+not reconciled, their worklogs only sum to `jira_before_coverage_sec`. Totals: `session_sec - jira_sec ==
+unlogged_sec - jira_only_sec`. Markdown, CSV (a line per task and day, minutes) and JSON come from `ReconcileText`.
+
 ## Suggestions (`TaskSuggester`, Tasks/Suggest.swift)
 
 For work no key linked. Stretches: per session, runs of working time no link covers (pauses up to `idle_gap` join,
@@ -179,6 +196,6 @@ plan message has to be combined with it.
 ## CLI
 
 `zagon task add|list [--all]|show|todo|note|done|status|link|import|suggest|drafts|accept|reject|jira-projects`, `zagon log plan [day]`, `zagon log commit [day] [--yes]`,
-`zagon log skip <id…>`. `log plan --json` carries `commit_digest` (FNV-1a 64 of `jira_key|start|end|seconds|text`
+`zagon log skip <id…>`, `zagon log reconcile --from <day> [--to <day>] [--json|--md|--csv]`. `log plan --json` carries `commit_digest` (FNV-1a 64 of `jira_key|start|end|seconds|text`
 of the planned rows with a Jira key, by start); `log commit --yes --expect <digest>` re-plans and writes only if the
 rows to write give the same digest, else writes nothing and exits 3 ("plan changed"). Days are local (`TZ`).
