@@ -309,7 +309,7 @@ struct ColorPreview: View {
     var body: some View {
         let a = MenuBarVM.AI(tool: .claude, five: 62, week: 35, colors: claude)
         let b = MenuBarVM.AI(tool: .codex, five: 18, week: 71, colors: codex)
-        let samples = [(f.t("settings.colors.one", "Claude"), [a]), (f.t("settings.colors.one", "Codex"), [b]),
+        let samples = [(f.t("settings.colors.alone", "Claude"), [a]), (f.t("settings.colors.alone", "Codex"), [b]),
                        (f.t("settings.colors.both"), [a, b])]
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 0) {
