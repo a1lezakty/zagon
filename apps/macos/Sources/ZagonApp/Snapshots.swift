@@ -31,43 +31,51 @@ enum Snapshots {
     }
 
     /// The status item on a light, a dark and a wallpaper-tinted menu bar, at the bar's own size and at 2x, monochrome
-    /// and coloured, numbers inside the rings and beside them: `menubar-<mode>-<layout>@<n>x.png`. Columns: 5 hours /
-    /// week at 2/41, 62/88, 97/100 and no reading.
+    /// and coloured: `menubar-<mode>@<n>x.png`. Columns: 5 hours / week at 2/41, 62/88, 97/100 and no reading.
+    /// `menubar-digits@<n>x.png`: every value 0…99, to see each pair inside its ring.
     static func menubar(_ dir: URL) -> Bool {
         let bars: [(UInt32, Color)] = [(0xF2F2F4, .black.opacity(0.85)), (0x1E1E22, .white.opacity(0.9)),
                                        (0x2F67C8, .white.opacity(0.95))]
         let states: [(Int?, Int?)] = [(2, 41), (62, 88), (97, 100), (nil, nil)]
         var ok = true
         for colored in [false, true] {
-            for beside in [false, true] {
-                let sheet = VStack(spacing: 8) {
-                    ForEach(bars.indices, id: \.self) { b in
-                        HStack(spacing: 40) {
-                            ForEach(states.indices, id: \.self) { s in
-                                HStack(spacing: 14) {
-                                    MenuBarLabel(five: states[s].0, week: states[s].1, colored: colored, beside: beside,
-                                                 tint: bars[b].1)
-                                    Image(systemName: "wifi")
-                                    Image(systemName: "battery.75percent")
-                                    Text("Thu 20:18")
-                                }
+            let sheet = VStack(spacing: 8) {
+                ForEach(bars.indices, id: \.self) { b in
+                    HStack(spacing: 40) {
+                        ForEach(states.indices, id: \.self) { s in
+                            HStack(spacing: 14) {
+                                MenuBarLabel(five: states[s].0, week: states[s].1, colored: colored, tint: bars[b].1)
+                                Image(systemName: "wifi")
+                                Image(systemName: "battery.75percent")
+                                Text("Thu 20:18")
                             }
-                            Spacer(minLength: 0)
                         }
-                        .font(Font(NSFont.menuBarFont(ofSize: 0) as CTFont))
-                        .foregroundColor(bars[b].1)
-                        .padding(.horizontal, 12)
-                        .frame(height: 24)
-                        .background(Color(hex: bars[b].0))
+                        Spacer(minLength: 0)
                     }
-                }
-                .padding(8)
-                .background(Color(hex: Palette.muted))
-                let name = "menubar-\(colored ? "color" : "mono")-\(beside ? "beside" : "inside")"
-                for scale in [1, 2] as [CGFloat] {
-                    ok = write(sheet, width: 1280, scale: scale, name + "@\(Int(scale))x", dir) && ok
+                    .font(Font(NSFont.menuBarFont(ofSize: 0) as CTFont))
+                    .foregroundColor(bars[b].1)
+                    .padding(.horizontal, 12)
+                    .frame(height: 24)
+                    .background(Color(hex: bars[b].0))
                 }
             }
+            .padding(8)
+            .background(Color(hex: Palette.muted))
+            for scale in [1, 2] as [CGFloat] {
+                ok = write(sheet, width: 1280, scale: scale, "menubar-\(colored ? "color" : "mono")@\(Int(scale))x", dir) && ok
+            }
+        }
+        let digits = VStack(spacing: 6) {
+            ForEach(0..<10) { r in
+                HStack(spacing: 16) {
+                    ForEach(0..<5) { c in MenuBarLabel(five: r * 10 + c * 2, week: r * 10 + c * 2 + 1, tint: bars[0].1) }
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(hex: bars[0].0))
+        for scale in [1, 2] as [CGFloat] {
+            ok = write(digits, width: 320, scale: scale, "menubar-digits@\(Int(scale))x", dir) && ok
         }
         return ok
     }

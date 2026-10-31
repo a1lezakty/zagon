@@ -2,16 +2,15 @@ import AppKit
 import SwiftUI
 import ZagonUIModel
 
-/// The status item: two rings side by side, 5 hours left and the week right, each with its percent inside (`beside`:
-/// the numbers to the right instead, for 1x screens where 9 pt digits blur). Coloured rings by default (5 hours
-/// orange, the week blue); monochrome follows the menu bar like a template image. A warning keeps the ring apart from
-/// the other one: from 80 % its digits turn red, from 95 % the ring too. The track is the bar's own colour, faint.
+/// The status item: two rings side by side, 5 hours left and the week right, each with its percent inside. Coloured
+/// rings by default (5 hours orange, the week blue); monochrome follows the menu bar like a template image. A warning
+/// keeps the ring apart from the other one: from 80 % its digits turn red, from 95 % the ring too. The track is the
+/// bar's own colour, faint.
 struct MenuBarLabel: View {
     /// Used percent; nil = no reading.
     let five: Int?
     let week: Int?
     var colored = true
-    var beside = false
     /// The menu bar's text colour, the one a template image gets.
     let tint: Color
 
@@ -21,31 +20,28 @@ struct MenuBarLabel: View {
         HStack(spacing: 4) {
             ring(five, Palette.fiveHour)
             ring(week, Palette.week)
-            if beside {
-                (number(five) + Text(" · ").foregroundColor(tint) + number(week))
-                    .font(Font(NSFont.menuBarFont(ofSize: 0) as CTFont).monospacedDigit())
-            }
         }
         .fixedSize()
     }
 
-    func number(_ pct: Int?) -> Text {
-        Text(pct.map { "\($0)" } ?? "–").foregroundColor((pct ?? 0) >= 80 ? Self.red : tint)
-    }
+    /// 20 pt rings with a 2 pt rim leave a 16 pt hole; "88", the widest pair, is about 11 × 6.4 pt in 9 pt bold, so
+    /// its corners stay ~1.5 pt off the rim. A whole-point inset keeps the rim on pixels: 0.75 got rounded off-centre.
+    static let size: CGFloat = 20, line: CGFloat = 2
+    static let digits = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .bold)
 
     /// 100 % and over is a full ring with "!": three digits do not fit inside.
     func ring(_ pct: Int?, _ own: UInt32) -> some View {
         let c = (pct ?? 0) >= 95 ? Self.red : colored ? Color(hex: own) : tint
         return ZStack {
-            Ring(fraction: min(1, Double(pct ?? 0) / 100), color: c, size: 18, line: 2, inset: 1, track: tint.opacity(0.25))
-            if !beside {
-                Text(pct.map { $0 >= 100 ? "!" : "\($0)" } ?? "–")
-                    .font(.system(size: 9.5, weight: .bold).monospacedDigit())
-                    .foregroundColor((pct ?? 0) >= 80 ? Self.red : tint)
-                    .lineLimit(1).minimumScaleFactor(0.7).frame(width: 13)
-            }
+            Ring(fraction: min(1, Double(pct ?? 0) / 100), color: c, size: Self.size, line: Self.line,
+                 inset: Self.line / 2, track: tint.opacity(0.25))
+            Text(pct.map { $0 >= 100 ? "!" : "\($0)" } ?? "–")
+                .font(Font(Self.digits as CTFont))
+                .foregroundColor((pct ?? 0) >= 80 ? Self.red : tint)
+                // centred on the digits themselves (cap height), not on the line box with its descender
+                .alignmentGuide(VerticalAlignment.center) { $0[.firstTextBaseline] - Self.digits.capHeight / 2 }
         }
-        .frame(width: 18, height: 18)
+        .frame(width: Self.size, height: Self.size)
     }
 }
 

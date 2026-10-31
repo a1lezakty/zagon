@@ -158,9 +158,8 @@ struct WelcomeBar: View {
             HStack(alignment: .top, spacing: 16) {
                 Banner.blue(Emphasis(before: f.t("welcome.text") + (hider ? "\n" + f.t("welcome.settings") : "")))
                 HStack(alignment: .top, spacing: 6) {
-                    // Numbers inside even where a 1x bar puts them beside: twice the size, they read.
                     MenuBarLabel(five: vm.five?.pct, week: vm.week?.pct, colored: !app.monoIcon, tint: Z.text)
-                        .scaleEffect(2).frame(width: 80, height: 36)
+                        .scaleEffect(2).frame(width: 88, height: 40)
                     Image(systemName: "arrow.up.right").font(.system(size: 16, weight: .semibold)).foregroundColor(Z.secondary)
                 }
                 .padding(.top, 4)
