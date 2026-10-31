@@ -99,6 +99,7 @@ public struct Installer {
     var exe: String { Sys.shellQuote(o.zagon) }
     var claudeSettings: String { o.claudeDir + "/settings.json" }
     var codexHooks: String { o.codexDir + "/hooks.json" }
+    var wrapScript: String { Self.wrapScript(o.paths) }
     var codexConfig: String { o.codexDir + "/config.toml" }
     var userUnit: String { o.userUnitDir + "/zagon.service" }
     var systemUnit: String { o.systemUnitDir + "/zagon-\(userName).service" }
@@ -161,6 +162,15 @@ public struct Installer {
                 guard Sys.writeFile(claudeSettings, new!) else { throw InstallError("cannot write \(claudeSettings)") }
                 log("claude: hooks\(o.statusLine ? " and status line" : "") installed in \(claudeSettings)")
             } else { log("claude: already installed") }
+        }
+        if o.claude {
+            let text = Array(Self.wrapScriptText(zagon: o.zagon).utf8)
+            if Sys.readFile(wrapScript) != text {
+                Sys.mkdirs(Sys.dirname(wrapScript))
+                guard Sys.writeFile(wrapScript, text, mode: 0o755) else { throw InstallError("cannot write \(wrapScript)") }
+            }
+            log("claude: for limits from the Claude Code panel of VS Code, Cursor and other forks, add "
+                + Self.editorSetting(o.paths) + " to the editor's user settings (over Remote-SSH: to the Remote settings of this host)")
         }
         if o.codex {
             let cur = Sys.readFile(codexHooks)
@@ -305,6 +315,10 @@ public struct Installer {
                         redo: { try installed($0, tool: "claude", statusLine: o.statusLine) },
                         strip: { try stripped($0, statusOriginal: original) })
             try setConfig(nil)
+            if Sys.exists(wrapScript) {
+                log("claude: kept \(wrapScript) (without zagon it runs Claude Code directly); remove the editor setting "
+                    + "claudeCode.claudeProcessWrapper, then the file")
+            }
         }
         if o.codex {
             try restore(path: codexHooks, name: "codex-hooks.json",
@@ -335,6 +349,75 @@ public struct Installer {
         guard let cur, let new = try strip(cur) else { return }
         guard Sys.writeFile(path, new) else { throw InstallError("cannot write \(path)") }
         log("removed zagon entries from \(path) (it changed since install, backup not applied)")
+    }
+
+    // MARK: editor panels
+
+    /// The script the editor setting `claudeCode.claudeProcessWrapper` names: a fixed path, while the zagon binary may
+    /// move or go. Without zagon it runs Claude Code directly, so a setting left behind never stops the panel.
+    public static func wrapScript(_ paths: ZagonPaths) -> String { paths.dir + "/bin/claude-wrap" }
+
+    /// The line to add to the editor's settings.json.
+    public static func editorSetting(_ paths: ZagonPaths) -> String {
+        "\"claudeCode.claudeProcessWrapper\": \"\(wrapScript(paths))\""
+    }
+
+    static func wrapScriptText(zagon: String) -> String {
+        """
+        #!/bin/sh
+        # Zagon: the editor setting claudeCode.claudeProcessWrapper (Claude Code extension of VS Code, Cursor and other
+        # forks) runs this with the bundled claude and its arguments. zagon passes them on and records Claude's limits;
+        # without zagon, Claude Code runs directly.
+        z=\(Sys.shellQuote(zagon))
+        [ -x "$z" ] && exec "$z" claude-wrap "$@"
+        case "$1" in /*) exec "$@" ;; esac
+        exec claude "$@"
+
+        """
+    }
+
+    /// Settings files of VS Code and its forks that may hold the setting: the user settings of each
+    /// (`~/Library/Application Support/<editor>/User` on macOS, `~/.config/<editor>/User` on Linux) and the machine
+    /// settings of their Remote-SSH servers (`~/.<editor>-server/data/Machine`).
+    var editorSettingsFiles: [String] {
+        let h = o.paths.home
+        let user = [h + "/Library/Application Support", h + "/.config"].flatMap { root in
+            Sys.listDir(root).map { root + "/" + $0 + "/User/settings.json" }
+        }
+        let remote = Sys.listDir(h).filter { $0.hasPrefix(".") && $0.hasSuffix("-server") }.map { h + "/" + $0 + "/data/Machine/settings.json" }
+        return (user + remote).filter { Sys.exists($0) }
+    }
+
+    /// The value of `"claudeCode.claudeProcessWrapper"` in a settings.json, nil when absent. The files are JSONC:
+    /// a line commented out with `//` does not count.
+    /// ponytail: line by line; a value split over lines or inside /* */ is missed.
+    static func wrapperSetting(_ text: String) -> String? {
+        for line in text.split(separator: "\n") {
+            guard let k = line.firstRange(of: "\"claudeCode.claudeProcessWrapper\""), !line[..<k.lowerBound].contains("//") else { continue }
+            let rest = line[k.upperBound...].drop { $0 == " " || $0 == "\t" }
+            guard rest.first == ":" else { continue }
+            let v = rest.dropFirst().drop { $0 == " " || $0 == "\t" }
+            guard v.first == "\"", let end = v.dropFirst().firstIndex(of: "\"") else { continue }
+            return String(v[v.index(after: v.startIndex)..<end])
+        }
+        return nil
+    }
+
+    /// Where the editors stand with the setting; read only, the files are never written.
+    func editorPanels() -> String {
+        var set: [String] = [], other: [String] = []
+        for f in editorSettingsFiles {
+            guard let v = Sys.readFile(f).flatMap({ Self.wrapperSetting(String(decoding: $0, as: UTF8.self)) }) else { continue }
+            if v == wrapScript && Sys.exists(v) { set.append(f) }
+            else if !Sys.exists(v) { other.append("\(f) names \(v), which does not exist: that editor's panel cannot start Claude") }
+            else { other.append("\(f) runs \(v), not \(wrapScript): no limits from that panel") }
+        }
+        if set.isEmpty && other.isEmpty {
+            return "not set in any editor; for limits from the Claude Code panel of VS Code, Cursor and other forks add "
+                + Self.editorSetting(o.paths) + " to the editor's user settings (over Remote-SSH: to the Remote settings of this host)"
+        }
+        return ((set.isEmpty ? [] : ["claudeCode.claudeProcessWrapper set in " + set.joined(separator: ", ")]) + other)
+            .joined(separator: "; ")
     }
 
     // MARK: JSON edits
@@ -534,7 +617,8 @@ public struct Installer {
         let spool = o.paths.spool
         let last = Sys.listDir(spool).filter { $0.hasPrefix(".limits-") }.compactMap { Sys.mtime(spool + "/" + $0) }.max()
         out.append("claude limits: " + (last.map { "last reading " + Self.ago(o.now - $0) }
-            ?? "no reading in 7 days: the status line has not run (the Claude Code extension of VS Code, Cursor and other editors never runs it; claude in a terminal does)"))
+            ?? "no reading in 7 days: neither the status line of claude in a terminal nor an editor panel set up below has run"))
+        out.append("claude editor panels: " + editorPanels())
         let config = NotifyConfig.load(o.paths)
         // An empty database: the engine lookup reads only the config and the disk.
         var summary = DaySummary(store: try Store(path: ":memory:"), config: config, paths: o.paths, claudeRoot: "")
