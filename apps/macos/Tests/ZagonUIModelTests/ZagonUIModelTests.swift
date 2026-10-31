@@ -104,12 +104,21 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertNil(vm.limitsAge)
         XCTAssertFalse(vm.limitsMissing)
         XCTAssertEqual(vm.forecast?.plain, "Claude: At this pace the 5-hour limit runs out at 13:50, 30m before the reset.")
+        XCTAssertFalse(vm.paceFits)
+        XCTAssertTrue(MainVM(env(.en).0, f).paceFits)
 
         // Codex read 3 hours ago, still in its window: its own age. Read before its reset: Claude alone, as before.
         var l = p.limits()
         l.codex.fiveHour?.readAt = p.now.addingTimeInterval(-3 * 3600)
         l.codex.week?.readAt = p.now.addingTimeInterval(-3 * 3600)
         XCTAssertEqual(MainVM(Fixed(base: p, l: l), Fmt(lang: .ru, timeZone: utc, now: p.now)).limitsAge, "Codex 3 ч 00 м назад")
+        // Codex's 5 hours reset since, its week goes on: still both, the 5-hour ring says it has no reading.
+        l.codex.fiveHour?.resetsAt = p.now.addingTimeInterval(-60)
+        let reset = MainVM(Fixed(base: p, l: l), f)
+        XCTAssertEqual(reset.ais.map(\.tool), [.claude, .codex])
+        XCTAssertEqual([reset.ais[1].five.pct, reset.ais[1].week.pct], [nil, 71])
+        XCTAssertEqual(reset.ais[1].fiveLine, "5h –")
+        XCTAssertTrue(reset.limitsMissing)
         l.codex = AILimits(fiveHour: LimitWindow(usedPct: 90, resetsAt: p.now.addingTimeInterval(-60), tool: .codex))
         let one = MainVM(Fixed(base: p, l: l), f, colors: { $0 == .codex ? violet : .standard($0) })
         XCTAssertTrue(one.ais.isEmpty)
@@ -122,6 +131,10 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertEqual([codex.five?.pct, codex.week?.pct], [nil, 30])
         XCTAssertEqual(codex.week?.color, Palette.violet)
         XCTAssertEqual(codex.limitsHeader, "CODEX LIMITS")
+        XCTAssertTrue(codex.paceFits)  // no Claude windows: the pace view follows Codex
+        // Claude's old reading stays: the pace view would draw it next to Codex's rings, so the rings stay.
+        l.claude = AILimits(fiveHour: LimitWindow(usedPct: 97, resetsAt: p.now.addingTimeInterval(-600), tool: .claude))
+        XCTAssertFalse(MainVM(Fixed(base: p, l: l), f).paceFits)
     }
 
     /// The mock with other limits.

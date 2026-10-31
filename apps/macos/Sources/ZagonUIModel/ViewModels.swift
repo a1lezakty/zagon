@@ -125,6 +125,9 @@ public struct MainVM: Sendable {
     public var week: RingVM?
     /// Both AIs with a current reading: a ring in a ring each, Claude first; then `five` and `week` serve the pace view.
     public var ais: [AIRingsVM]
+    /// The pace view follows Claude's windows (Codex's without them): it stands in for the rings only when they are that
+    /// AI's, not Codex's next to Claude's old history.
+    public var paceFits: Bool
     public var forecast: Emphasis?
     public var waitingHeader: String
     public var waiting: [SessionRowVM]
@@ -149,11 +152,12 @@ public struct MainVM: Sendable {
 
     public init(_ p: ZagonDataProvider, _ f: Fmt, colors: (Tool) -> RingColors = RingColors.standard) {
         let limits = p.limits(), current = limits.tools(at: f.now), shown = limits.shown(at: f.now)
-        let one = colors(current.first ?? (shown.fiveHour ?? shown.week)?.tool ?? .claude)
+        let oneTool = current.first ?? (shown.fiveHour ?? shown.week)?.tool ?? .claude, one = colors(oneTool)
         five = shown.fiveHour.map { RingVM(title: f.t("limit.five"), window: $0, base: one.five, f: f) }
         week = shown.week.map { RingVM(title: f.t("limit.week"), window: $0, base: one.week, f: f) }
         let ais = current.count > 1 ? current.map { AIRingsVM($0, limits[$0], colors($0), f) } : []
         self.ais = ais
+        paceFits = ais.isEmpty && oneTool == ((limits.fiveHour ?? limits.week)?.tool ?? .claude)
         forecast = ais.isEmpty ? shown.fiveHour.flatMap { MainVM.forecast($0, f) } : ais.lazy.compactMap { a in
             limits[a.tool].fiveHour.flatMap { MainVM.forecast($0, f) }
                 .map { Emphasis(before: a.tool.name + ": " + $0.before, bold: $0.bold, after: $0.after) }

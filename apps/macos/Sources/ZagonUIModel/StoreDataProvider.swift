@@ -337,9 +337,10 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
             let z = timeZone, key = Self.day(now, z)
             let d = try query.day(key, detail: false) { Self.bounds($0, z) }
             var t = Totals(sessionSec: d.sessionSec, userSec: d.userSec, tokens: d.tokens.total, cost: d.cost)
-            // Per AI: whose session the tokens are (its id starts with the tool), priced as `Query.day` prices them.
+            // Per AI: whose session the tokens are (its id starts with the tool), priced as `Query.day` prices them. A failed
+            // split loses only the split.
             guard let (s, e) = Self.bounds(key, z) else { return t }
-            try query.db.query("""
+            try? query.db.query("""
                 SELECT session_id LIKE 'codex:%', model, sum(input), sum(output), sum(cache_read), sum(cache_write),
                        sum(cache_write_1h)
                 FROM usage_hour WHERE hour >= ? AND hour < ? GROUP BY 1, 2

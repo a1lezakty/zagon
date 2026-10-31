@@ -668,7 +668,7 @@ struct MainPanel: View {
 
 /// Rings or pace charts; a click switches between used + reset time and left + time until the reset. Whose limits they
 /// are on top; a window with no current reading shows "–" and a line on when one comes, not 0 %. Both AIs with a current
-/// reading: a ring in a ring each (the pace view follows one AI, so it gives way).
+/// reading: a ring in a ring each (the pace view follows one AI, so it gives way; also to rings of the other AI).
 struct LimitsBlock: View {
     @EnvironmentObject private var app: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -680,14 +680,16 @@ struct LimitsBlock: View {
                 HStack(alignment: .firstTextBaseline) {
                     Caps(text: !vm.ais.isEmpty && app.showLeft ? vm.limitsHeaderLeft : vm.limitsHeader)
                     Spacer(minLength: 8)
-                    if let age = vm.limitsAge { Text(age).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1) }
+                    if let age = vm.limitsAge {
+                        Text(age).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1).minimumScaleFactor(0.85)
+                    }
                 }
                 Group {
                     if !vm.ais.isEmpty {
                         HStack(spacing: 12) {
                             ForEach(vm.ais, id: \.tool) { nested($0).frame(maxWidth: .infinity, alignment: .leading) }
                         }
-                    } else if app.pace {
+                    } else if app.pace && vm.paceFits {
                         let paces = PaceVM.both(app.provider, weekdaysOnly: app.paceWeekdays, f)
                         HStack(alignment: .top, spacing: 16) {
                             chart(paces.five, vm.five ?? .empty(f.t("limit.five"), f))
