@@ -144,8 +144,10 @@ public struct KeptSummary: Sendable, Equatable {
     public var at: Date
     /// The AI engine whose CLI the source does not have (written without AI); only in a CLI's answer.
     public var noCli: String?
-    public init(doc: SummaryDoc, engine: String, at: Date, noCli: String? = nil) {
-        self.doc = doc; self.engine = engine; self.at = at; self.noCli = noCli
+    /// Why the AI did not answer (written without AI); only in a CLI's answer.
+    public var aiError: String?
+    public init(doc: SummaryDoc, engine: String, at: Date, noCli: String? = nil, aiError: String? = nil) {
+        self.doc = doc; self.engine = engine; self.at = at; self.noCli = noCli; self.aiError = aiError
     }
 }
 

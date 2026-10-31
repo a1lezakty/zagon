@@ -626,7 +626,7 @@ struct ChannelTests {
         s.runner = { argv, input, cwd, t in
             guard argv[0].hasSuffix("/claude") else { return real(argv, input, cwd, t) }
             let answer = #"{\"overview\": \"o\", \"items\": [{\"project\": \"repo\", \"task\": \"PROJ-1\", \"title\": \"\", \"refs\": [1], \"was\": \"crash\", \"done\": [\"fixed\"]}, {\"project\": \"repo\", \"task\": \"PROJ-1\", \"title\": \"Tests\", \"refs\": [1], \"done\": [\"tested\"]}]}"#
-            return (0, Array(#"{"is_error":false,"result":"\#(answer)"}"#.utf8))
+            return (0, Array(#"{"is_error":false,"result":"\#(answer)"}"#.utf8), [])
         }
         let r = try s.make("2026-10-30", now: day0 + 21 * 3600)
         #expect(r.engine == "claude" && r.doc.items.first?.heading == "PROJ-1 Parser crash" && r.doc.hosts == [s.store.host])
@@ -640,6 +640,14 @@ struct ChannelTests {
         #expect(r.status == 0 && String(decoding: r.out, as: UTF8.self) == "1:a b:path")
     }
 
+    /// stderr comes back apart from stdout, its end (where errors are) when it is long.
+    @Test func captureKeepsTheEndOfStderr() {
+        let r = Sys.capture(["/bin/sh", "-c", "printf out; i=0; while [ $i -lt 600 ]; do echo \"noise $i\" >&2; i=$((i+1)); done; echo 'ERROR: last' >&2; exit 3"])
+        #expect(r.status == 3 && String(decoding: r.out, as: UTF8.self) == "out")
+        #expect(r.err.count == Sys.maxErr && String(decoding: r.err, as: UTF8.self).hasSuffix("noise 599\nERROR: last\n"))
+        #expect(Sys.capture(["/bin/sh", "-c", "echo x"]).err.isEmpty)
+    }
+
     @Test(.enabled(if: Sys.which("git") != nil)) func internalClaudeRunIsIsolated() throws {
         var (s, _) = try setUp()
         let bin = makeTempDir()
@@ -651,7 +659,7 @@ struct ChannelTests {
             """)
         s.searchPath = bin + ":/usr/bin:/bin"
         let r = try #require(s.complete("выжимка"))
-        #expect(r.engine == "claude" && r.text.contains("internal=1 pwd=\(s.paths.dir)/run args=-p --safe-mode --model haiku"))
+        #expect(r.engine == "claude" && r.text.contains("internal=1 pwd=\(s.paths.dir)/run args=-p --safe-mode --permission-mode default --model haiku"))
     }
 
     @Test(.enabled(if: Sys.which("git") != nil)) func aiEngineAndFallback() throws {
@@ -666,7 +674,7 @@ struct ChannelTests {
             calls.append(argv + [cwd ?? ""])
             #expect(String(decoding: input, as: UTF8.self).contains("Parser fixes"))
             let answer = #"```json\n{\"overview\": \"Чинили парсер.\", \"items\": [{\"project\": \"repo\", \"task\": \"\", \"title\": \"Парсер\", \"refs\": [1], \"was\": \"Парсер падал\", \"done\": [\"починен парсер\", \"добавлены тесты\"], \"left\": \"\"}]}\n```"#
-            return (0, Array(#"{"type":"result","is_error":false,"result":"\#(answer)"}"#.utf8))
+            return (0, Array(#"{"type":"result","is_error":false,"result":"\#(answer)"}"#.utf8), [])
         }
         let m = try s.message("2026-10-30", now: day0 + 21 * 3600)
         #expect(calls.first?.contains("--no-session-persistence") == true && calls.first?.last == s.paths.dir + "/run")
@@ -674,7 +682,7 @@ struct ChannelTests {
                 && m.text.hasSuffix("\nЧто было: Парсер падал\nЧто сделано:\n• починен парсер\n• добавлены тесты"))
         #expect(m.photo.map { $0.count > 1000 && $0.count <= 200 * 1024 } == true)
         #expect(try s.store.db.one("SELECT engine FROM summary WHERE day = '2026-10-30'") { $0.text(0) } == "claude")
-        s.runner = { argv, input, cwd, t in argv[0].hasSuffix("/claude") ? (124, []) : real(argv, input, cwd, t) }  // timed out
+        s.runner = { argv, input, cwd, t in argv[0].hasSuffix("/claude") ? (124, [], []) : real(argv, input, cwd, t) }  // timed out
         let r = try s.make("2026-10-30", now: day0 + 21 * 3600)
         #expect(r.engine == "none" && r.doc.items.first?.done.first == "«Parser fixes» — 15 мин")
         // The AI's summary stays the one shown over the newer one made without AI.
@@ -685,7 +693,7 @@ struct ChannelTests {
         s.runner = { argv, input, cwd, t in
             guard argv[0].hasSuffix("/claude") else { return real(argv, input, cwd, t) }
             prompt = String(decoding: input, as: UTF8.self)
-            return (124, [])
+            return (124, [], [])
         }
         let m2 = try s.message("2026-10-30", now: day0 + 21 * 3600)
         #expect(prompt.hasPrefix("Below is a digest") && prompt.contains("[1] Project repo (Claude), session “Parser fixes”"))

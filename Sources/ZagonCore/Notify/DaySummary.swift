@@ -46,11 +46,16 @@ public struct DaySummary {
     public var searchPath: String? = Sys.env("PATH")
     /// System-wide install places of the AI CLIs, after the user's own (`cliPath`).
     public var systemBins = ["/usr/local/bin", "/opt/homebrew/bin"]
-    /// Runs a command: (argv, stdin, cwd, timeout) → (status, stdout). Replaced in tests.
-    public var runner: ([String], [UInt8], String?, Double) -> (status: Int32, out: [UInt8]) = {
+    /// Runs a command: (argv, stdin, cwd, timeout) → (status, stdout, stderr). Replaced in tests.
+    public var runner: ([String], [UInt8], String?, Double) -> (status: Int32, out: [UInt8], err: [UInt8]) = {
         Sys.capture($0, stdin: $1, cwd: $2, timeout: $3, env: HookSpool.internalEnv)
     }
     public var log: (String) -> Void = { _ in }
+    /// Why the last AI call gave nothing (the CLI's first error line, a timeout, an unreadable answer), nil after one
+    /// that answered: `zagon summary --json` sends it with a summary written without AI. A class, so the copies kept
+    /// by callers share it.
+    public final class Failure { public var reason: String? }
+    public let failure = Failure()
     static let maxDigest = 12000
 
     public init(store: Store, config: NotifyConfig, paths: ZagonPaths, claudeRoot: String) {
@@ -316,7 +321,7 @@ public struct DaySummary {
         let refs = f.sessions.map { SummaryDoc.Ref(project: $0.project ?? w.tool($0.tool), sec: $0.workingSec, cost: $0.cost, keys: $0.tasks) }
         guard var (doc, unused) = SummaryDoc.parse(answer: r.text, refs: refs, tasks: f.tasks, lang: w.en ? "en" : "ru",
                                                    from: f.day, to: f.day) else {
-            log("summary: the \(r.engine) answer has no cards"); return nil
+            failure.reason = "the \(r.engine) answer has no cards"; log("summary: " + failure.reason!); return nil
         }
         if doc.overview.isEmpty { doc.overview = DaySummary.plain(f, w).overview }
         if !unused.isEmpty {
@@ -331,18 +336,23 @@ public struct DaySummary {
     /// One prompt to the configured engine (the summary's: engine, model, timeout), without the user's config, hooks
     /// or tools; `result` is claude's JSON answer (usage, cost, time), nil for codex. `what` names it in the log.
     public func complete(_ text: String, what: String = "summary") -> (text: String, engine: String, result: JValue?)? {
+        failure.reason = nil
         let prompt = Array(text.utf8)
         let run = paths.dir + "/run"
         Sys.mkdirs(run)
         switch config.summaryEngine {
         case "claude":
             guard let claude = engineCLI else { log("\(what): claude CLI not found"); return nil }
-            // --safe-mode: no CLAUDE.md, hooks, plugins, MCP servers or skills of the user; auth works as usual.
-            let r = runner([claude, "-p", "--safe-mode", "--model", config.summaryModel, "--tools", "", "--max-turns", "1",
-                            "--no-session-persistence", "--output-format", "json"], prompt, run, config.summaryTimeout)
-            guard r.status == 0, let v = JValue.parse(r.out), v["is_error"] != .bool(true),
-                  let text = v["result"]?.string?.trimmingSpaces, !text.isEmpty else {
-                log("\(what): claude failed (\(r.status))"); return nil
+            // --safe-mode: no CLAUDE.md, hooks, plugins, MCP servers or skills of the user; auth works as usual. It keeps
+            // the user's permission mode: bypassPermissions makes claude refuse to start as root, and the call has no
+            // tools anyway.
+            let r = runner([claude, "-p", "--safe-mode", "--permission-mode", "default", "--model", config.summaryModel,
+                            "--tools", "", "--max-turns", "1", "--no-session-persistence", "--output-format", "json"],
+                           prompt, run, config.summaryTimeout)
+            let v = r.status == 0 ? JValue.parse(r.out) : nil
+            guard let v, v["is_error"] != .bool(true), let text = v["result"]?.string?.trimmingSpaces, !text.isEmpty else {
+                // an error answer's `result` is the error, not a reply
+                failed(what, "claude", r.status, r.err, v?["is_error"] == .bool(true) ? v?["result"]?.string : nil); return nil
             }
             return (String(text), "claude", v)
         case "codex":
@@ -354,11 +364,24 @@ public struct DaySummary {
                             "-c", "features.hooks=false", "-o", file, "-"], prompt, run,
                            config.summaryTimeout)
             guard r.status == 0, let out = Sys.readFile(file), !String(decoding: out, as: UTF8.self).trimmingSpaces.isEmpty else {
-                log("\(what): codex failed (\(r.status))"); return nil
+                failed(what, "codex", r.status, r.err, nil); return nil
             }
             return (String(String(decoding: out, as: UTF8.self).trimmingSpaces), "codex", nil)
         default: return nil
         }
+    }
+
+    /// Keeps and logs why a call failed, never with the prompt: the error claude answered, else the last `ERROR:`
+    /// line of the CLI's stderr (codex echoes the prompt there), else claude's first stderr line; cut to 200 characters.
+    func failed(_ what: String, _ engine: String, _ status: Int32, _ err: [UInt8], _ answered: String?) {
+        let lines = String(decoding: err, as: UTF8.self).split(separator: "\n").map { String($0.trimmingSpaces) }.filter { !$0.isEmpty }
+        let line = answered.flatMap { $0.split(separator: "\n").first.map { String($0.trimmingSpaces) } }
+            ?? lines.last { $0.hasPrefix("ERROR:") }.map { String($0.dropFirst(6).trimmingSpaces) }
+            ?? (engine == "claude" ? lines.first : nil)
+        let reason = status == 124 ? "no answer in \(Int(config.summaryTimeout)) s"
+            : line.map { $0.count > 200 ? String($0.prefix(199)) + "…" : $0 } ?? (status == 0 ? "an empty answer" : "exit \(status)")
+        failure.reason = "\(engine): " + reason
+        log("\(what): \(engine) failed (\(status)): \(reason)")
     }
 
     /// Where the AI CLIs are looked up. A user service runs with systemd's PATH: the CLIs' own install places come

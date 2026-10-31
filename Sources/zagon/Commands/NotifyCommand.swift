@@ -28,7 +28,7 @@ struct NotifyCommand: ParsableCommand {
             var s = DaySummary(store: store, config: config, paths: paths, claudeRoot: common.claudeDir)
             if let engine { s.config.summaryEngine = engine }
             if let lang { s.config.lang = lang }
-            s.log = { print($0) }
+            s.log = { warn($0) }  // stdout is the answer (--json)
             return s
         }
     }
@@ -112,8 +112,9 @@ struct SummaryCommand: ParsableCommand {
     @Option(help: "Text put before the title when sending.") var titlePrefix = ""
     @Option(help: "HH:MM or off: when the service writes the day summary ([summary] time in config.toml); show prints it.") var at: String?
 
-    /// `noCli`: the configured engine whose CLI is not installed here (written without AI).
-    struct Kept: Encodable { var key: String, engine: String, created: Double, doc: SummaryDoc, noCli: String? }
+    /// `noCli`: the configured engine whose CLI is not installed here (written without AI); `aiError`: why the AI call
+    /// of this run gave nothing (written without AI).
+    struct Kept: Encodable { var key: String, engine: String, created: Double, doc: SummaryDoc, noCli: String?, aiError: String? }
     struct Plan: Encodable { var key: String, from: String, to: String, worked: [String], missing: [String], calls: Int, noCli: String? }
 
     var isPeriod: Bool { week || month || from != nil || to != nil }
@@ -162,10 +163,11 @@ struct SummaryCommand: ParsableCommand {
             }
             let t0 = Time.monotonic()
             var m = try summary.message(day)
-            if json { return try show(day, try summary.kept(day), noCLI: summary.missingCLI) }
+            if json { return try show(day, try summary.kept(day), noCLI: summary.missingCLI, aiError: summary.failure.reason) }
             print(m.text)
             let used = try summary.kept(day)?.engine ?? "?"
             if used == "none", let e = summary.missingCLI { warn(Self.noCLI(e)) }
+            if used == "none", let e = summary.failure.reason { warn(Self.aiError(e)) }
             print("\n(\(used), \(Int((Time.monotonic() - t0) * 1000)) ms, picture \(m.photo?.count ?? 0) bytes)")
             if let png, let p = m.photo, !Sys.writeFile(png, p) { throw ValidationError("cannot write \(png)") }
             guard send else { return }
@@ -193,16 +195,18 @@ struct SummaryCommand: ParsableCommand {
         try summary.period(a, b, make: yes || calls == 0, progress: { n, of, day in
             warn("day \(n)/\(of): \(day)")
         })
-        try show(key, try summary.kept(key), noCLI: summary.missingCLI)
+        try show(key, try summary.kept(key), noCLI: summary.missingCLI, aiError: summary.failure.reason)
     }
 
     static func noCLI(_ engine: String) -> String { "\(engine) CLI not found on \(Ingest.hostName()): written without AI" }
+    static func aiError(_ reason: String) -> String { "the AI did not answer (\(reason)): written without AI" }
 
-    func show(_ key: String, _ k: DaySummary.Kept?, noCLI: String? = nil) throws {
+    func show(_ key: String, _ k: DaySummary.Kept?, noCLI: String? = nil, aiError: String? = nil) throws {
         guard let k else { throw ValidationError("nothing kept for \(key)") }
-        let noCLI = k.engine == "none" ? noCLI : nil
-        if json { return try emit(Kept(key: key, engine: k.engine, created: k.created, doc: k.doc, noCli: noCLI)) }
+        let noCLI = k.engine == "none" ? noCLI : nil, aiError = k.engine == "none" ? aiError : nil
+        if json { return try emit(Kept(key: key, engine: k.engine, created: k.created, doc: k.doc, noCli: noCLI, aiError: aiError)) }
         if let noCLI { warn(Self.noCLI(noCLI)) }
+        if let aiError { warn(Self.aiError(aiError)) }
         print(k.doc.text())
         var t = time_t(k.created.rounded(.down)), v = tm()
         localtime_r(&t, &v)

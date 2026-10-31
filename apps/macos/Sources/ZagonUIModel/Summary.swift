@@ -90,7 +90,11 @@ public struct SummaryAnswer: Decodable, Sendable {
     public var created: Double
     public var doc: SummaryDoc
     public var noCli: String?
-    public var kept: KeptSummary { KeptSummary(doc: doc, engine: engine, at: Date(timeIntervalSince1970: created), noCli: noCli) }
+    /// Why the AI call of this run gave nothing (an older zagon does not send it).
+    public var aiError: String?
+    public var kept: KeptSummary {
+        KeptSummary(doc: doc, engine: engine, at: Date(timeIntervalSince1970: created), noCli: noCli, aiError: aiError)
+    }
 }
 
 /// `zagon summary <period> --plan --json`: the days with sessions, those without a summary, the AI calls it takes.

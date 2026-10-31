@@ -308,7 +308,8 @@ public enum Handoff {
                 out = Sys.readFile(file).map { String(decoding: $0, as: UTF8.self) }
             }
         default:
-            let json = capture([bin ?? "claude", "-p", "--model", "haiku", "--tools", "", "--max-turns", "1",
+            // --permission-mode default: a bypassPermissions mode makes claude refuse to start as root (no tools here)
+            let json = capture([bin ?? "claude", "-p", "--permission-mode", "default", "--model", "haiku", "--tools", "", "--max-turns", "1",
                                 "--no-session-persistence", "--output-format", "json",
                                 // no user hooks / plugins / MCP servers / skills: runDir has no project settings
                                 "--setting-sources", "project", "--strict-mcp-config", "--disable-slash-commands",

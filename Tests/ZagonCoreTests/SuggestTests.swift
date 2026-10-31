@@ -28,7 +28,7 @@ struct SuggestFixture {
             let body = JValue.object([.init("is_error", .bool(false)), .init("result", .string(calls.answer)),
                                       .init("total_cost_usd", .number("0.0031")),
                                       .init("usage", .object([.init("input_tokens", .number("2500")), .init("output_tokens", .number("120"))]))])
-            return (0, Array(body.compact.utf8))
+            return (0, Array(body.compact.utf8), [])
         }
         s = TaskSuggester(store: f.store, linker: try TaskLinker(), jira: nil, engine: e)
     }
@@ -128,7 +128,7 @@ private func h(_ x: Double) -> Double { D0 + x * H }
         _ = try x.tasks.add(title: "Parser rewrite", key: "PROJ-1")
         try x.f.session("claude:s1", title: "parser rewrite part two", working: [(h(9), h(10))])
         let calls = x.calls
-        x.s.engine.runner = { _, _, _, _ in calls.n += 1; return (1, []) }
+        x.s.engine.runner = { _, _, _, _ in calls.n += 1; return (1, [], []) }
         let r = try x.s.suggest(day, now: h(20))
         #expect(calls.n == 1 && r.engine == "none" && r.note?.contains("failed") == true && r.items.map(\.key) == ["PROJ-1"])
     }
@@ -237,7 +237,7 @@ private func h(_ x: Double) -> Double { D0 + x * H }
         try y.f.session("claude:s1", title: "something else", working: [(h(9), h(10))])
         let calls = y.calls
         var s = y.s
-        s.engine.runner = { _, _, _, _ in calls.n += 1; return (1, []) }
+        s.engine.runner = { _, _, _, _ in calls.n += 1; return (1, [], []) }
         #expect(try s.suggest(day, now: h(20 + 1.0 / 60)).note?.contains("asked next time") == true)
         #expect(try s.suggest(day, now: h(20 + 2.0 / 60)).made && calls.n == 2)
     }
@@ -290,14 +290,14 @@ private func h(_ x: Double) -> Double { D0 + x * H }
         try z.f.session("claude:s2", title: "something else", working: [(h(11), h(12))])
         let calls = z.calls
         var s = z.s
-        s.engine.runner = { _, _, _, _ in calls.n += 1; return (1, []) }
+        s.engine.runner = { _, _, _, _ in calls.n += 1; return (1, [], []) }
         let f = try s.suggest(day, now: h(20))
         #expect(f.items.map(\.reason) == ["общие слова: parser, rewrite"] && f.items[0].confidence == 0.7)
         _ = try s.suggest(day, now: h(20.1))
         #expect(calls.n == 2)
         s.engine.runner = { _, input, _, _ in
             calls.n += 1; calls.prompt = String(decoding: input, as: UTF8.self)
-            return (0, Array(#"{"is_error":false,"result":"[]"}"#.utf8))
+            return (0, Array(#"{"is_error":false,"result":"[]"}"#.utf8), [])
         }
         _ = try s.suggest(day, now: h(20.2))
         #expect(calls.n == 3 && calls.prompt.contains("«something else»") && !calls.prompt.contains("«parser rewrite part two»"))
