@@ -34,7 +34,7 @@ public final class Log: @unchecked Sendable {
                 h.write(line)
                 try? h.close()
             } else {
-                FileManager.default.createFile(atPath: path, contents: line)
+                _ = FileManager.default.createFile(atPath: path, contents: line)
             }
         }
     }

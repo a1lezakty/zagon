@@ -91,7 +91,7 @@ final class TaskBackendTests: XCTestCase {
         XCTAssertEqual(list.filter { !$0.worked }.map(\.key), ["ZAG-1"])
         XCTAssertEqual(calls.last, "task|list|--all|--json|")
         // A zagon from before `--all` gets the plain list.
-        FileManager.default.createFile(atPath: home + "/old", contents: nil)
+        _ = FileManager.default.createFile(atPath: home + "/old", contents: nil)
         XCTAssertEqual(try b.list().count, 3)
         XCTAssertEqual(calls.suffix(2), ["task|list|--all|--json|", "task|list|--json|"])
         try FileManager.default.removeItem(atPath: home + "/old")
@@ -228,20 +228,20 @@ final class TaskBackendTests: XCTestCase {
                                          "task|reject|--|N3|",
                                          "task|accept|--create-in-jira|--project=PROJ|--title=-Fix login|--description=It was: a=b|--yes|--|N3|"])
         XCTAssertEqual(calls.filter { $0.contains("--yes") }.count, 1)
-        FileManager.default.createFile(atPath: home + "/jira-fails", contents: nil)
+        _ = FileManager.default.createFile(atPath: home + "/jira-fails", contents: nil)
         XCTAssertThrowsError(try b.createInJira("N3", project: "PROJ", title: "t", description: "d")) {
             XCTAssertEqual("\($0)", "Jira: HTTP 400 summary too long")
         }
 
         // Jira not connected there: suggestions without the Jira button; none at all: Jira is not asked.
-        FileManager.default.createFile(atPath: home + "/no-jira", contents: nil)
+        _ = FileManager.default.createFile(atPath: home + "/no-jira", contents: nil)
         XCTAssertNil(try b.suggestions().jira)
         try "[]".write(toFile: home + "/drafts.json", atomically: true, encoding: .utf8)
         let before = calls.count
         XCTAssertTrue(try b.suggestions().drafts.isEmpty)
         XCTAssertEqual(calls.count, before + 1)
         // A zagon from before 0.1.1: no suggestions, no error.
-        FileManager.default.createFile(atPath: home + "/old-drafts", contents: nil)
+        _ = FileManager.default.createFile(atPath: home + "/old-drafts", contents: nil)
         XCTAssertTrue(try b.drafts().isEmpty)
     }
 }
