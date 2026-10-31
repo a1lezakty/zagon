@@ -130,8 +130,8 @@ public struct ReconcileVM: Sendable {
     public var warnings: [String]
     public var stats: [Stat]
     public var bars: [Bar]
-    /// Bar index and label under the chart: month starts and Mondays.
-    public var ticks: [(index: Int, label: String)]
+    /// Bar index and label under the chart, by priority: month starts, the first day, Mondays.
+    let marks: [(index: Int, label: String)]
     public var coverageIndex: Int?
     public var todayIndex: Int?
     public var groups: [Group]
@@ -177,7 +177,7 @@ public struct ReconcileVM: Sendable {
                Stat(Self.long(t.noTaskSec, f), f.t("rec.st.noTask"))]
 
         // The chart: every day of the requested range, the days after today empty.
-        var bars: [Bar] = [], months: [(Int, String)] = [], mondays: [(Int, String)] = [], d = date(r.from)
+        var bars: [Bar] = [], months: [(Int, String)] = [], first: [(Int, String)] = [], mondays: [(Int, String)] = [], d = date(r.from)
         let byDay = Dictionary(r.days.map { ($0.day, $0) }, uniquingKeysWith: { a, _ in a }), end = date(r.toRequested)
         var i = 0
         while d <= end, i < 400 {
@@ -185,11 +185,10 @@ public struct ReconcileVM: Sendable {
             let kind: BarKind = key > r.to ? .future : (before.map { key < $0 } ?? false) ? .before : .counted
             bars.append(Bar(kind: kind, sessionH: Double(x?.sessionSec ?? 0) / 3600, jiraH: Double(x?.jiraSec ?? 0) / 3600))
             let dom = f.calendar.component(.day, from: d), monday = f.calendar.component(.weekday, from: d) == 2
-            if i == 0 || dom == 1 { months.append((i, f.shortDay(d))) } else if monday { mondays.append((i, String(dom))) }
+            if dom == 1 { months.append((i, f.shortDay(d))) } else if i == 0 { first.append((i, f.shortDay(d))) } else if monday { mondays.append((i, String(dom))) }
             d = f.addDays(1, to: d); i += 1
         }
-        // A Monday next to a month label would sit on it.
-        ticks = (months + mondays.filter { m in months.allSatisfy { abs($0.0 - m.0) > 3 } }).sorted { $0.0 < $1.0 }
+        marks = months + first + mondays
         self.bars = bars
         // Sessions starting after the period: the whole chart is before them.
         coverageIndex = before.map { c in bars.indices.first { StoreDataProvider.day(f.addDays($0, to: date(r.from)), zone) >= c } ?? bars.count }
@@ -235,6 +234,19 @@ public struct ReconcileVM: Sendable {
 
     static func diff(_ sec: Int, _ f: Fmt) -> String {
         abs(sec) < 30 ? "0" : (sec > 0 ? "+" : "−") + long(sec, f)
+    }
+
+    /// The labels that fit at this bar width: a label that would touch one before it in `marks` is left out
+    /// (the first day next to "Sep 1", a Monday next to a month).
+    public func ticks(slot: Double) -> [(index: Int, label: String)] {
+        // Width estimated at 7 pt a character of 11 pt text, not measured.
+        func span(_ t: (index: Int, label: String)) -> ClosedRange<Double> {
+            let x = Double(t.index) * slot
+            return x...(x + Double(t.label.count) * 7 + 4)
+        }
+        var kept: [(index: Int, label: String)] = []
+        for t in marks where !kept.contains(where: { span($0).overlaps(span(t)) }) { kept.append(t) }
+        return kept.sorted { $0.index < $1.index }
     }
 
     /// Rows of the groups `filter` keeps (nil: all).
