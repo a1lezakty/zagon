@@ -62,9 +62,9 @@ struct SettingsScreen: View {
                         app.monoIcon = $0 == 1
                     }
                 }
-                colors(f)
                 Text(f.t("settings.view.note")).font(.system(size: 12)).foregroundColor(Z.muted)
                     .fixedSize(horizontal: false, vertical: true)
+                colors(f)
             }
             .frame(maxWidth: 640, alignment: .leading)
             Card(spacing: 12) {
@@ -266,6 +266,7 @@ struct SettingsScreen: View {
                 .overlay { if let dot { Circle().fill(dot).frame(width: 10, height: 10) } }
                 .padding(3)
                 .overlay(Circle().strokeBorder(selected ? Z.text : Color.clear, lineWidth: 2))
+                .contentShape(Circle())
         }
     }
 
