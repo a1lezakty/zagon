@@ -13,7 +13,7 @@ struct DoctorCommand: ParsableCommand {
         let checks = Installer(o).doctor()
         for c in checks { print((c.ok ? "ok       " : "MISSING  ") + c.text) }
         // Facts, not checks: `info` lines count for neither the exit status nor the Mac app's Connect.
-        for l in try Installer(o).info() { print("info     " + l) }
+        for l in (try? Installer(o).info()) ?? [] { print("info     " + l) }
         let logPath = o.paths.dir + "/logs/daemon.log"
         let tail = LogFile.tail(logPath, lines: 2000)
         if tail.isEmpty {
