@@ -53,6 +53,21 @@ final class AppState: ObservableObject {
     func startIcon() {
         iconOn = true
         refreshIcon()
+        attachIcon(tries: 60)
+    }
+
+    /// MenuBarExtra makes the button when it likes: until then, a look every second. Found, the icon is drawn again if
+    /// it was drawn for another shade than the bar's (or not at all), and the button gets its tooltip.
+    private func attachIcon(tries: Int) {
+        guard StatusButton.button != nil else {
+            guard tries > 1 else { return }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                self?.attachIcon(tries: tries - 1)
+            }
+            return
+        }
+        if icon.look?.dark != StatusButton.dark { refreshIcon() } else { syncStatusButton() }
     }
 
     /// Timers and events call this (new data, settings, the bar's shade), never the label: one read of the limits, and
