@@ -248,7 +248,8 @@ extension DayWorklog {
             }
             for (id, c) in cells[day]! {
                 let s = Int(c.sec.rounded()), j = c.logs.reduce(0) { $0 + $1.seconds }
-                guard s > 0 || j > 0 else { continue }
+                // Under a minute of work with no worklog is a sliver at a link's edge, not something to log.
+                guard j > 0 || s >= 60 else { continue }
                 let st = kind(c) ?? Reconcile.status(session: s, jira: j, toleranceSec: tol)
                 var x = row(c, sec: s, jiraSec: j, status: st)
                 x.done = c.task.flatMap { done["\($0) \(day)"] }

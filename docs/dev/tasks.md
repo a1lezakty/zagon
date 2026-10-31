@@ -139,7 +139,7 @@ no Jira key is `zagon_only`, work with no task is `no_task`, a row per project a
 session's working time that day). `coverage_from`: Claude Code deletes transcripts after `cleanupPeriodDays`, so
 history is whole from the earliest end of a Claude session on (no Claude sessions: the first session; that first day
 may itself miss sessions deleted before Zagon read them); earlier days are not reconciled, their worklogs only sum to
-`jira_before_coverage_sec`. Totals: `session_sec - jira_sec ==
+`jira_before_coverage_sec`. A task's day with under a minute of work and no worklog is left out. Totals: `session_sec - jira_sec ==
 unlogged_sec - jira_only_sec`. Markdown, CSV (a line per task and day, minutes) and JSON come from `ReconcileText`.
 
 ## Suggestions (`TaskSuggester`, Tasks/Suggest.swift)
