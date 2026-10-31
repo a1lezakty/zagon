@@ -95,6 +95,7 @@ public struct ReconcileVM: Sendable {
         public var id: String { day }
         /// YYYY-MM-DD: the day plan to log from.
         public var day: String
+        public var jiraKey: String?
         public var title: String
         public var kind: RecKind
         public var sessions: [Session]
@@ -168,7 +169,7 @@ public struct ReconcileVM: Sendable {
         warnings = (r.coverageFrom == nil ? [f.t("rec.noSessions")] : [])
             + (r.jira == "failed" ? [f.t("rec.jiraFailed", Remote.scrubHomes(r.jiraError ?? ""))] : connected ? [] : [f.t("rec.jiraOff")])
 
-        let t = r.totals, span = f.dayRange(date(max(r.coverageFrom ?? r.from, r.from)), date(r.to))
+        let t = r.totals, span = f.dayRange(date(min(max(r.coverageFrom ?? r.from, r.from), r.to)), date(r.to))
         stats = connected
             ? [Stat(Self.long(t.sessionSec, f), f.t("rec.st.sessions", span)), Stat(Self.long(t.jiraSec, f), f.t("rec.st.jira")),
                Stat(Self.long(t.jiraOnlySec, f), f.t("rec.st.over")), Stat(Self.long(t.unloggedSec, f), f.t("rec.st.unlogged"))]
@@ -190,14 +191,16 @@ public struct ReconcileVM: Sendable {
         // A Monday next to a month label would sit on it.
         ticks = (months + mondays.filter { m in months.allSatisfy { abs($0.0 - m.0) > 3 } }).sorted { $0.0 < $1.0 }
         self.bars = bars
-        coverageIndex = before.flatMap { c in bars.indices.first { StoreDataProvider.day(f.addDays($0, to: date(r.from)), zone) == c } }
-        todayIndex = bars.lastIndex { $0.kind != .future }
+        // Sessions starting after the period: the whole chart is before them.
+        coverageIndex = before.map { c in bars.indices.first { StoreDataProvider.day(f.addDays($0, to: date(r.from)), zone) >= c } ?? bars.count }
+        // Only when days to come follow: no line on the chart's right edge.
+        todayIndex = bars.lastIndex { $0.kind != .future }.flatMap { $0 < bars.count - 1 ? $0 : nil }
 
         let rows = r.tasks.map { Self.row($0, f) }
         groups = RecKind.allCases.compactMap { k in
             let g = rows.filter { $0.kind == k }
             guard !g.isEmpty else { return nil }
-            let src = r.tasks.filter { RecKind(rawValue: $0.status) == k }
+            let src = r.tasks.filter { (RecKind(rawValue: $0.status) ?? .match) == k }
             let s = src.reduce(0) { $0 + $1.sessionSec }, j = src.reduce(0) { $0 + $1.jiraSec }
             let jiraSide = k != .zagonOnly && k != .noTask
             return Group(kind: k, title: f.t("rec.g." + k.rawValue), sessions: s > 0 ? Self.long(s, f) : "—",
@@ -209,7 +212,7 @@ public struct ReconcileVM: Sendable {
                      rows: day.rows.map { Self.row($0, f) })
         }
         total = (Self.long(t.sessionSec, f), connected ? Self.long(t.jiraSec, f) : "—", connected ? Self.diff(t.sessionSec - t.jiraSec, f) : "—")
-        notes = connected ? [f.t("rec.n.match", String(r.toleranceMin))] + (before.map { c in
+        notes = connected ? [f.t("rec.n.match", String(r.toleranceMin))] + (before.flatMap { c in t.jiraBeforeCoverageSec == 0 ? nil :
             [f.t("rec.n.before", f.dayRange(date(r.from), f.addDays(-1, to: date(c))), Self.long(t.jiraBeforeCoverageSec, f))]
         } ?? []) + [f.t("rec.n.lag")] : []
     }
@@ -263,7 +266,7 @@ public struct ReconcileVM: Sendable {
             let gap = x.sessionSec - x.jiraSec
             let action: String? = !connected || x.jiraKey == nil || gap < 60 || kind == .match ? nil
                 : f.t(x.jiraSec == 0 ? "rec.d.log" : "rec.d.add", Self.long(gap, f))
-            return DayLine(day: day.day, title: f.dayTitleShortWeekday(StoreDataProvider.start(day.day, zone)), kind: kind,
+            return DayLine(day: day.day, jiraKey: x.jiraKey, title: f.dayTitleShortWeekday(StoreDataProvider.start(day.day, zone)), kind: kind,
                            sessions: sessions, done: x.done, sessionTime: x.sessionSec > 0 ? Self.long(x.sessionSec, f) : "—",
                            worklogs: logs, action: action, primary: x.jiraSec == 0)
         }
@@ -281,7 +284,7 @@ public struct ReconcileVM: Sendable {
         func cell(_ x: String) -> String { x.replacingOccurrences(of: "|", with: "\\|").replacingOccurrences(of: "\n", with: " ") }
         var out = ["# " + f.t("rec.md.title", f.dayRange(StoreDataProvider.start(r.from, zone), StoreDataProvider.start(r.toRequested, zone)))]
         let lead = ([hint] + warnings + (coverage.map { [$0.plain] } ?? [])).filter { !$0.isEmpty }
-        if !lead.isEmpty { out += [""] + lead.map { "> " + $0 } }
+        if !lead.isEmpty { out += [""] + lead.map { "> " + cell($0) } }
         if s.totals {
             out += ["", "## " + f.t("rec.x.totals"), "", "| | \(f.t("rec.md.hours")) |", "|---|--:|"]
             out += stats.map { "| \(cell($0.label)) | \($0.value) |" }
@@ -346,6 +349,18 @@ public struct ReconcileVM: Sendable {
 /// The quick periods of the worklog screen, as first and last day.
 public enum RecPeriod: String, CaseIterable, Sendable {
     case today, yesterday, thisWeek, lastWeek, thisMonth, lastMonth
+
+    /// ‹ ›: whole months move by months (October → November, not 31 days), anything else by its own length.
+    public static func shift(_ from: Date, _ to: Date, by dir: Int, _ f: Fmt) -> (from: Date, to: Date) {
+        let after = f.addDays(1, to: to)
+        if from == f.startOfMonth(from), after == f.startOfMonth(after) {
+            let n = max(1, f.calendar.dateComponents([.month], from: from, to: after).month ?? 1)
+            let a = f.addMonths(dir * n, to: from)
+            return (a, f.addDays(-1, to: f.addMonths(n, to: a)))
+        }
+        let n = (f.calendar.dateComponents([.day], from: from, to: to).day ?? 0) + 1
+        return (f.addDays(dir * n, to: from), f.addDays(dir * n, to: to))
+    }
 
     public func range(_ f: Fmt) -> (from: Date, to: Date) {
         let today = f.startOfDay(f.now)
@@ -454,16 +469,21 @@ extension Reconciliation {
 }
 
 extension ReconcileVM {
-    /// What "Log" on a day writes: that day's whole plan (the existing write path), as the confirmation lists it.
-    /// `title` nil: the plan has nothing for Jira.
-    public static func confirmation(_ p: WorklogPlan, _ f: Fmt) -> (title: String?, detail: String) {
+    /// What "Log" on a day writes: that day's whole plan, all its tasks (the existing write path), as the confirmation
+    /// lists it; `key` is the row pressed. `title` nil: nothing can be written (no rows for Jira, Jira off or failing).
+    public static func confirmation(_ p: WorklogPlan, key: String?, _ f: Fmt) -> (title: String?, detail: String) {
+        // `TaskBackend.commit` refuses these: say why instead of offering the button.
+        if let e = p.jiraError { return (nil, f.t("worklog.jiraFailed", Remote.scrubHomes(e))) }
+        if p.plan.jiraSec == nil { return (nil, f.t("worklog.jiraOff")) }
         let rows = p.plan.rows.filter { $0.state == "planned" && $0.jiraKey != nil }
         let day = f.dayTitleShortWeekday(StoreDataProvider.start(p.plan.day, f.calendar.timeZone))
         guard !rows.isEmpty else { return (nil, f.t("rec.c.none", day)) }
+        let missing = key.flatMap { k in rows.contains { $0.jiraKey == k } ? nil : "\n" + f.t("rec.c.notInPlan", k) } ?? ""
         let sec = rows.reduce(0) { $0 + $1.seconds }
         let lines = rows.map { r in
             "\(r.jiraKey ?? "") \(f.timeSpan(StoreDataProvider.date(r.start), StoreDataProvider.date(r.end))) · \(long(r.seconds, f)) — \(r.text)"
         }
-        return (f.t.plural("worklog.commit", rows.count, long(sec, f)) + "?", f.t("rec.c.detail", day, lines.joined(separator: "\n")))
+        return (f.t.plural("worklog.commit", rows.count, long(sec, f)) + "?",
+                f.t("rec.c.detail", day, lines.joined(separator: "\n")) + missing)
     }
 }

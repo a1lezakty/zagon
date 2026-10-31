@@ -184,13 +184,23 @@ final class ReconcileTests: XCTestCase {
             "task_key":"PROJ-21","text":"Dark theme."}
             """
         let logged = row.replacingOccurrences(of: "\"planned\"", with: "\"logged\"")
-        let c = ReconcileVM.confirmation(try plan(row + "," + logged), fmt())
+        let c = ReconcileVM.confirmation(try plan(row + "," + logged), key: "PROJ-21", fmt())
         XCTAssertEqual(c.title, "Log 1 worklog to Jira · 3h 30m?")
-        XCTAssertEqual(c.detail, "The day's plan, Wed, October 28:\nPROJ-21 10:00–13:30 · 3h 30m — Dark theme.\n"
+        XCTAssertEqual(c.detail, "The whole day's plan, all tasks, Wed, October 28:\nPROJ-21 10:00–13:30 · 3h 30m — Dark theme.\n"
                        + "The plan is checked again just before writing.")
-        let none = ReconcileVM.confirmation(try plan(logged), fmt())
+        // The row pressed is not in the plan: the others would be written, so it says so.
+        XCTAssertTrue(ReconcileVM.confirmation(try plan(row), key: "PROJ-40", fmt()).detail
+            .hasSuffix("\nPROJ-40 is not in the day's plan: its time did not fit, or it is already logged."))
+        let none = ReconcileVM.confirmation(try plan(logged), key: "PROJ-21", fmt())
         XCTAssertNil(none.title)
         XCTAssertEqual(none.detail, "Wed, October 28: the day's plan has nothing for Jira.")
+        // What `commit` refuses is not offered.
+        var failed = try plan(row)
+        failed.jiraError = "HTTP 401"
+        XCTAssertNil(ReconcileVM.confirmation(failed, key: "PROJ-21", fmt()).title)
+        failed.jiraError = nil
+        failed.plan.jiraSec = nil
+        XCTAssertEqual(ReconcileVM.confirmation(failed, key: "PROJ-21", fmt()).title, nil)
     }
 
     func testQuickPeriods() {
@@ -202,6 +212,23 @@ final class ReconcileTests: XCTestCase {
         XCTAssertEqual(range(.lastWeek), ["2026-10-19", "2026-10-25"])
         XCTAssertEqual(range(.thisMonth), ["2026-10-01", "2026-10-31"])
         XCTAssertEqual(range(.lastMonth), ["2026-09-01", "2026-09-30"])
+        func shift(_ a: String, _ b: String, _ dir: Int) -> [String] {
+            let r = RecPeriod.shift(StoreDataProvider.start(a, utc), StoreDataProvider.start(b, utc), by: dir, f)
+            return [d(r.from), d(r.to)]
+        }
+        XCTAssertEqual(shift("2026-10-01", "2026-10-31", 1), ["2026-11-01", "2026-11-30"])
+        XCTAssertEqual(shift("2026-09-01", "2026-10-31", -1), ["2026-07-01", "2026-08-31"])
+        XCTAssertEqual(shift("2026-10-26", "2026-11-01", -1), ["2026-10-19", "2026-10-25"])
+        XCTAssertEqual(shift("2026-09-01", "2026-11-27", 1), ["2026-11-28", "2027-02-23"])
+    }
+
+    func testPeriodBeforeTheSessionsAndPastPeriod() {
+        var r = sample
+        r.toRequested = "2026-09-20"
+        r.to = "2026-09-20"
+        let vm = ReconcileVM(r, fmt())
+        XCTAssertEqual(vm.coverageIndex, vm.bars.count)  // all of it before the sessions
+        XCTAssertNil(vm.todayIndex)  // nothing to come: no line at the right edge
     }
 
     func testEveryKeyInBothLanguages() {

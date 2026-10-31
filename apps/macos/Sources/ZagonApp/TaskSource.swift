@@ -47,8 +47,10 @@ extension AppState {
             guard force || have.plans[day] == nil else { return }
             work(s, { try $0.plan(day) }) { $0.plans[day] = $1 }
         case .reconcile(let from, let to):
-            guard force || have.reconciles[from + "|" + to] == nil else { return }
-            work(s, { try $0.reconcile(from: from, to: to) }) { $0.reconciles[from + "|" + to] = $1 }
+            let key = reconcileKey(from, to)
+            guard force || have.reconciles[key] == nil else { return }
+            // Keeps the last commit's outcome: the period reloads right after a write to show it.
+            work(s, keepMessage: true, { try $0.reconcile(from: from, to: to) }) { $0.reconciles[key] = $1 }
         case .drafts:
             guard force || have.drafts == nil else { return }
             // With them, whether the source has the AI engine suggestions are made with.
@@ -56,6 +58,19 @@ extension AppState {
             work(s, { b in (try b.suggestions(), b.missingEngine(now: now, zone: zone)) }) {
                 $0.drafts = $1.0.drafts; $0.jira = $1.0.jira; $0.draftNote = nil; $0.noCli = $1.1
             }
+        }
+    }
+
+    /// A period's reconciliation is kept per day it was made on: tomorrow "counted to today" moves on.
+    func reconcileKey(_ from: String, _ to: String) -> String { from + "|" + to + "|" + TaskBackend.day(f.now, zone) }
+
+    /// The day's plan read again and stored, then handed to `done` with its source; a failed read only sets the
+    /// source's error line.
+    func reloadPlan(_ day: String, done: @escaping (TaskBackend.Source, WorklogPlan) -> Void) {
+        guard let s = currentTaskSource else { return }
+        work(s, { try $0.plan(day) }) { cache, plan in
+            cache.plans[day] = plan
+            DispatchQueue.main.async { done(s, plan) }
         }
     }
 
@@ -127,11 +142,11 @@ extension AppState {
     }
 
     /// Runs `job` off the main thread; its result, or a grey error line, lands in the source's cache.
-    private func work<T>(_ s: TaskBackend.Source, _ job: @escaping (TaskBackend) throws -> T,
+    private func work<T>(_ s: TaskBackend.Source, keepMessage: Bool = false, _ job: @escaping (TaskBackend) throws -> T,
                          then apply: @escaping (inout TaskCache, T) -> Void) {
         guard let backend = taskBackend?(s) else { return }
         taskCache[s, default: TaskCache()].loading += 1
-        taskCache[s]?.message = nil
+        if !keepMessage { taskCache[s]?.message = nil }
         Task.detached {
             let r = Result { try job(backend) }
             await MainActor.run {

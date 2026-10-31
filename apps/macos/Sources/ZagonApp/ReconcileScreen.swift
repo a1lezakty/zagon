@@ -9,18 +9,23 @@ struct ReconcileScreen: View {
     @State private var byDay = false
     @State private var showMatch = false
     @State private var exporting = false
-    /// The day whose plan "Log" asked for; the confirmation shows once that plan is loaded.
-    @State private var confirmDay: String?
+    /// The confirmation of "Log": the day's plan as just read, from that source.
+    @State private var ask: Ask?
+
+    struct Ask {
+        var day: String
+        var source: TaskBackend.Source
+        var title: String?
+        var detail: String
+    }
 
     var body: some View {
         let f = app.f, z = app.zone, today = f.startOfDay(f.now)
         let period = app.worklogPeriod ?? today...today
         let from = TaskBackend.day(period.lowerBound, z), to = TaskBackend.day(period.upperBound, z)
         let cache = app.tasksNow
-        let report = app.taskBackend == nil ? app.sampleReconcile : cache.reconciles[from + "|" + to]
+        let report = app.taskBackend == nil ? app.sampleReconcile : cache.reconciles[app.reconcileKey(from, to)]
         let vm = report.map { ReconcileVM($0, f) }
-        let plan = confirmDay.flatMap { cache.plans[$0] }
-        let ask = plan.map { ReconcileVM.confirmation($0, f) }
         Page(spacing: 18) {
             Header(vm?.title ?? f.t("worklog.title", f.dayRange(period.lowerBound, period.upperBound)),
                    prev: { shift(-1, period) }, next: { shift(1, period) }) { WorklogMode() }
@@ -37,16 +42,19 @@ struct ReconcileScreen: View {
                 Text(m).font(.system(size: 13)).foregroundColor(Z.muted).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .task(id: "\(String(describing: app.currentTaskSource))|\(from)|\(to)") { app.loadTasks(.reconcile(from, to)) }
+        .task(id: "\(String(describing: app.currentTaskSource))|\(app.reconcileKey(from, to))") { app.loadTasks(.reconcile(from, to)) }
+        // A plan read from another source must not be confirmed here.
+        .onChange(of: app.currentTaskSource) { _ in ask = nil }
+        // A write's outcome belongs to the period it was made in.
+        .onChange(of: app.worklogPeriod) { _ in if let s = app.currentTaskSource { app.taskCache[s]?.message = nil } }
         .sheet(isPresented: $exporting) {
             if let vm { ReconcileExport(vm: vm, shown: $exporting).environmentObject(app) }
         }
         .confirmationDialog(ask?.title ?? f.t("worklog.nothing"),
-                            isPresented: Binding(get: { confirmDay != nil && plan != nil && cache.loading == 0 },
-                                                 set: { if !$0 { confirmDay = nil } }),
+                            isPresented: Binding(get: { ask != nil }, set: { if !$0 { ask = nil } }),
                             titleVisibility: .visible) {
-            if ask?.title != nil, let day = confirmDay {
-                Button(f.t("worklog.commitYes")) { app.commitPlan(day) { app.loadTasks(.reconcile(from, to), force: true) } }
+            if let a = ask, a.title != nil, a.source == app.currentTaskSource {
+                Button(f.t("worklog.commitYes")) { app.commitPlan(a.day) { app.loadTasks(.reconcile(from, to), force: true) } }
             }
             Button(f.t("common.cancel"), role: .cancel) {}
         } message: {
@@ -54,18 +62,19 @@ struct ReconcileScreen: View {
         }
     }
 
-    /// ‹ › move the period by its own length.
     func shift(_ dir: Int, _ p: ClosedRange<Date>) {
-        let f = app.f
-        let n = (f.calendar.dateComponents([.day], from: p.lowerBound, to: p.upperBound).day ?? 0) + 1
-        app.worklogPeriod = f.addDays(dir * n, to: p.lowerBound)...f.addDays(dir * n, to: p.upperBound)
+        let r = RecPeriod.shift(p.lowerBound, p.upperBound, by: dir, app.f)
+        app.worklogPeriod = r.from...r.to
         app.reconcileOpen = nil
     }
 
-    /// "Log" on a day: that day's plan is loaded fresh, then confirmed and written as on the day screen.
-    func log(_ day: String) {
-        confirmDay = day
-        app.loadTasks(.plan(day), force: true)
+    /// "Log" on a day: that day's plan is read again; the confirmation shows exactly that plan, and the write goes as
+    /// on the day screen (only while the plan is still the one shown).
+    func log(_ d: ReconcileVM.DayLine) {
+        app.reloadPlan(d.day) { s, plan in
+            let c = ReconcileVM.confirmation(plan, key: d.jiraKey, app.f)
+            ask = Ask(day: d.day, source: s, title: c.title, detail: c.detail)
+        }
     }
 
     @ViewBuilder func content(_ vm: ReconcileVM) -> some View {
@@ -298,7 +307,7 @@ struct RecRow: View {
 /// An open row: the task day by day, with "Log" / "Add" where time is missing in Jira.
 struct DayDetail: View {
     let lines: [ReconcileVM.DayLine]
-    let log: (String) -> Void
+    let log: (ReconcileVM.DayLine) -> Void
     @EnvironmentObject private var app: AppState
 
     var body: some View {
@@ -359,7 +368,7 @@ struct DayDetail: View {
             .frame(width: 230, alignment: .leading)
             Group {
                 if let a = d.action {
-                    PillButton(title: a, primary: d.primary, height: 28, radius: 8, fontSize: 12) { log(d.day) }
+                    PillButton(title: a, primary: d.primary, height: 28, radius: 8, fontSize: 12) { log(d) }
                 } else { Color.clear.frame(height: 1) }
             }
             .frame(width: 160, alignment: .trailing)
@@ -519,7 +528,7 @@ struct DayBars: View {
                            with: .color(Color(hex: Palette.violet)), lineWidth: 1.2)
             }
         }
-        for i in [vm.coverageIndex, vm.todayIndex.map { $0 + 1 }].compactMap({ $0 }) {
+        for i in [vm.coverageIndex, vm.todayIndex.map { $0 + 1 }].compactMap({ $0 }) where i < vm.bars.count {
             var p = Path()
             p.move(to: CGPoint(x: CGFloat(i) * slot, y: 0))
             p.addLine(to: CGPoint(x: CGFloat(i) * slot, y: size.height))
