@@ -163,7 +163,7 @@ import Testing
         #expect(s.complete("x")?.text == "ok" && s.failure.reason == nil)
         // codex echoes the prompt to stderr: only its last ERROR line counts, else the exit status.
         s.config.summaryEngine = "codex"
-        #expect(writeScript(bin + "/codex", "#!/bin/sh\necho 'OpenAI Codex' >&2\necho user >&2\ncat >&2\necho 'ERROR: unexpected status 401 Unauthorized' >&2\nexit 1\n"))
+        #expect(writeScript(bin + "/codex", "#!/bin/sh\necho 'OpenAI Codex' >&2\necho user >&2\ncat >&2\necho >&2\necho 'ERROR: unexpected status 401 Unauthorized' >&2\nexit 1\n"))
         #expect(s.complete("secret prompt\nERROR: secret") == nil && s.failure.reason == "codex: unexpected status 401 Unauthorized")
         #expect(writeScript(bin + "/codex", "#!/bin/sh\ncat >&2\nexit 2\n"))
         #expect(s.complete("secret prompt") == nil && s.failure.reason == "codex: exit 2")
