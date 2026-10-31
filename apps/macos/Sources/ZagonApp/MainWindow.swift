@@ -124,7 +124,8 @@ struct ToastView: View {
             HStack(spacing: 10) {
                 Image(systemName: t.error ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                     .font(.system(size: 13)).foregroundColor(t.error ? Z.bad : Z.good)
-                Text(t.text).font(.system(size: 13)).foregroundColor(Z.text).lineLimit(5).fixedSize(horizontal: false, vertical: true)
+                // 8 lines: "Connected" ends with what to do (Developer: Reload Window), 5–6 lines in the 400 pt panel.
+                Text(t.text).font(.system(size: 13)).foregroundColor(Z.text).lineLimit(8).fixedSize(horizontal: false, vertical: true)
                     .help(t.text)
                 Spacer(minLength: 0)
                 if let url = t.reveal {
