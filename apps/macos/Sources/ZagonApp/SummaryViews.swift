@@ -83,8 +83,8 @@ extension AppState {
                     j.result = k
                     if k.doc.items.isEmpty { j.error = f.t(period ? "sum.noCards.period" : "sum.noCards", source) }
                     if let e = k.noCli { j.notice = f.t("sum.noCLI", e, source) }
-                case .success(.confirm(let p)): if !stopped { j.confirm = p }
-                case .failure where stopped:
+                case .success(.confirm(let p)) where !stopped: j.confirm = p
+                case .success(.confirm), .failure where stopped:
                     j.notice = f.t(period ? "sum.stopped.period" : "sum.stopped")
                     Log.shared.write("summary \(key): cancelled")
                 case .failure(let e):

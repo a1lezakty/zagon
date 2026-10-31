@@ -194,23 +194,26 @@ final class RemoteTests: XCTestCase {
         try await stops(true) { cmd in Task.detached { try Proc.run("/bin/sh", ["-c", cmd], timeout: 60, stop: .kill) } }
     }
 
-    /// "zagon" writes its pid and its child's (the AI CLI) and waits; the task running it is cancelled.
+    /// "zagon" writes its pid and its child's (the AI CLI, in its own process group as zagon starts it, with a process
+    /// of its own: an npm wrapper and the real binary) and waits; the task running it is cancelled.
     func stops(_ child: Bool, _ start: (String) -> Task<Proc.Result?, Error>) async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("zagon-stop-\(UUID().uuidString)").path
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: dir) }
-        let run = start(child ? "echo $$ > \(dir)/z; sleep 60 & echo $! > \(dir)/c; wait" : "echo $$ > \(dir)/z; echo $$ > \(dir)/c; exec sleep 60")
+        let run = start(child ? "echo $$ > \(dir)/z; perl -e 'setpgrp(0, 0); exec @ARGV' sh -c \"sleep 60 & echo \\$! > \(dir)/g; wait\" & echo $! > \(dir)/c; wait"
+                        : "echo $$ > \(dir)/z; echo $$ > \(dir)/c; echo $$ > \(dir)/g; exec sleep 60")
         func pid(_ name: String) -> Int32? {
             (try? String(contentsOfFile: dir + "/" + name, encoding: .utf8)).flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
         }
-        while pid("c") == nil { try await Task.sleep(nanoseconds: 50_000_000) }
-        let z = pid("z")!, c = pid("c")!, cancelled = Date()
+        while pid("g") == nil || pid("c") == nil { try await Task.sleep(nanoseconds: 50_000_000) }
+        let z = pid("z")!, c = pid("c")!, g = pid("g")!, cancelled = Date()
         run.cancel()
         do { _ = try await run.value; XCTFail("not stopped") } catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertLessThan(Date().timeIntervalSince(cancelled), 3)
         try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertFalse(Self.alive(z))
         XCTAssertFalse(Self.alive(c))
+        XCTAssertFalse(Self.alive(g))
     }
 
     /// Exists and is not a zombie left for a reaper (Linux containers).

@@ -35,10 +35,12 @@ public enum Remote {
     /// `sh -c stopScript sh <command…>` on a server: runs the command and stops it, with the processes it started (an AI
     /// CLI), when stdin closes: the Mac cancelled (`Proc.Stop.closeInput`; a killed ssh client alone would leave the
     /// remote command running). The exit status is the command's; the watcher, a subshell waiting in `read`, goes with
-    /// it. SIGKILL: zagon has no handler for SIGTERM anyway, and SQLite rolls an interrupted write back. Made for sshd's
-    /// children: started from a Mac's worker thread, `wait` may never see the exit (SIGCHLD blocked).
+    /// it. zagon is held still while its children are listed, then killed, then each child with its process group (zagon
+    /// starts an AI CLI in its own). SIGKILL: zagon has no handler for SIGTERM anyway, and SQLite rolls an interrupted
+    /// write back. Made for sshd's children: started from a Mac's worker thread, `wait` may never see the exit (SIGCHLD
+    /// blocked).
     /// ponytail: its own children only, and only where `pgrep` is (Linux with procps, macOS); a process group if deeper.
-    public static let stopScript = #"exec 3<&0; "$@" </dev/null 3<&- & z=$!; { while read -r _ <&3; do :; done; kill -9 $z $(pgrep -P $z); } >/dev/null 2>&1 & w=$!; exec 3<&-; wait $z; s=$?; kill -9 $w 2>/dev/null; exit $s"#
+    public static let stopScript = #"exec 3<&0; "$@" </dev/null 3<&- & z=$!; { while read -r _ <&3; do :; done; kill -STOP $z; c=$(pgrep -P $z); kill -9 $z; for p in $c; do kill -9 -$p $p; done; } >/dev/null 2>&1 & w=$!; exec 3<&-; wait $z; s=$?; kill -9 $w 2>/dev/null; exit $s"#
 
     /// One word for a POSIX shell: as is when plain, else single-quoted.
     public static func shellWord(_ s: String) -> String {

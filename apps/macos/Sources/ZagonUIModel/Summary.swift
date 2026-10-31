@@ -144,8 +144,8 @@ public struct SummaryState: Sendable {
     public var atMessage: String?
     /// `[summary] time` of each checked server as it answered: "HH:MM" or "off".
     public var serverAt: [String: String] = [:]
-    /// Servers whose time is being asked, and those that did not answer while the settings were shown (asked again
-    /// when they are opened again).
+    /// Servers whose time is being asked, and those that did not answer since the settings were opened (asked again
+    /// the next time they are).
     public var asking: Set<String> = [], unanswered: Set<String> = []
     public init() {}
 

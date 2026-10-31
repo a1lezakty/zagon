@@ -16,8 +16,24 @@ public enum Proc {
         /// Its stdin, kept open, is closed: a command under `Remote.stopScript` ends on that (across ssh too). It is
         /// terminated if still there 5 s later.
         case closeInput
-        /// SIGKILL to it and what it started: its process group when it leads one (as `Process` starts it), else it alone.
+        /// SIGKILL to it and what it started (zagon starts an AI CLI in its own process group): to the process group of
+        /// each that leads one, else to it alone.
         case kill
+    }
+
+    /// The processes `pid` started: `pgrep -P` where it is (macOS, Linux with procps), else /proc.
+    static func children(_ pid: Int32) -> [Int32] {
+        if FileManager.default.isExecutableFile(atPath: "/usr/bin/pgrep"),
+           let r = try? run("/usr/bin/pgrep", ["-P", String(pid)], timeout: 5) {
+            return String(decoding: r.out, as: UTF8.self).split(separator: "\n").compactMap { Int32($0) }
+        }
+        return ((try? FileManager.default.contentsOfDirectory(atPath: "/proc")) ?? []).compactMap { name in
+            // "pid (comm) state ppid …"; comm may hold spaces and parentheses.
+            guard let q = Int32(name), let stat = try? String(contentsOfFile: "/proc/\(name)/stat", encoding: .utf8),
+                  let end = stat.lastIndex(of: ")") else { return nil }
+            let f = stat[stat.index(after: end)...].split(separator: " ")
+            return f.count > 1 && Int32(f[1]) == pid ? q : nil
+        }
     }
 
     final class Collected: @unchecked Sendable {
@@ -63,9 +79,11 @@ public enum Proc {
         } while !finished && !cancelled && DispatchTime.now() < deadline
         try? input?.fileHandleForWriting.close()
         if cancelled {
-            if stop == .kill {
+            if stop == .kill, p.isRunning {
+                // Held still while its children are listed: it starts nothing new meanwhile.
                 let pid = p.processIdentifier
-                kill(getpgid(pid) == pid ? -pid : pid, SIGKILL)
+                kill(pid, SIGSTOP)
+                for q in [pid] + children(pid) { kill(getpgid(q) == q ? -q : q, SIGKILL) }
             }
             finished = exited.wait(timeout: .now() + 5) == .success
         }

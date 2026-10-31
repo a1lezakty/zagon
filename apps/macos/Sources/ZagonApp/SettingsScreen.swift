@@ -183,8 +183,9 @@ struct SettingsScreen: View {
         }
         .opacity(servers.isEmpty ? 0.55 : 1)
         .frame(maxWidth: 640, alignment: .leading)
+        // Before the task: a server that did not answer last time is asked again (an answer still on its way stays one).
+        .onAppear { app.summaries.unanswered = [] }
         .task(id: servers) { app.loadSummaryTimes() }
-        .onDisappear { app.summaries.unanswered = [] }
     }
 
     struct CheckRow: View {
