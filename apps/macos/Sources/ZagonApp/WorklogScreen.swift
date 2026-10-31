@@ -71,7 +71,7 @@ struct WorklogScreen: View {
                 Text(m).font(.system(size: 13)).foregroundColor(Z.muted).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .task(id: "\(String(describing: app.currentTaskSource))|\(key)") { await app.loadTasks(.plan(key)) }
+        .task(id: "\(String(describing: app.currentTaskSource))|\(key)") { app.loadTasks(.plan(key)) }
         .onChange(of: app.zoneShown) { _ in day = nil }
     }
 

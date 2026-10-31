@@ -34,7 +34,7 @@ import Testing
             let extra = tool.map { ",\"tool_name\":\"\($0)\"" } ?? ""
             let line = "{\"kind\":\"hook\",\"tool\":\"claude\",\"event\":\"\(event)\",\"session_id\":\"s1\",\"ts\":\(ts)\(extra)}\n"
             let h = FileHandle(forWritingAtPath: dir + "/\(day).ndjson") ?? {
-                FileManager.default.createFile(atPath: dir + "/\(day).ndjson", contents: nil); return FileHandle(forWritingAtPath: dir + "/\(day).ndjson")!
+                _ = FileManager.default.createFile(atPath: dir + "/\(day).ndjson", contents: nil); return FileHandle(forWritingAtPath: dir + "/\(day).ndjson")!
             }()
             h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); h.closeFile()
             try SpoolIngest.run(store: store, spoolDir: dir)

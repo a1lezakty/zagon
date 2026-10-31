@@ -27,7 +27,7 @@ public final class Store {
 
     /// `meta.host`; set once: the host most sessions already carry (a database from before pinning), else gethostname.
     func pinHost() throws -> String {
-        if let h = try db.one("SELECT value FROM meta WHERE key='host'") { $0.text(0) } ?? nil { return h }
+        if let h = try db.one("SELECT value FROM meta WHERE key='host'", [], { $0.text(0) }) ?? nil { return h }
         let used = try db.one("SELECT host FROM session WHERE host IS NOT NULL GROUP BY host ORDER BY count(*) DESC LIMIT 1") {
             $0.text(0)
         } ?? nil

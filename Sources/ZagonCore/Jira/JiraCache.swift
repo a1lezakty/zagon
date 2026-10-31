@@ -90,7 +90,7 @@ public struct JiraCache: Sendable, Equatable {
         do { return try refresh(store, jira, now: now) } catch {
             log("jira: \(error)")
             // Only the time of the try: a read another process saved meanwhile stays.
-            try? store.db.run("UPDATE meta SET value = json_set(value, '$.tried', ?) WHERE key = ?", [.real(now), .text(metaKey)])
+            _ = try? store.db.run("UPDATE meta SET value = json_set(value, '$.tried', ?) WHERE key = ?", [.real(now), .text(metaKey)])
             if tried == 0 && c.at == 0 { try? c.save(store, tried: now) }
             return c
         }

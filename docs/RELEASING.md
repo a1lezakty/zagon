@@ -2,7 +2,7 @@
 
 A release is a `v<x.y.z>` tag on `main`. `.github/workflows/release.yml` does the rest:
 
-- writes the version into `Sources/zagon/Version.swift` (`zagon --version`; a local build says `dev`);
+- writes the version into `Sources/ZagonCore/Version.swift` (`zagon --version`, MCP `serverInfo`; a local build says `dev`);
 - builds the static Linux binaries `zagon-linux-x86_64` and `zagon-linux-aarch64`;
 - writes the release notes first: the tag's annotation, else the commit subjects since the previous tag;
 - on macOS runs `apps/macos/scripts/release-mac.sh <version> <run number> notes.md`, which leaves `Zagon.dmg`,

@@ -95,41 +95,76 @@ struct UpdateCommand: ParsableCommand {
         return String(h).lowercased()
     }
 
-    /// Restarts the running zagon units whose ExecStart is this binary (try-restart leaves stopped ones alone), after a
-    /// daemon-reload (install.sh may have just rewritten them): the system units (`zagon-<user>.service`) as root, the
-    /// user unit of this account and of the account installed for (`user`, else the sudo user). Two of them on one
-    /// database would be two versions writing it.
+    /// Restarts the running zagon units whose ExecStart is this binary, after a daemon-reload (install.sh may have just
+    /// rewritten them): the system units (`zagon-<user>.service`) as root, the user unit of this account and of the
+    /// account installed for (`user`, else the sudo user). Two of them on one database would be two versions writing it,
+    /// so a stopped enabled unit gets the command to start it only while no unit of its account runs (one per account,
+    /// the system unit first); a stopped disabled one (the user unit `install` writes next to a system unit) is not mentioned.
     static func restartServices(_ exe: String, user: String? = nil) {
         guard let sc = Sys.which("systemctl") else { return }
+        let root = geteuid() == 0
         let sysDir = Installer.Options().systemUnitDir
         let system = Sys.listDir(sysDir).sorted().filter { $0.hasPrefix("zagon") && $0.hasSuffix(".service") && runs(sysDir + "/" + $0, exe) }
-        if geteuid() == 0 && !system.isEmpty { _ = Sys.run([sc, "daemon-reload"], quiet: true) }
-        for f in system {
-            if geteuid() == 0 {
-                print(Sys.run([sc, "try-restart", f], quiet: true) == 0 ? "service: \(f) restarted" : "service: restarting \(f) failed")
-            } else {
-                print("service: sudo systemctl restart \(f)")
-            }
-        }
+        if root && !system.isEmpty { _ = Sys.run([sc, "daemon-reload"], quiet: true) }
+        let systemStates = system.map { (unit: $0, state: state([sc], $0)) }
         // This account (its $HOME, as `zagon install` uses it; as root the passwd home, since sudo may keep the caller's),
         // then the account installed for: `--user`, else the sudo user.
-        let root = geteuid() == 0
         let me = getpwuid(getuid()).flatMap { Account.named(String(cString: $0.pointee.pw_name)) }
         var units = [(dir: Installer.Options(user: root ? me : nil).userUnitDir, name: me?.name ?? "", other: false)]
         if let a = try? Account.target(explicit: user), a.uid != getuid() {
             units.append((Installer.Options(user: a).userUnitDir, a.name, true))
         }
-        for u in units where runs(u.dir + "/zagon.service", exe) {
+        let userStates = units.filter { runs($0.dir + "/zagon.service", exe) }.map { u in
             // This account: plain --user on its own runtime dir, whatever XDG_RUNTIME_DIR sudo -E or su carried over
             // (any systemd); another account: --machine (systemd 248+, as root).
             let ctl = u.other ? [sc, "--user", "--machine=\(u.name)@"] : [sc, "--user"]
             let env = u.other ? [:] : ["XDG_RUNTIME_DIR": "/run/user/\(getuid())"]
             _ = Sys.capture(ctl + ["daemon-reload"], timeout: 60, env: env)
-            if Sys.capture(ctl + ["try-restart", "zagon.service"], timeout: 60, env: env).status == 0 {
-                print("service: zagon.service of \(u.name.isEmpty ? "this account" : u.name) (systemd --user) restarted")
-            } else if u.other {  // for this account a failure means no user manager, so nothing of it runs
-                print("service: as \(u.name): systemctl --user restart zagon.service")
+            return (u: u, ctl: ctl, env: env, state: state(ctl, "zagon.service", env: env))
+        }
+        // The account a system unit is for: zagon-<user>.service.
+        func account(_ f: String) -> String { f.hasPrefix("zagon-") ? String(f.dropFirst(6).dropLast(8)) : "" }
+        var busy = Set(systemStates.filter { $0.state == .running }.map { account($0.unit) }
+                       + userStates.filter { $0.state == .running }.map(\.u.name))
+
+        for (f, s) in systemStates {
+            switch s {
+            case .running where root:
+                print(Sys.run([sc, "try-restart", f], quiet: true) == 0 ? "service: \(f) restarted" : "service: restarting \(f) failed")
+            case .running: print("service: sudo systemctl restart \(f)")
+            case .stopped where !busy.contains(account(f)):  // one start hint per account: the system unit's
+                busy.insert(account(f))
+                print("service: \(f) is not running; start it: \(root ? "" : "sudo ")systemctl start \(f)")
+            default: break
             }
+        }
+        for (u, ctl, env, s) in userStates {
+            let unit = "zagon.service of \(u.name.isEmpty ? "this account" : u.name) (systemd --user)", start = u.other ? "as \(u.name): " : ""
+            switch s {
+            case .running:
+                print(Sys.capture(ctl + ["try-restart", "zagon.service"], timeout: 60, env: env).status == 0
+                      ? "service: \(unit) restarted" : "service: restarting \(unit) failed")
+            case .stopped where !busy.contains(u.name): print("service: \(unit) is not running; start it: \(start)systemctl --user start zagon.service")
+            // For this account no user manager means nothing of it runs; another account's may be out of --machine's reach.
+            case .unknown where u.other && !busy.contains(u.name): print("service: as \(u.name): systemctl --user restart zagon.service")
+            default: break
+            }
+        }
+    }
+
+    enum UnitState { case running, stopped, unused, unknown }
+
+    /// running: active or starting; stopped: not running but enabled; unused: neither; unknown: the manager cannot be
+    /// asked (no user manager, no systemd). `try-restart` exits 0 on a stopped unit too, so it cannot tell.
+    static func state(_ ctl: [String], _ unit: String, env: [String: String] = [:]) -> UnitState {
+        func ask(_ verb: String) -> String {
+            String(decoding: Sys.capture(ctl + [verb, unit], timeout: 60, env: env).out, as: UTF8.self)
+                .split(separator: "\n").first.map(String.init) ?? ""
+        }
+        switch ask("is-active") {
+        case "": return .unknown
+        case "active", "activating", "reloading", "refreshing": return .running
+        default: return ask("is-enabled").hasPrefix("enabled") ? .stopped : .unused
         }
     }
 

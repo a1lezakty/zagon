@@ -78,7 +78,7 @@ extension DaySummary {
             let all = docs.flatMap(\.items)
             var tasks: [String: String] = [:]
             for i in all { if let k = i.key { tasks[k] = i.title } }
-            if var (d, unused) = SummaryDoc.parse(answer: r.text, refs: all.map {
+            if case (var d, let unused)? = SummaryDoc.parse(answer: r.text, refs: all.map {
                 .init(project: $0.project, sec: $0.sec, cost: $0.cost, keys: $0.key.map { [$0] } ?? []) },
                                                   tasks: tasks, lang: w.en ? "en" : "ru", from: from, to: to) {
                 // Cards the AI left out keep their own (from 5 minutes of work, as for a day).
