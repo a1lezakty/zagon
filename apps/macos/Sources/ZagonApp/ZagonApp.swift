@@ -503,18 +503,24 @@ struct ZagonApp: App {
 }
 
 /// The status item, rasterised because a menu bar label shows only images and text. Monochrome without a warning is
-/// a template image (the menu bar tints it); otherwise it is drawn in the bar's text colour. 1x screens get the numbers
-/// beside the rings.
+/// a template image (the menu bar tints it); otherwise it is drawn in the bar's text colour. Drawn at 1x and 2x: the bar
+/// is on every screen, and each picks its own.
 @MainActor
 func statusIcon(_ app: AppState) -> NSImage {
     let vm = MainVM(app.provider, app.f)
     let five = vm.five?.pct, week = vm.week?.pct
-    let scale = NSScreen.main?.backingScaleFactor ?? 2
     let template = app.monoIcon && max(five ?? 0, week ?? 0) < 80
     let tint: Color = template ? .black : StatusButton.dark ? .white : .black.opacity(0.85)
-    let r = ImageRenderer(content: MenuBarLabel(five: five, week: week, colored: !app.monoIcon, beside: scale < 2, tint: tint))
-    r.scale = scale
-    let image = r.nsImage ?? NSImage(size: NSSize(width: 40, height: 18))
+    let r = ImageRenderer(content: MenuBarLabel(five: five, week: week, colored: !app.monoIcon, tint: tint))
+    let image = NSImage(size: NSSize(width: 44, height: 20))
+    for scale in [1, 2] as [CGFloat] {
+        r.scale = scale
+        guard let cg = r.cgImage else { continue }
+        let rep = NSBitmapImageRep(cgImage: cg)
+        rep.size = NSSize(width: CGFloat(cg.width) / scale, height: CGFloat(cg.height) / scale)
+        image.size = rep.size
+        image.addRepresentation(rep)
+    }
     image.isTemplate = template
     let pct = { (p: Int?) in p.map { app.f.t("num.pct", "\($0)") } ?? "–" }
     StatusButton.button?.toolTip = app.f.t("menubar.tip", pct(five), pct(week))
