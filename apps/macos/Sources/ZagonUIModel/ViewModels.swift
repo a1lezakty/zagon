@@ -105,7 +105,7 @@ public struct AIRingsVM: Sendable, Equatable {
         five = l.fiveHour.map { RingVM(title: f.t("limit.five"), window: $0, base: c.five, f: f) } ?? .empty(f.t("limit.five"), f)
         week = l.week.map { RingVM(title: f.t("limit.week"), window: $0, base: c.week, f: f) } ?? .empty(f.t("limit.week"), f)
         let known = five.pct != nil
-        weekOnly = l.weekOnly(at: f.now)
+        weekOnly = l.fiveHour == nil && week.pct != nil  // `l` went through `Limits.forRings`
         fiveLine = l.fiveHour.flatMap { known ? f.t("limit.ai.five", f.time($0.resetsAt)) : nil } ?? f.t("limit.ai.fiveNone")
         weekLine = f.t("limit.ai.week", week.pct.map { f.pct(Double($0)) } ?? "–")
         weekLeftLine = f.t("limit.ai.week", week.leftPct.map { f.pct(Double($0)) } ?? "–")
@@ -171,7 +171,7 @@ public struct MainVM: Sendable {
         week = shown.week.map { RingVM(title: f.t("limit.week"), window: $0, base: one.week, f: f) }
         let ais = current.count > 1 ? current.map { AIRingsVM($0, limits[$0], colors($0), f) } : []
         self.ais = ais
-        paceFits = ais.isEmpty && oneTool == ((limits.fiveHour ?? limits.week)?.tool ?? .claude)
+        paceFits = ais.isEmpty && oneTool == ((weekOnly ? limits.week : limits.fiveHour ?? limits.week)?.tool ?? .claude)
         forecast = ais.isEmpty ? shown.fiveHour.flatMap { MainVM.forecast($0, f) } : ais.lazy.compactMap { a in
             limits[a.tool].fiveHour.flatMap { MainVM.forecast($0, f) }
                 .map { Emphasis(before: a.tool.name + ": " + $0.before, bold: $0.bold, after: $0.after) }

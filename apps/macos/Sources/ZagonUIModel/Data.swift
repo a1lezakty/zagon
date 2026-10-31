@@ -56,7 +56,9 @@ public struct LimitWindow: Sendable {
 public struct AILimits: Sendable {
     public var fiveHour: LimitWindow?
     public var week: LimitWindow?
-    /// The first week reading over a minute after the 5-hour window was due (`fiveDue`), for `weekOnly`; nil = none.
+    /// Where the week started coming alone, for `weekOnly`: the first week reading over a minute after the 5-hour window
+    /// was due (`fiveDue`), or, when that window is over, after its last reading if the week came alone for 10 minutes
+    /// before its reset (the plan changed while it ran); nil = none.
     public var weekAlone: Date?
     public init(fiveHour: LimitWindow? = nil, week: LimitWindow? = nil, weekAlone: Date? = nil) {
         self.fiveHour = fiveHour; self.week = week; self.weekAlone = weekAlone
@@ -121,14 +123,14 @@ public struct Limits: Sendable {
 
     /// `AILimits.weekOnly` of one AI. A Claude status line left open re-sends its last reading every minute (on some
     /// servers), also when nobody is at Claude after a reset; so with an old 5-hour reading Claude must also have been
-    /// used since it was due.
+    /// used since the week started coming alone.
     /// ponytail: use in an editor's panel (no status line) next to such an idle terminal still counts; exact would be
     /// per-session readings.
     public func weekOnly(_ tool: Tool, at now: Date) -> Bool {
         let l = self[tool]
         guard l.weekOnly(at: now) else { return false }
-        guard tool == .claude, let due = l.fiveDue(at: now) else { return true }
-        return claudeSeen.map { $0 > due } ?? false
+        guard tool == .claude, l.fiveHour != nil, let alone = l.weekAlone else { return true }
+        return claudeSeen.map { $0 > alone } ?? false
     }
 
     /// The limits as the rings show them: an AI without a 5-hour window (`weekOnly`) has none, not its last one.

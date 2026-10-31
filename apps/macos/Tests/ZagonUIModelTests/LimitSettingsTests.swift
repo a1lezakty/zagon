@@ -84,8 +84,6 @@ final class LimitSettingsTests: XCTestCase {
         XCTAssertEqual([none.tip, none.spoken], ["5 ч: – · неделя: –", "Zagon: нет данных"])
     }
 
-    /// Claude used where its status line does not run (the VS Code / Cursor extension): no reading, yet it is shown with
-    /// "–" and where its limits come from, not left out as if broken.
     /// A plan without a 5-hour window (any AI): the week ring alone with the week's number, alarm by the week. Not
     /// when the 5 hours only reset (the next reply brings them back) or nobody used Claude since.
     func testWeekOnly() {
@@ -175,11 +173,33 @@ final class LimitSettingsTests: XCTestCase {
         // No week reading since the reset at all: as before.
         l.claude.weekAlone = nil
         XCTAssertFalse(l.weekOnly(.claude, at: p.now))
+        // The plan changed while the 5 hours ran, nobody at Claude across their old reset: still week-only (the week
+        // came alone before it).
+        l = Limits(claude: AILimits(fiveHour: LimitWindow(usedPct: 30, resetsAt: p.ago(30), tool: .claude, readAt: p.ago(90)),
+                                    week: week(41, .claude, p.ago(1)), weekAlone: p.ago(88)), claudeSeen: p.ago(40))
+        XCTAssertTrue(l.weekOnly(.claude, at: p.now))
+        XCTAssertFalse(l.claudeHint(at: p.now))
+        // Both AIs, the panel's ring-in-ring follows the same rule: nobody at Claude since the week came alone, both rings.
+        l = Limits(claude: AILimits(fiveHour: LimitWindow(usedPct: 30, resetsAt: p.ago(40), tool: .claude, readAt: p.ago(200)),
+                                    week: week(41, .claude, p.ago(1)), weekAlone: p.ago(12)), claudeSeen: p.ago(300))
+        l.codex = AILimits(fiveHour: LimitWindow(usedPct: 18, resetsAt: p.at(30, 16), tool: .codex, readAt: p.ago(6)),
+                           week: week(71, .codex, p.ago(6)))
+        XCTAssertFalse(l.claude.weekOnly(at: p.now) == l.weekOnly(.claude, at: p.now))  // the guard decides here
+        XCTAssertEqual(fixed(l).ais.map(\.weekOnly), [false, false])
+        XCTAssertEqual(MenuBarVM(l, f).ais.map(\.weekOnly), [false, false])
+        XCTAssertTrue(fixed(l).limitsMissing)
+        // The pace view stays Claude's when only its week comes and Codex has an old 5-hour reading.
+        l = Limits(claude: AILimits(week: week(41, .claude, p.ago(1))),
+                   codex: AILimits(fiveHour: LimitWindow(usedPct: 18, resetsAt: p.ago(60), tool: .codex, readAt: p.ago(400))))
+        XCTAssertTrue(fixed(l).weekOnly)
+        XCTAssertTrue(fixed(l).paceFits)
         // The week itself stale: nothing current, no week-only.
         l = Limits(claude: AILimits(week: LimitWindow(usedPct: 41, resetsAt: p.ago(1), tool: .claude, readAt: p.ago(60))))
         XCTAssertFalse(l.weekOnly(.claude, at: p.now))
     }
 
+    /// Claude used where its status line does not run (the VS Code / Cursor extension): no reading, yet it is shown with
+    /// "–" and where its limits come from, not left out as if broken.
     func testClaudeHint() {
         var p = MockDataProvider(lang: .ru, timeZone: utc)
         let f = Fmt(lang: .ru, timeZone: utc, now: p.now)

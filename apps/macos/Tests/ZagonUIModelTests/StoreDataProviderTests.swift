@@ -113,6 +113,15 @@ final class StoreDataProviderTests: XCTestCase {
         XCTAssertEqual(p.limits().claude.weekAlone?.timeIntervalSince1970, now - 30)
         _ = try p.query.db.run("UPDATE limit_snapshot SET resets_at = ? WHERE window = 'five_hour'", [.real(now - 50)])
         XCTAssertNil(p.limits().claude.weekAlone)
+        // The plan changed while the 5 hours ran: the week came alone for 10 minutes before their reset, so it counts
+        // from then, not from the reset.
+        _ = try p.query.db.run("DELETE FROM limit_snapshot")
+        try add("five_hour", 30, resets: now - 300, at: now - 2000)
+        for t in stride(from: now - 1900, through: now, by: 100) { try add("seven_day", 40, resets: now + 86400, at: t) }
+        XCTAssertEqual(p.limits().claude.weekAlone?.timeIntervalSince1970, now - 1900)
+        // Under 10 minutes alone before the reset (a normal plan): from the reset.
+        _ = try p.query.db.run("DELETE FROM limit_snapshot WHERE window = 'seven_day' AND ts < ?", [.real(now - 800)])
+        XCTAssertEqual(try XCTUnwrap(p.limits().claude.weekAlone).timeIntervalSince1970, now - 200, accuracy: 0.01)
     }
 
     /// Under the hint, the editors' settings of the home folder: off in the editor found, then on.
