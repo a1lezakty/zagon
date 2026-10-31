@@ -598,7 +598,7 @@ struct MainPanel: View {
 
     var body: some View {
         let f = app.f
-        let vm = MainVM(app.provider, f)
+        let vm = MainVM(app.provider, f, colors: { app.colors($0) })
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("ZAGON").font(.system(size: 13, weight: .semibold)).tracking(0.26).foregroundColor(Z.secondary)
@@ -667,7 +667,8 @@ struct MainPanel: View {
 }
 
 /// Rings or pace charts; a click switches between used + reset time and left + time until the reset. Whose limits they
-/// are on top; a window with no current reading shows "–" and a line on when one comes, not 0 %.
+/// are on top; a window with no current reading shows "–" and a line on when one comes, not 0 %. Both AIs with a current
+/// reading: a ring in a ring each (the pace view follows one AI, so it gives way).
 struct LimitsBlock: View {
     @EnvironmentObject private var app: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -677,12 +678,16 @@ struct LimitsBlock: View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
-                    Caps(text: vm.limitsHeader)
+                    Caps(text: !vm.ais.isEmpty && app.showLeft ? vm.limitsHeaderLeft : vm.limitsHeader)
                     Spacer(minLength: 8)
                     if let age = vm.limitsAge { Text(age).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1) }
                 }
                 Group {
-                    if app.pace {
+                    if !vm.ais.isEmpty {
+                        HStack(spacing: 12) {
+                            ForEach(vm.ais, id: \.tool) { nested($0).frame(maxWidth: .infinity, alignment: .leading) }
+                        }
+                    } else if app.pace {
                         let paces = PaceVM.both(app.provider, weekdaysOnly: app.paceWeekdays, f)
                         HStack(alignment: .top, spacing: 16) {
                             chart(paces.five, vm.five ?? .empty(f.t("limit.five"), f))
@@ -730,6 +735,39 @@ struct LimitsBlock: View {
         .accessibilityLabel(left ? r.spokenLeft : r.spoken)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { app.showLeft.toggle() }
+    }
+
+    /// One AI: the week outside, 5 hours inside with its number; the AI and a line per window beside it.
+    func nested(_ a: AIRingsVM) -> some View {
+        let left = app.showLeft
+        func shown(_ r: RingVM) -> Double { (left ? r.leftPct : r.pct) == nil ? 0 : left ? 1 - r.fraction : r.fraction }
+        let pct = left ? a.five.leftPct : a.five.pct
+        let outer = shown(a.week), inner = shown(a.five)
+        return HStack(spacing: 10) {
+            // Rims of 6 on radii 28 and 22: they touch, no gap.
+            ZStack {
+                Ring(fraction: outer, color: Color(hex: a.week.color), size: 64, line: 6, inset: 4).animation(arc, value: outer)
+                Ring(fraction: inner, color: Color(hex: a.five.color), size: 64, line: 6, inset: 10).animation(arc, value: inner)
+                Text(pct.map { "\($0)%" } ?? "–").font(mono(14, .semibold)).foregroundColor(pct == nil ? Z.secondary : Z.text)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(a.tool.name).font(.system(size: 14, weight: .semibold)).foregroundColor(Z.text)
+                windowLine(a.five.color, a.fiveLine)
+                windowLine(a.week.color, left ? a.weekLeftLine : a.weekLine)
+            }
+            .lineLimit(1).minimumScaleFactor(0.85)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(left ? a.spokenLeft : a.spoken)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { app.showLeft.toggle() }
+    }
+
+    func windowLine(_ color: UInt32, _ text: String) -> some View {
+        HStack(spacing: 5) {
+            Dot(color: Color(hex: color), size: 6)
+            Text(text).font(.system(size: 12)).foregroundColor(Z.secondary)
+        }
     }
 
     @ViewBuilder func chart(_ p: PaceVM?, _ r: RingVM) -> some View {

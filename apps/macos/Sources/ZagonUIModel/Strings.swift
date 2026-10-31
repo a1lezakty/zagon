@@ -198,6 +198,8 @@ enum Strings {
         "limit.hint.wait": "New readings come with the next Claude Code or Codex reply.",
         "limit.header": "{0} limits", "limit.header.none": "Limits", "limit.updated": "updated {0} ago",
         "limit.usedPct": "{0} used", "limit.leftPct": "{0} left",
+        "limit.ai.five": "5h until {0}", "limit.ai.fiveNone": "5h –", "limit.ai.week": "week {0}",
+        "limit.header.left": "Limits · left", "limit.updatedEach": "{0} ago",
         "sessions.none": "No sessions running right now.",
         "menu.go": "Go", "host.online": "{0}: online", "host.offline": "{0}: offline",
     ]
@@ -406,6 +408,8 @@ enum Strings {
         "limit.hint.wait": "Данные появятся после следующего ответа Claude Code или Codex.",
         "limit.header": "Лимиты {0}", "limit.header.none": "Лимиты", "limit.updated": "обновлено {0} назад",
         "limit.usedPct": "использовано {0}", "limit.leftPct": "осталось {0}",
+        "limit.ai.five": "5 ч до {0}", "limit.ai.fiveNone": "5 ч –", "limit.ai.week": "неделя {0}",
+        "limit.header.left": "Лимиты · осталось", "limit.updatedEach": "{0} назад",
         "sessions.none": "Сейчас ни одна сессия не работает.",
         "menu.go": "Перейти", "host.online": "{0}: на связи", "host.offline": "{0}: нет связи",
     ]
