@@ -161,9 +161,13 @@ final class LimitSettingsTests: XCTestCase {
         XCTAssertTrue(old.claudeHint(at: p.now))
         XCTAssertEqual(MenuBarVM(old, f).tip, "Claude: 5 ч –, неделя 47 %\n" + terminal)
         XCTAssertEqual(fixed(old).claudeHint, terminal)
-        // A plan without a 5-hour window: the current week is enough.
+        // A plan without a 5-hour window: the current week is enough; the week reset before the last use is not.
         old.claude.fiveHour = nil
         XCTAssertFalse(old.claudeHint(at: p.now))
+        old.claude.week?.resetsAt = used + 3600
+        XCTAssertTrue(old.claudeHint(at: p.now))
+        old.claudeWrapper = #"/Users/a "b"\c"#
+        XCTAssertEqual(old.claudeSetting, #""claudeCode.claudeProcessWrapper": "/Users/a \"b\"\\c""#)
     }
 
     /// The status item's picture is drawn when what it shows changes, not each time the label asks for it (0.1.2 drew it

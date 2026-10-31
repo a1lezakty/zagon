@@ -90,6 +90,9 @@ public struct Limits: Sendable {
     /// panel (the VS Code / Cursor extension) does not run it. No reading at all, or a window that started over before
     /// Claude was last used and has no reading since (a terminal reply would have brought one). Shown with "–" and a
     /// hint, not left out.
+    /// ponytail: any Claude session counts as use, also the user's own `claude -p` / SDK runs (no status line either): one
+    /// after a reset shows the hint until the next terminal reply. Exact: count only `entrypoint: claude-vscode`
+    /// sessions, once the store keeps it (track core).
     public func claudeHint(at now: Date) -> Bool {
         guard let seen = claudeSeen, now.timeIntervalSince(seen) < 7 * 86400 else { return false }
         let windows = [claude.fiveHour, claude.week]

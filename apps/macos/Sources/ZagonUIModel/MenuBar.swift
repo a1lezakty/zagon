@@ -71,7 +71,12 @@ extension Limits {
     }
 
     /// The line for the editor's settings.json that "Copy setting" gives.
-    public var claudeSetting: String? { claudeWrapper.map { "\"claudeCode.claudeProcessWrapper\": \"\($0)\"" } }
+    public var claudeSetting: String? {
+        claudeWrapper.map { p in
+            let json = p.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            return "\"claudeCode.claudeProcessWrapper\": \"\(json)\""
+        }
+    }
 }
 
 /// The status item's picture, drawn only when what it shows changes: timers and events call `update` (it reads the
