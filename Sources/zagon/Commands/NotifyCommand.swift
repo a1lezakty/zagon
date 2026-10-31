@@ -113,7 +113,7 @@ struct SummaryCommand: ParsableCommand {
     @Option(help: "HH:MM or off: when the service writes the day summary ([summary] time in config.toml); show prints it.") var at: String?
 
     /// `noCli`: the configured engine whose CLI is not installed here (written without AI); `aiError`: why the AI call
-    /// of this run gave nothing (written without AI).
+    /// of this run gave nothing (written without AI, or an earlier summary the AI wrote is shown).
     struct Kept: Encodable { var key: String, engine: String, created: Double, doc: SummaryDoc, noCli: String?, aiError: String? }
     struct Plan: Encodable { var key: String, from: String, to: String, worked: [String], missing: [String], calls: Int, noCli: String? }
 
@@ -201,7 +201,7 @@ struct SummaryCommand: ParsableCommand {
 
     func show(_ key: String, _ k: DaySummary.Kept?, noCLI: String? = nil, aiError: String? = nil) throws {
         guard let k else { throw ValidationError("nothing kept for \(key)") }
-        let noCLI = k.engine == "none" ? noCLI : nil, aiError = k.engine == "none" ? aiError : nil
+        let noCLI = k.engine == "none" ? noCLI : nil
         if json { return try emit(Kept(key: key, engine: k.engine, created: k.created, doc: k.doc, noCli: noCLI, aiError: aiError)) }
         if let noCLI { warn(Self.noCLI(noCLI)) }  // a failed call has said why in the log (stderr)
         print(k.doc.text())
