@@ -100,9 +100,11 @@ final class AppState: ObservableObject {
     /// Claude Code / Codex connection by the CLI inside Zagon.app (nil = not checked, or not running from the app).
     @Published var cli: Connect.Status?
     @Published private(set) var cliBusy = false
-    /// What runs while `cliBusy`: `install`, `uninstall`, nil = `doctor`.
+    /// What runs while `cliBusy` (and ran last): `install`, `uninstall`, `editor-panels on|off`, nil = `doctor`.
     private(set) var cliCommand: String?
     @Published private(set) var cliError: String?
+    /// Settings → Claude limits from the IDE panel (`readEditors`); nil = not read.
+    @Published var editors: EditorPanelsVM?
     /// Tasks and the worklog plan: whose `zagon` answers (nil = the provider's own, the design sample) and what came
     /// back per source (`TaskSource.swift`).
     var taskBackend: ((TaskBackend.Source) -> TaskBackend)?
@@ -319,6 +321,7 @@ final class AppState: ObservableObject {
         state.serverJira = ["build-box": .on, "gpu-box": .off]
         state.jira = sampleJira
         state.sampleReconcile = .sample(now: state.provider.now, zone: state.zone)
+        state.editors = EditorPanelsVM(MockDataProvider.editors, state.f)
         return state
     }
 
@@ -462,19 +465,26 @@ final class AppState: ObservableObject {
         didSet { save(connectDismissed, "connectDismissed") }
     }
 
-    /// `install` / `uninstall`, then `doctor`; nil = only `doctor`. Off the main thread (the login shell and the CLI).
-    /// The result shows as a toast unless `quiet` (the check at launch).
+    /// The editors' settings as they are now (this Mac only, not the sample).
+    func readEditors() {
+        if persist { editors = EditorPanelsVM.local(f) }
+    }
+
+    /// `install` / `uninstall` / `editor-panels on|off`, then `doctor`; nil = only `doctor`. Off the main thread (the
+    /// login shell and the CLI). The result shows as a toast unless `quiet` (the check at launch).
     func runCLI(_ command: String?, quiet: Bool = false) {
         guard let bin = Self.cliPath, !cliBusy else { return }
-        if command == "install", Connect.temporaryLocation(Bundle.main.bundlePath) {
+        // Both write this app's path into a script the editors run.
+        if command == "install" || command == "editor-panels on", Connect.temporaryLocation(Bundle.main.bundlePath) {
+            cliCommand = command
             cliError = f.t("connect.moveFirst")
             // From the DMG, Finder shows where to drag it from; a translocated copy is a hidden folder, not worth showing.
             let dmg = Bundle.main.bundlePath.hasPrefix("/Volumes/")
-            say(f.t("connect.failedInstall", f.t("connect.moveFirst")), error: true, reveal: dmg ? Bundle.main.bundleURL : nil,
-                revealTitle: f.t("connect.revealApp"))
+            say(f.t(command == "install" ? "connect.failedInstall" : "connect.failed", f.t("connect.moveFirst")), error: true,
+                reveal: dmg ? Bundle.main.bundleURL : nil, revealTitle: f.t("connect.revealApp"))
             return
         }
-        if let command { connectDismissed = command == "uninstall" }
+        if command == "install" || command == "uninstall" { connectDismissed = command == "uninstall" }
         cliCommand = command
         cliBusy = true
         cliError = nil
@@ -489,6 +499,12 @@ final class AppState: ObservableObject {
                 if command != nil { self.cliError = error }
                 if status == nil, self.cliError == nil { self.cliError = self.f.t("connect.noDoctor") }
                 self.cliBusy = false
+                // install / uninstall change the editors too; the panel's hint and the icon read them again.
+                if command != nil {
+                    (self.provider as? StoreDataProvider)?.forgetEditors()
+                    self.readEditors()
+                    self.refreshIcon()
+                }
                 if !quiet { self.reportCLI(command, status) }
             }
         }
@@ -496,6 +512,8 @@ final class AppState: ObservableObject {
 
     private func reportCLI(_ command: String?, _ status: Connect.Status?) {
         if let e = cliError { return say(f.t(command == "install" ? "connect.failedInstall" : "connect.failed", e), error: true) }
+        if command == "editor-panels on" { return say(f.t("editors.done"), seconds: 8) }
+        if command == "editor-panels off" { return say(f.t("editors.removed")) }
         guard let status else { return }
         if command == "uninstall" { return say(f.t("connect.removed")) }
         if !status.missing.isEmpty { return say(f.t("connect.missing", status.missing.joined(separator: ", ")), error: true) }
@@ -742,6 +760,7 @@ struct MainPanel: View {
 /// used without readings (`Limits.claudeHint`) is shown too, and the line says where its limits come from.
 struct LimitsBlock: View {
     @EnvironmentObject private var app: AppState
+    @Environment(\.isSnapshot) private var snapshot
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let vm: MainVM
     var body: some View {
@@ -780,8 +799,12 @@ struct LimitsBlock: View {
                     Text(unconnected ? f.t("limit.hint.connect") : vm.claudeHint ?? f.t("limit.hint.wait"))
                         .font(.system(size: 12)).foregroundColor(Z.muted)
                         .fixedSize(horizontal: false, vertical: true)
-                    if !unconnected, let setting = vm.claudeSetting {
-                        CopyButton(title: f.t("limit.hint.copy"), height: 28, radius: 8, fontSize: 12) { setting }
+                    if !unconnected, vm.claudeEnable, AppState.cliPath != nil || snapshot {
+                        let on = app.cliBusy && app.cliCommand == "editor-panels on"
+                        PillButton(title: f.t("limit.hint.enable"), height: 28, radius: 8, fontSize: 12, busy: on) {
+                            app.runCLI("editor-panels on")
+                        }
+                        .disabled(app.cliBusy)
                     }
                 }
             }

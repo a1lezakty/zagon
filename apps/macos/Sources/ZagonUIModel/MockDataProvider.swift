@@ -15,6 +15,9 @@ public struct MockDataProvider: ZagonDataProvider {
     public var codexLimits = false
     /// Claude used where its status line does not run (an editor extension): sessions, no reading.
     public var claudeUnread = false
+    /// The sample's editors: Cursor and VS Code found, Zagon not on in them yet.
+    public static let editors = Installer.EditorPanels(off: ["/Users/you/Library/Application Support/Cursor/User/settings.json",
+                                                             "/Users/you/Library/Application Support/Code/User/settings.json"])
 
     public init(lang: Lang = .en, timeZone: TimeZone = .current) {
         var c = Calendar(identifier: .gregorian)
@@ -57,7 +60,7 @@ public struct MockDataProvider: ZagonDataProvider {
         if claudeUnread {
             l.claude = AILimits()
             l.claudeSeen = ago(4)
-            l.claudeWrapper = "/Users/you/.zagon/bin/claude-wrap"
+            l.claudeEditors = Self.editors
         }
         return l
     }

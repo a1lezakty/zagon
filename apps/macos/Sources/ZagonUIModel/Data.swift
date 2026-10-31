@@ -69,12 +69,12 @@ public struct Limits: Sendable {
     public var codex: AILimits
     /// When a Claude session was last active, within the last 7 days; nil = none.
     public var claudeSeen: Date?
-    /// The script that brings Claude's limits from an editor's panel (`claudeCode.claudeProcessWrapper`) when it is
-    /// installed; nil = not there, the hint offers only `claudeCode.useTerminal`.
-    public var claudeWrapper: String?
+    /// Where the setting that brings Claude's limits from an editor's panel (`claudeCode.claudeProcessWrapper`) stands
+    /// in the editors found, read under `claudeHint`; nil = not read, the hint offers only `claudeCode.useTerminal`.
+    public var claudeEditors: Installer.EditorPanels?
     public init(claude: AILimits = AILimits(), codex: AILimits = AILimits(), claudeSeen: Date? = nil,
-                claudeWrapper: String? = nil) {
-        self.claude = claude; self.codex = codex; self.claudeSeen = claudeSeen; self.claudeWrapper = claudeWrapper
+                claudeEditors: Installer.EditorPanels? = nil) {
+        self.claude = claude; self.codex = codex; self.claudeSeen = claudeSeen; self.claudeEditors = claudeEditors
     }
 
     /// Both windows of one AI (the samples): Codex's when the first window says so, else Claude's.

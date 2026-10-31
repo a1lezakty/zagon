@@ -36,13 +36,14 @@ struct SettingsScreen: View {
                     PillButton(title: f.t("connect.check"), busy: busy && running == nil) { app.runCLI(nil) }
                 }
                 .disabled(app.cliBusy)
-                if let e = app.cliError {
+                if let e = app.cliError, !EditorPanelsCard.ran(app) {
                     Text(f.t("connect.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .font(.system(size: 13)).foregroundColor(Z.text)
             .frame(maxWidth: 640, alignment: .leading)
+            EditorPanelsCard()
             JiraCard()
             ZoneCard()
             Card(spacing: 12) {
@@ -360,5 +361,62 @@ final class ColorPanel: NSObject {
         guard let c = p.color.usingColorSpace(.sRGB) else { return }
         func byte(_ v: CGFloat) -> UInt32 { UInt32((min(1, max(0, v)) * 255).rounded()) }
         apply?(byte(c.redComponent) << 16 | byte(c.greenComponent) << 8 | byte(c.blueComponent))
+    }
+}
+
+/// Settings → Claude limits from the IDE panel: `zagon editor-panels on|off` through the CLI inside Zagon.app, as
+/// connecting does (one CLI run at a time, the error under the buttons and in a toast).
+struct EditorPanelsCard: View {
+    @EnvironmentObject private var app: AppState
+    @Environment(\.isSnapshot) private var snapshot
+
+    /// The CLI's last run was this card's.
+    static func ran(_ app: AppState) -> Bool { app.cliCommand?.hasPrefix("editor-panels") ?? false }
+
+    var body: some View {
+        let f = app.f
+        Card(spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(f.t("editors.title")).font(.system(size: 15, weight: .semibold))
+                Caps(text: f.t("editors.tag"), color: Z.week, size: 11)
+            }
+            Text(f.t("editors.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let vm = app.editors {
+                ForEach(vm.lines, id: \.text) { line in
+                    HStack(spacing: 8) { Dot(color: line.on ? Z.working : Z.faint, size: 7); Text(line.text) }
+                }
+                ForEach(vm.notes, id: \.self) { note in
+                    Text(note).font(.system(size: 12)).foregroundColor(Z.muted).fixedSize(horizontal: false, vertical: true)
+                }
+                if AppState.cliPath != nil || snapshot {
+                    HStack(spacing: 8) {
+                        let busy = app.cliBusy, running = app.cliCommand
+                        if vm.canEnable {
+                            PillButton(title: f.t("editors.enable"), busy: busy && running == "editor-panels on") {
+                                app.runCLI("editor-panels on")
+                            }
+                        }
+                        if vm.canDisable {
+                            PillButton(title: f.t("editors.disable"), busy: busy && running == "editor-panels off") {
+                                app.runCLI("editor-panels off")
+                            }
+                        }
+                    }
+                    .disabled(app.cliBusy)
+                } else {
+                    Text(f.t("connect.onlyApp")).foregroundColor(Z.muted)
+                }
+            }
+            Text(f.t("editors.effects")).font(.system(size: 12)).foregroundColor(Z.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            if let e = app.cliError, Self.ran(app) {
+                Text(f.t("connect.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .font(.system(size: 13)).foregroundColor(Z.text)
+        .frame(maxWidth: 640, alignment: .leading)
+        .onAppear { app.readEditors() }
     }
 }

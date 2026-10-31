@@ -13,6 +13,7 @@ final class ConnectTests: XCTestCase {
                   echo "ok       codex: MCP skipped (no codex CLI on PATH)"; echo "daemon log:"; echo "  ok not a check"; exit 1 ;;
           install) [ "$2" = "--bin" ] && [ "$3" = "$0" ] || exit 64; echo "$PATH" > "$(dirname "$0")/path"; echo installed; exit 0 ;;
           uninstall) echo "Error: uninstall: cannot parse /Users/al/.claude/settings.json" >&2; exit 64 ;;
+          editor-panels) [ "$2" = on ] && [ "$3" = "--bin" ] && [ "$4" = "$0" ] || exit 64; exit 0 ;;
         esac
         exit 64
         """.write(toFile: bin, atomically: true, encoding: .utf8)
@@ -40,6 +41,8 @@ final class ConnectTests: XCTestCase {
         XCTAssertEqual(try String(contentsOfFile: dir + "/path", encoding: .utf8), path + "\n")  // the CLI got the full PATH
         XCTAssertEqual(Connect.change(bin, "uninstall", path: path), "Error: uninstall: cannot parse ~/.claude/settings.json")
         XCTAssertNil(Connect.doctor(dir + "/missing", path: path))
+        XCTAssertNil(Connect.change(bin, "editor-panels on", path: path))  // one word per argument
+        XCTAssertEqual(Connect.change(bin, "editor-panels off", path: path), "exit 64")
         // A shell whose rc files print around the PATH.
         let noisy = dir + "/noisy-sh"
         try "#!/bin/sh\necho welcome\nPATH=/a:/b\nprintf 'motd'\neval \"$4\"\necho bye\n".write(toFile: noisy, atomically: true, encoding: .utf8)

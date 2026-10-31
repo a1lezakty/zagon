@@ -32,6 +32,11 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
     private var notifier: Notifier?
     /// The database file (diagnostics); nil in memory.
     public var dbPath: String?
+    /// Whose editors' settings `limits()` reads (`Limits.claudeEditors`).
+    var paths = ZagonPaths()
+    /// `Limits.claudeEditors` and when it was read: the icon reads the limits every few seconds, the editors' files are
+    /// read at most once a minute (`forgetEditors` after a change). `queue` only.
+    private var editors: (at: Date, state: Installer.EditorPanels)?
     private var zone = TimeZone.autoupdatingCurrent
 
     /// The zone days are cut in, for this Mac's data and the servers' alike (the Mac's own unless one is chosen).
@@ -209,6 +214,7 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
             return s.lines > 0 || threads > 0 || spool.lines > 0
         }
         p.dbPath = paths.dir + "/zagon.db"
+        p.paths = paths
         p.aliases = (try? Remote.aliases(db: writer.db)) ?? [:]
         return p
     }
@@ -302,12 +308,19 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
             // For `Limits.claudeHint`; a failed read loses only the hint.
             try? query.db.query("SELECT max(last_at) FROM session WHERE tool = 'claude' AND last_at >= ?",
                                 [.real(now.timeIntervalSince1970 - 7 * 86400)]) { r in l.claudeSeen = r.optReal(0).map(Self.date) }
-            // Where `zagon install` puts it (`Installer.wrapScript`).
-            let wrapper = ZagonPaths().dir + "/bin/claude-wrap"
-            l.claudeWrapper = FileManager.default.isExecutableFile(atPath: wrapper) ? wrapper : nil
+            // A few small files, only under the hint and at most once a minute; a failure loses only the hint.
+            if l.claudeHint(at: now) {
+                if editors.map({ abs(Date().timeIntervalSince($0.at)) >= 60 }) ?? true {
+                    editors = (Date(), Installer(Installer.Options(paths: paths)).editorState())
+                }
+                l.claudeEditors = editors?.state
+            }
             return l
         }
     }
+
+    /// The editors' settings changed (`zagon editor-panels`, connect): the next `limits()` reads them again.
+    public func forgetEditors() { queue.sync { editors = nil } }
 
     public func limitHistory(_ kind: LimitKind) -> [LimitPoint] {
         read([]) {

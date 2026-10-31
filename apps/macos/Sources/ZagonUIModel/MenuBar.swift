@@ -65,16 +65,14 @@ public struct MenuBarVM: Sendable, Equatable {
 }
 
 extension Limits {
-    /// Under `claudeHint`: where Claude's limits come from. The wrapper setting when the script is there, else the
-    /// terminal.
+    /// Under `claudeHint`: where Claude's limits come from. On in an editor: its panel's next message (a window opened
+    /// before needs a reload); editors found without it: turning it on; none: the terminal.
     public func claudeHintLine(_ f: Fmt) -> String {
-        claudeWrapper.map { f.t("limit.hint.wrapper", $0) } ?? f.t("limit.hint.terminal")
+        !(claudeEditors?.on.isEmpty ?? true) ? f.t("limit.hint.reload") : claudeEnable ? f.t("limit.hint.editors") : f.t("limit.hint.terminal")
     }
 
-    /// The line for the editor's settings.json that "Copy setting" gives (as `Installer.editorSetting` prints it).
-    public var claudeSetting: String? {
-        claudeWrapper.map { "\"claudeCode.claudeProcessWrapper\": " + JValue.string($0).compact }
-    }
+    /// Editors found, none with the setting: "Turn on in editors" (`zagon editor-panels on`).
+    public var claudeEnable: Bool { claudeEditors.map { $0.on.isEmpty && !$0.off.isEmpty } ?? false }
 }
 
 /// The status item's picture, drawn only when what it shows changes: timers and events call `update` (it reads the

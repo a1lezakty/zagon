@@ -225,7 +225,7 @@ import Testing
     }
 
     /// The script for the editor setting claudeCode.claudeProcessWrapper, and what doctor reads of the editors'
-    /// settings (JSONC, never written).
+    /// settings (JSONC).
     @Test func editorPanelWrapper() throws {
         let (home, o) = setUp()
         let script = home + "/.zagon/bin/claude-wrap"
@@ -258,14 +258,16 @@ import Testing
         let profile = home + "/.config/Code/User/profiles/p1/settings.json"
         Sys.mkdirs(Sys.dirname(profile))
         Sys.writeFile(profile, Array("{\"claudeCode.claudeProcessWrapper\": \"\"}".utf8))
-        #expect(try panels() == "claude editor panels: claudeCode.claudeProcessWrapper set in \(cursor), \(remote)")
+        #expect(try panels() == "claude editor panels: claudeCode.claudeProcessWrapper set in \(cursor), \(remote); "
+            + "\(profile) sets claudeCode.claudeProcessWrapper to nothing: no limits from that panel")
         Sys.writeFile(profile, Array("{\"claudeCode.claudeProcessWrapper\": \"/bin/sh\"}".utf8))
         #expect(try panels().hasSuffix("; \(profile) runs /bin/sh, not \(script): no limits from that panel"))
         Sys.writeFile(profile, Array("{}".utf8))
-        // Install says nothing more once an editor has it; the script follows a moved zagon.
+        // Install adds it where it is missing; the script follows a moved zagon.
         lines = []
         try inst.install()
-        #expect(!lines.contains { $0.contains("claudeProcessWrapper") })
+        #expect(lines.contains("editor: claudeCode.claudeProcessWrapper added to \(profile) (backup \(profile).zagon-bak-\(Sys.stamp(o.now)))"))
+        #expect(lines.contains("editor: already set in \(cursor)") && !lines.contains { $0.contains("zagon editor-panels on") })
         var moved = o
         moved.zagon = home + "/bin/zagon2"
         #expect(try Installer(moved).info()[1].hasSuffix(", but \(script) does not run \(home)/bin/zagon2: run zagon install"))
@@ -273,10 +275,138 @@ import Testing
         lines = []
         inst.log = { lines.append($0) }
         try inst.uninstall()
-        // A setting left behind still starts Claude through it, which records nothing now.
+        // Uninstall takes the setting out; one left behind (--no-editor-panels) still starts Claude through the
+        // script, which records nothing now.
         #expect(Sys.readFile(script) == Array(Installer.wrapScriptText(zagon: nil).utf8))
+        #expect(lines.contains("claude: \(script) now runs Claude Code directly, recording nothing"))
+        #expect(Installer(o).editorState() == .init(off: [profile, cursor, remote]))
+        try inst.setEditorPanels(true)
+        var keep = o
+        keep.editorPanels = false
+        lines = []
+        var keepInst = installer(keep)
+        keepInst.log = { lines.append($0) }
+        try keepInst.uninstall()
         #expect(lines.contains("claude: \(script) now runs Claude Code directly, recording nothing; it stays while "
-            + "claudeCode.claudeProcessWrapper names it in \(cursor), \(remote): remove the setting there before deleting \(home)/.zagon"))
+            + "claudeCode.claudeProcessWrapper names it in \(profile), \(cursor), \(remote): remove the setting there before deleting \(home)/.zagon"))
+    }
+
+    /// install adds the setting to each editor found as one line after the top-level `{` (the rest byte for byte, mode
+    /// kept, a backup next to each file; a symlinked file left to the user); again changes nothing; uninstall takes
+    /// exactly that line out; off is remembered.
+    @Test func editorPanelsOnOff() throws {
+        let (home, o) = setUp()
+        let script = home + "/.zagon/bin/claude-wrap", entry = "\"claudeCode.claudeProcessWrapper\": \"\(script)\""
+        let mac = home + "/Library/Application Support", stamp = Sys.stamp(o.now)
+        func put(_ path: String, _ text: String, mode: mode_t = 0o644) {
+            Sys.mkdirs(Sys.dirname(path)); Sys.writeFile(path, Array(text.utf8), mode: mode)
+        }
+        func text(_ path: String) -> String? { Sys.readFile(path).map { String(decoding: $0, as: UTF8.self) } }
+        func mode(_ path: String) -> mode_t { var st = stat(); stat(path, &st); return st.st_mode & 0o777 }
+        // JSONC: a comment before the object, `//` in a string, a block comment, a trailing comma, tabs, mode 0600.
+        let cursor = mac + "/Cursor/User/settings.json"
+        let cursorText = "// mine\n{\n\t\"http.proxy\": \"http://proxy:3128\", // corp\n\t/* x */ \"editor.tabSize\": 2,\n}\n"
+        put(cursor, cursorText, mode: 0o600)
+        let code = mac + "/Code/User/settings.json"  // empty
+        put(code, "")
+        let profile = mac + "/Code/User/profiles/p1/settings.json"  // CRLF, braces in a string
+        let profileText = "\u{FEFF}{\r\n    \"a\": [1, {\"b\": \"}\"}]\r\n}"
+        put(profile, profileText)
+        let windsurf = mac + "/Windsurf/User/settings.json"  // has run, no settings yet
+        Sys.mkdirs(Sys.dirname(windsurf) + "/globalStorage")
+        let codium = mac + "/VSCodium/User/settings.json", dot = home + "/dotfiles/codium.json"  // a symlink: not edited
+        put(dot, "{}")
+        Sys.mkdirs(Sys.dirname(codium))
+        symlink(dot, codium)
+        let remote = home + "/.vscode-server/data/Machine/settings.json"  // Remote-SSH, not there yet
+        Sys.mkdirs(Sys.dirname(remote))
+        let other = home + "/.config/Cursor/User/settings.json", otherText = "{\"claudeCode.claudeProcessWrapper\": \"/opt/wrap\"}"
+        put(other, otherText)
+        let array = home + "/.config/Code/User/settings.json"
+        put(array, "[]")
+        Sys.mkdirs(mac + "/NotAnEditor/User")  // no globalStorage: left alone
+
+        func untouched() -> Bool {
+            text(other) == otherText && text(array) == "[]" && Sys.listDir(Sys.dirname(other)) == ["settings.json"]
+                && Sys.listDir(Sys.dirname(array)) == ["settings.json"] && Sys.listDir(mac + "/NotAnEditor/User") == []
+        }
+        var lines: [String] = []
+        var inst = installer(o)
+        inst.log = { lines.append($0) }
+        try inst.install()
+        #expect(text(cursor) == "// mine\n{\n\t\(entry),\n\t\"http.proxy\": \"http://proxy:3128\", // corp\n\t/* x */ \"editor.tabSize\": 2,\n}\n")
+        #expect(mode(cursor) == 0o600)
+        #expect(text(cursor + ".zagon-bak-" + stamp) == cursorText)
+        #expect(text(code) == "{\n  \(entry)\n}" && text(code + ".zagon-bak-" + stamp) == "")
+        #expect(text(profile) == "\u{FEFF}{\r\n    \(entry),\r\n    \"a\": [1, {\"b\": \"}\"}]\r\n}")
+        #expect(text(windsurf) == "{\n  \(entry)\n}" && text(remote) == "{\n  \(entry)\n}")
+        #expect(text(dot) == "{}" && Sys.realPath(codium) == Sys.realPath(dot))
+        let linkNote = "\(codium) is a symbolic link (shared settings?): Zagon leaves it alone; add \(entry) there yourself"
+        #expect(lines.contains("editor: " + linkNote))
+        #expect(untouched())
+        #expect(lines.contains("editor: \(other) has claudeCode.claudeProcessWrapper \"/opt/wrap\"; left untouched"))
+        #expect(lines.contains("editor: \(array) is not a JSON object; left untouched"))
+        #expect(lines.contains("editor: claudeCode.claudeProcessWrapper set in new \(windsurf)"))
+        #expect(lines.contains { $0.hasPrefix("editor: open windows pick it up after Developer: Reload Window. With it,") })
+        let on = [code, profile, cursor, windsurf, remote]
+        #expect(Installer(o).editorState() == .init(on: on, other: [
+            linkNote, "\(array) is not a JSON object", "\(other) names /opt/wrap, which does not exist: that editor's panel cannot start Claude"]))
+        for f in [code, cursor] {
+            #expect(Installer.wrapperSetting(text(f)!) == script)
+        }
+
+        // Again: nothing changes, no new backups.
+        let enabled = snapshot(home)
+        lines = []
+        try inst.install()
+        #expect(snapshot(home) == enabled)
+        #expect(lines.contains("editor: already set in \(cursor)") && !lines.contains { $0.contains("Reload Window") })
+
+        // Off: each file back byte for byte (an edit made since is kept), mode and symlink too.
+        Sys.writeFile(cursor, Array(text(cursor)!.replacingOccurrences(of: "\"editor.tabSize\": 2", with: "\"editor.tabSize\": 4").utf8))
+        lines = []
+        try inst.uninstall()
+        #expect(text(cursor) == cursorText.replacingOccurrences(of: "\"editor.tabSize\": 2", with: "\"editor.tabSize\": 4"))
+        #expect(mode(cursor) == 0o600)
+        #expect(text(code) == "" && text(profile) == profileText && text(dot) == "{}")
+        #expect(!Sys.exists(windsurf) && !Sys.exists(remote))
+        var st = stat()
+        #expect(lstat(codium, &st) == 0 && st.st_mode & S_IFMT == S_IFLNK)
+        #expect(untouched())
+        #expect(text(cursor + ".zagon-bak-" + stamp) == cursorText)  // the first backup is kept
+        #expect(text(cursor + ".zagon-bak-" + stamp + "-2")?.contains("\"editor.tabSize\": 4") == true)
+        #expect(lines.contains("editor: claudeCode.claudeProcessWrapper removed from \(remote) (backup \(remote).zagon-bak-\(stamp))"))
+        #expect(Installer(o).editorState().on.isEmpty)
+
+        // --no-editor-panels leaves the editors alone, and so does a later plain install; `editor-panels on` adds it,
+        // off removes it, and install after off leaves them alone again.
+        var no = o
+        no.editorPanels = false
+        try installer(no).install()
+        try inst.install()
+        #expect(text(profile) == profileText)
+        try installer(no).setEditorPanels(true)
+        #expect(Installer(o).editorState().on == on)
+        try inst.install()
+        try installer(no).setEditorPanels(false)
+        #expect(text(profile) == profileText && text(code) == "" && !Sys.exists(windsurf))
+        try inst.install()
+        #expect(text(profile) == profileText)
+        #expect(throws: InstallError.self) { try installer(setUp().1).setEditorPanels(true) }  // no editor here
+    }
+
+    /// The JSONC scan: only a top-level key counts; comments, nested objects and strings do not.
+    @Test func settingsScan() {
+        func value(_ t: String) -> String?? { Installer.scanSettings(Array(t.utf8)).map { $0.value } }
+        let k = "\"claudeCode.claudeProcessWrapper\""
+        #expect(value("{\(k): \"/a\"}") == .some("/a"))
+        #expect(value("/* {\(k): \"/x\"} */ {\"b\": 1, \(k) : \"/a\\/b\"}") == .some("/a/b"))
+        #expect(value("{\"x\": {\(k): \"/a\"}, \"y\": \"\(k.replacingOccurrences(of: "\"", with: "\\\""))\"}") == .some(nil))
+        #expect(value("{\n  // \(k): \"/a\",\n  /* \(k): \"/b\" */\n}") == .some(nil))
+        #expect(value("{\"s\": \"\\\" \(k.replacingOccurrences(of: "\"", with: "\\\"")): \\\"/a\"}") == .some(nil))
+        #expect(value("{\(k): null}") == .some(""))
+        #expect(value("[]") == nil && value("// none") == nil && value("") == nil)
+        #expect(value("{\(k): \"/a") == nil && value("{\"a\": 1") == nil)  // cut off: left alone
     }
 
     /// `zagon update` keeps the old binary as .prev and leaves no .prev.new behind, also when .prev is already a link
