@@ -6,6 +6,89 @@ import ZagonCore
 final class LimitSettingsTests: XCTestCase {
     let utc = TimeZone(identifier: "UTC")!
 
+    /// Both AIs only with a current reading each; a stale one (read before its reset) does not count.
+    func testLimitsPerAI() {
+        var p = MockDataProvider(lang: .en, timeZone: utc)
+        XCTAssertEqual(p.limits().tools(at: p.now), [.claude])
+        XCTAssertFalse(p.limits().both(at: p.now))
+        p.codexLimits = true
+        let l = p.limits()
+        XCTAssertEqual(l.tools(at: p.now), [.claude, .codex])
+        XCTAssertTrue(l.both(at: p.now))
+        XCTAssertEqual([l.claude.fiveHour?.usedPct, l.codex.fiveHour?.usedPct, l.codex.week?.usedPct], [62, 18, 71])
+        XCTAssertEqual(l.fiveHour?.tool, .claude)
+
+        let soon = p.now.addingTimeInterval(3600), gone = p.now.addingTimeInterval(-60)
+        var mixed = Limits(claude: AILimits(fiveHour: LimitWindow(usedPct: 97, resetsAt: gone, tool: .claude)),
+                           codex: AILimits(week: LimitWindow(usedPct: 30, resetsAt: soon, tool: .codex)))
+        XCTAssertEqual(mixed.tools(at: p.now), [.codex])
+        XCTAssertEqual(mixed.shown(at: p.now).week?.usedPct, 30)
+        XCTAssertNil(mixed.shown(at: p.now).fiveHour)  // Claude's stale window is not Codex's
+        mixed.codex = AILimits()
+        XCTAssertEqual(mixed.tools(at: p.now), [])
+        XCTAssertEqual(mixed.shown(at: p.now).fiveHour?.usedPct, 97)  // nothing current: as before, the stale one
+        XCTAssertEqual(Limits(fiveHour: nil, week: LimitWindow(usedPct: 5, resetsAt: soon, tool: .codex)).codex.week?.usedPct, 5)
+    }
+
+    /// The status item: a pair of rings for one AI, a ring-in-ring per AI for two; the tip names the AIs.
+    func testMenuBar() {
+        var p = MockDataProvider(lang: .ru, timeZone: utc)
+        let f = Fmt(lang: .ru, timeZone: utc, now: p.now)
+        let one = MenuBarVM(p.limits(), f)
+        XCTAssertFalse(one.nested)
+        XCTAssertEqual(one.ais, [MenuBarVM.AI(tool: .claude, five: 62, week: 41, colors: .standard(.claude))])
+        XCTAssertEqual(one.tip, "Claude: 5 ч 62 %, неделя 41 %")
+        XCTAssertFalse(one.alarm)
+
+        p.codexLimits = true
+        let violet = RingColors(five: Palette.violet, week: Palette.violet)
+        let both = MenuBarVM(p.limits(), colors: { $0 == .codex ? violet : .standard($0) }, f)
+        XCTAssertTrue(both.nested)
+        XCTAssertEqual(both.ais.map(\.tool), [.claude, .codex])
+        XCTAssertEqual(both.ais[1], MenuBarVM.AI(tool: .codex, five: 18, week: 71, colors: violet))
+        XCTAssertEqual(both.tip, "Claude: 5 ч 62 %, неделя 41 % · Codex: 5 ч 18 %, неделя 71 %")
+        XCTAssertEqual(both.spoken, "Zagon: Claude: 5 часов — использовано 62 %, неделя — использовано 41 %; "
+                       + "Codex: 5 часов — использовано 18 %, неделя — использовано 71 %")
+
+        // Red: a pair's digits from 80 %; a ring-in-ring shows only the 5-hour digits, its week turns red from 95 %.
+        let ai = { (five: Int?, week: Int?) in MenuBarVM.AI(tool: .codex, five: five, week: week, colors: violet) }
+        XCTAssertTrue(MenuBarVM(ais: [ai(10, 85)], f).alarm)
+        XCTAssertFalse(MenuBarVM(ais: [ai(10, 10), ai(10, 85)], f).alarm)
+        XCTAssertTrue(MenuBarVM(ais: [ai(10, 10), ai(10, 95)], f).alarm)
+        XCTAssertTrue(MenuBarVM(ais: [ai(80, nil), ai(nil, nil)], f).alarm)
+
+        // A stale reading is no AI: Codex alone with its pair; nothing at all: no names.
+        p.codexLimits = false
+        p.staleLimits = true
+        var stale = p.limits()
+        XCTAssertEqual(MenuBarVM(stale, f).ais, [MenuBarVM.AI(tool: .claude, five: nil, week: 47, colors: .standard(.claude))])
+        stale.claude.week = nil
+        stale.codex = AILimits(fiveHour: LimitWindow(usedPct: 9, resetsAt: p.now.addingTimeInterval(600), tool: .codex))
+        XCTAssertEqual(MenuBarVM(stale, f).ais, [MenuBarVM.AI(tool: .codex, five: 9, week: nil, colors: .standard(.codex))])
+        let none = MenuBarVM(Limits(), f)
+        XCTAssertEqual([none.tip, none.spoken], ["5 ч: – · неделя: –", "Zagon: нет данных"])
+    }
+
+    func testRingColors() throws {
+        XCTAssertEqual(RingColors.standard(.claude), RingColors(five: Palette.fiveHour, week: Palette.week))
+        let codex = RingColors.standard(.codex)
+        XCTAssertNotEqual(codex.five, codex.week)
+        XCTAssertTrue(Set([codex.five, codex.week]).isDisjoint(with: [Palette.fiveHour, Palette.week]))
+        XCTAssertTrue(Set(RingColors.swatches).isSuperset(of: [codex.five, codex.week, Palette.fiveHour, Palette.week]))
+        XCTAssertFalse(RingColors.swatches.contains(Palette.waiting) || RingColors.swatches.contains(Palette.bad))
+
+        let name = "zagon.test.ringColors.\(UUID().uuidString)"
+        let d = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { d.removePersistentDomain(forName: name) }
+        XCTAssertEqual(RingColors.load(.codex, d), codex)
+        RingColors(five: 0x123456, week: Palette.good).save(.codex, d)
+        XCTAssertEqual(RingColors.load(.codex, d), RingColors(five: 0x123456, week: Palette.good))
+        XCTAssertEqual(RingColors.load(.claude, d), .standard(.claude))
+        d.set("blue", forKey: "ringColor.codex.fiveHour")
+        d.set(-1, forKey: "ringColor.codex.week")
+        XCTAssertEqual(RingColors.load(.codex, d), codex)
+    }
+
     func testPace() throws {
         let p = MockDataProvider(lang: .en, timeZone: utc)
         let f = Fmt(lang: .en, timeZone: utc, now: p.now)

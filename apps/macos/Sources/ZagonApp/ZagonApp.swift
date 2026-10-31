@@ -33,6 +33,11 @@ final class AppState: ObservableObject {
     @Published var paceWeekdays = false { didSet { save(paceWeekdays, "paceWeekdays") } }
     @Published var monoIcon = false { didSet { save(monoIcon, "monoIcon") } }
     @Published var showLeft = false { didSet { save(showLeft, "limitsShowLeft") } }
+    /// Ring colours per AI (menu bar, panel), set in settings.
+    @Published var claudeColors = RingColors.standard(.claude) { didSet { if persist { claudeColors.save(.claude) } } }
+    @Published var codexColors = RingColors.standard(.codex) { didSet { if persist { codexColors.save(.codex) } } }
+    func colors(_ tool: Tool) -> RingColors { tool == .codex ? codexColors : claudeColors }
+    func setColors(_ tool: Tool, _ c: RingColors) { if tool == .codex { codexColors = c } else { claudeColors = c } }
     /// System notifications on this Mac (on by default) and the same through Telegram / ntfy (off: servers send those).
     @Published var macNotify = true { didSet { save(macNotify, "macNotify") } }
     @Published var macNotifyRemote = false { didSet { save(macNotifyRemote, "macNotifyRemote") } }
@@ -186,6 +191,7 @@ final class AppState: ObservableObject {
             let d = UserDefaults.standard
             state.pace = d.bool(forKey: "limitsPace"); state.paceWeekdays = d.bool(forKey: "paceWeekdays")
             state.monoIcon = d.bool(forKey: "monoIcon"); state.showLeft = d.bool(forKey: "limitsShowLeft")
+            state.claudeColors = RingColors.load(.claude, d); state.codexColors = RingColors.load(.codex, d)
             state.macNotify = d.object(forKey: "macNotify") as? Bool ?? true
             state.macNotifyRemote = d.bool(forKey: "macNotifyRemote")
             state.zoneID = d.string(forKey: "timeZone").flatMap { TimeZone(identifier: $0) == nil ? nil : $0 }
