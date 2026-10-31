@@ -202,10 +202,11 @@ import Testing
         var (home, o) = setUp()
         let none = try Installer(o).info()
         #expect(none[0].hasPrefix("claude limits: no reading in 7 days"))
+        #expect(none[1].hasPrefix("claude editor panels: not set in any editor;"))
         if Sys.which("claude", path: "/usr/local/bin:/opt/homebrew/bin") == nil {  // a claude installed on this machine is not the test's
-            #expect(none[1] == "summary engine: claude CLI not found (summaries and task suggestions are made without AI)")
+            #expect(none[2] == "summary engine: claude CLI not found (summaries and task suggestions are made without AI)")
         }
-        #expect(none[2] == "jira: not configured ([jira] in \(home)/.zagon/config.toml)")
+        #expect(none[3] == "jira: not configured ([jira] in \(home)/.zagon/config.toml)")
 
         Sys.mkdirs(o.paths.spool)
         Sys.writeFile(o.paths.spool + "/.limits-s-1", Array("1.000 {}".utf8))
@@ -214,13 +215,68 @@ import Testing
         Sys.writeFile(o.paths.config, Array("[jira]\nurl = \"https://jira.example.com\"\nemail = \"a@example.com\"\ntoken_file = \"\(home)/tok\"\n".utf8))
         o.now = Sys.now() + 7 * 60 + 5
         let some = try Installer(o).info()
-        #expect(some == ["claude limits: last reading 7 min ago", "summary engine: claude \(home)/.local/bin/claude",
-                         "jira token: cannot read \(home)/tok"])
+        #expect(some[0] == "claude limits: last reading 7 min ago")
+        #expect(Array(some[2...]) == ["summary engine: claude \(home)/.local/bin/claude", "jira token: cannot read \(home)/tok"])
         Sys.writeFile(home + "/tok", Array("not-a-real-token\n".utf8), mode: 0o600)
-        let jira = try Installer(o).info()[2]
+        let jira = try Installer(o).info()[3]
         #expect(jira == "jira: configured, jira.example.com")
         o.now += 3 * 86400
         #expect(try Installer(o).info()[0] == "claude limits: last reading 3 days ago")
+    }
+
+    /// The script for the editor setting claudeCode.claudeProcessWrapper, and what doctor reads of the editors'
+    /// settings (JSONC, never written).
+    @Test func editorPanelWrapper() throws {
+        let (home, o) = setUp()
+        let script = home + "/.zagon/bin/claude-wrap"
+        var lines: [String] = []
+        var inst = installer(o)
+        inst.log = { lines.append($0) }
+        try inst.install()
+        let text = String(decoding: try #require(Sys.readFile(script)), as: UTF8.self)
+        #expect(text.hasPrefix("#!/bin/sh\n") && text.contains("z=\(home)/bin/zagon\n") && text.contains("claude-wrap --probe"))
+        #expect(!text.contains("ZAGON_DIR"))  // the default data directory needs none
+        var st = stat()
+        #expect(stat(script, &st) == 0 && st.st_mode & 0o777 == 0o755)
+        #expect(lines.contains { $0.contains("add \"claudeCode.claudeProcessWrapper\": \"\(script)\" to the editor's user settings") })
+
+        func panels() throws -> String { try Installer(o).info()[1] }
+        #expect(try panels().hasPrefix("claude editor panels: not set in any editor;"))
+        let cursor = home + "/.config/Cursor/User/settings.json"
+        Sys.mkdirs(Sys.dirname(cursor))
+        Sys.writeFile(cursor, Array("{\n  // \"claudeCode.claudeProcessWrapper\": \"/old\",\n  \"editor.tabSize\": 2,\n}\n".utf8))
+        #expect(try panels().hasPrefix("claude editor panels: not set in any editor;"))  // commented out
+        Sys.writeFile(cursor, Array("{\n  \"claudeCode.claudeProcessWrapper\" :  \"\(script)\", // zagon\n}\n".utf8))
+        #expect(try panels() == "claude editor panels: claudeCode.claudeProcessWrapper set in \(cursor)")
+        let remote = home + "/.cursor-server/data/Machine/settings.json"
+        Sys.mkdirs(Sys.dirname(remote))
+        Sys.writeFile(remote, Array("{\"claudeCode.claudeProcessWrapper\": \"/nope/wrap\"}".utf8))
+        #expect(try panels() == "claude editor panels: claudeCode.claudeProcessWrapper set in \(cursor); "
+            + "\(remote) names /nope/wrap, which does not exist: that editor's panel cannot start Claude")
+        // A one-line file with a URL before the key, a profile, an empty value, another wrapper.
+        Sys.writeFile(remote, Array("{\"http.proxy\": \"http://proxy:3128\", \"claudeCode.claudeProcessWrapper\": \"\(script)\"}".utf8))
+        let profile = home + "/.config/Code/User/profiles/p1/settings.json"
+        Sys.mkdirs(Sys.dirname(profile))
+        Sys.writeFile(profile, Array("{\"claudeCode.claudeProcessWrapper\": \"\"}".utf8))
+        #expect(try panels() == "claude editor panels: claudeCode.claudeProcessWrapper set in \(cursor), \(remote)")
+        Sys.writeFile(profile, Array("{\"claudeCode.claudeProcessWrapper\": \"/bin/sh\"}".utf8))
+        #expect(try panels().hasSuffix("; \(profile) runs /bin/sh, not \(script): no limits from that panel"))
+        Sys.writeFile(profile, Array("{}".utf8))
+        // Install says nothing more once an editor has it; the script follows a moved zagon.
+        lines = []
+        try inst.install()
+        #expect(!lines.contains { $0.contains("claudeProcessWrapper") })
+        var moved = o
+        moved.zagon = home + "/bin/zagon2"
+        #expect(try Installer(moved).info()[1].hasSuffix(", but \(script) does not run \(home)/bin/zagon2: run zagon install"))
+
+        lines = []
+        inst.log = { lines.append($0) }
+        try inst.uninstall()
+        // A setting left behind still starts Claude through it, which records nothing now.
+        #expect(Sys.readFile(script) == Array(Installer.wrapScriptText(zagon: nil).utf8))
+        #expect(lines.contains("claude: \(script) now runs Claude Code directly, recording nothing; it stays while "
+            + "claudeCode.claudeProcessWrapper names it in \(cursor), \(remote): remove the setting there before deleting \(home)/.zagon"))
     }
 
     /// `zagon update` keeps the old binary as .prev and leaves no .prev.new behind, also when .prev is already a link

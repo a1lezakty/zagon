@@ -30,4 +30,11 @@ struct Zagon: ParsableCommand {
             TzCommand.self,
             UpdateCommand.self,
         ])
+
+    /// `claude-wrap` hands its arguments to Claude Code untouched, so it runs before the parser sees them.
+    static func main() {
+        let a = CommandLine.arguments
+        if a.count > 1 && a[1] == "claude-wrap" { ClaudeWrap.run(Array(a.dropFirst(2))) }
+        main(nil)
+    }
 }

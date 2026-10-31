@@ -110,6 +110,10 @@ What `zagon install` changes:
   - the status line command becomes `zagon statusline`. Your previous command is saved in `~/.zagon/config.toml`
     (`[statusline] original_command`) and still runs with the same input, so your status line looks the same.
   - Opt out with `--no-claude` or `--no-statusline`.
+- **`~/.zagon/bin/claude-wrap`**: the script for the editor setting `claudeCode.claudeProcessWrapper`, which brings
+  Claude limits from the extension panel of VS Code, Cursor and other forks (see [Editors](#editors-vs-code-cursor-and-other-forks-jetbrains)).
+  Install prints the line for the editor's settings and never edits them; uninstall keeps the script, which then runs
+  Claude Code directly.
 - **`~/.codex/hooks.json`**, if `~/.codex` exists:
   - hooks for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PostToolUse`, `Stop`, `Interrupt` and
     `SessionEnd`;
@@ -135,7 +139,9 @@ that is already in place. Unknown keys and the formatting of your JSON files are
 - It removes the hooks, the status line wrapper, the MCP registrations and the systemd units.
 - A file you have not touched since install is restored from the backup byte for byte. In a file you changed since,
   only Zagon's entries are removed.
-- The database in `~/.zagon` stays. Delete that directory yourself if you want it gone.
+- The database in `~/.zagon` stays. Delete that directory yourself if you want it gone; if an editor's
+  `claudeCode.claudeProcessWrapper` names `~/.zagon/bin/claude-wrap`, remove that setting first (uninstall leaves the
+  script running Claude Code directly, so the panel keeps working until then).
 
 ### Update
 
@@ -254,14 +260,22 @@ chmod 600 ~/.config/zagon/jira-token
 
 ### Editors: VS Code, Cursor and other forks, JetBrains
 
-Zagon reads Claude limits (the 5-hour and weekly rings) only from Claude Code's status line (`zagon statusline`,
-installed by `zagon install`). The Claude Code extension for VS Code and its forks (Cursor, Windsurf / Devin Desktop,
-VSCodium, Kiro…) runs Claude Code headless and never calls the status line, so sessions in the extension panel are
-counted (tokens, time, tasks: their transcripts land in `~/.claude/projects` as usual) but bring no limit readings.
+Zagon reads Claude limits (the 5-hour and weekly rings) from Claude Code's status line (`zagon statusline`, installed
+by `zagon install`). The Claude Code extension for VS Code and its forks (Cursor, Windsurf / Devin Desktop, VSCodium,
+Kiro…) runs Claude Code headless and never calls the status line. Its sessions are counted as usual (tokens, time,
+tasks: their transcripts land in `~/.claude/projects`), but the limits need one editor setting:
 
-- To get limits there, run `claude` in the editor's terminal, or set `"claudeCode.useTerminal": true` in the editor
-  settings (the extension then runs the regular CLI in a terminal). `zagon doctor` shows when the last limit reading
-  came.
+- Experimental (checked with the extension's own Claude Code binary, not yet in every editor): add
+  `"claudeCode.claudeProcessWrapper": "/Users/you/.zagon/bin/claude-wrap"` to the editor's user settings
+  (`zagon install` prints the exact line; over Remote-SSH it goes into the Remote settings of that host). The extension
+  then starts its bundled Claude Code through this script; Zagon passes the panel's stream on unchanged and records
+  the limit readings in it. Without zagon (or with a zagon older than 0.1.4) the script runs Claude Code directly, so
+  a setting left behind does no harm while the script itself stays.
+  With the setting, a new panel session starts in the `default` permission mode unless you pick one in the panel, and
+  the panel's session list also shows sessions started by other programs through the SDK.
+- Or run `claude` in the editor's terminal, or set `"claudeCode.useTerminal": true` (the extension then runs the
+  regular CLI in a terminal). `zagon doctor` shows when the last limit reading came and which editors have the
+  setting.
 - JetBrains IDEs: the Claude Code plugin runs the regular `claude` in the IDE's terminal, so the status line and the
   limits work as in any terminal.
 - The editors' own agents (Cursor's Agent, Devin / Windsurf, Trae, VS Code's agent mode) are not Claude Code, so their
