@@ -107,6 +107,8 @@ public struct MainVM: Sendable {
     public var idleHideButton: String?
     public var idle: [SessionRowVM]
     public var totals: [Stat]
+    /// Under the price: "Claude $X", "Codex $Y" when both spent something today; else empty.
+    public var costSplit: [String]
     /// Above the rings: whose limits they are, and how old the reading is once that is over 15 minutes.
     public var limitsHeader: String
     public var limitsAge: String?
@@ -152,6 +154,10 @@ public struct MainVM: Sendable {
         totals = [Stat(f.duration(today.sessionSec), f.t("stat.sessionsWorked")),
                   Stat(f.tokens(today.tokens), f.t("stat.tokensToday")),
                   Stat(f.cost(today.cost), f.t("stat.apiPrices"))]
+        let split = [Tool.claude, .codex].compactMap { t in
+            today.costByTool[t].flatMap { $0 > 0 ? (t == .codex ? "Codex " : "Claude ") + f.cost($0) : nil }
+        }
+        costSplit = split.count == 2 ? split : []
 
         let windows = [limits.fiveHour, limits.week].compactMap { $0 }
         let tools = [Tool.claude, .codex].filter { t in windows.contains { $0.tool == t } }

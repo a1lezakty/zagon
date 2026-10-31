@@ -875,6 +875,10 @@ struct TotalsBlock: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(vm.totals[i].value).font(mono(16, .semibold)).foregroundColor(Z.text).lineLimit(1)
                     Text(vm.totals[i].label).font(.system(size: 11)).foregroundColor(Z.secondary)
+                    // Two lines: "Claude $X · Codex $Y" does not fit a third of the panel.
+                    if i == vm.totals.count - 1 {
+                        ForEach(vm.costSplit, id: \.self) { Text($0).font(.system(size: 11)).foregroundColor(Z.muted).lineLimit(1) }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }

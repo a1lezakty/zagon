@@ -72,6 +72,27 @@ final class StoreDataProviderTests: XCTestCase {
         XCTAssertEqual(p.hosts().map(\.name), ["laptop"])
     }
 
+    /// Today's price per AI adds up to the day's; the tokens of a Codex session count for Codex.
+    func testCostPerTool() throws {
+        let p = try StoreDataProvider.fixture(Self.fixtures)
+        let f = Fmt(lang: .en, timeZone: TimeZone(identifier: "UTC")!, now: p.now)
+        let before = p.todayTotals()
+        XCTAssertGreaterThan(before.cost, 0)
+        XCTAssertEqual(Array(before.costByTool.keys), [.claude])
+        XCTAssertEqual(before.costByTool[.claude] ?? 0, before.cost, accuracy: 1e-9)
+        XCTAssertEqual(MainVM(p, f).costSplit, [])
+
+        let hour = (p.now.timeIntervalSince1970 / 3600).rounded(.down) * 3600
+        _ = try p.query.db.run("""
+            INSERT INTO usage_hour(file_id, session_id, agent, hour, model, input, output) VALUES (0, 'codex:s1', '', ?, 'gpt-5.5', 1000000, 100000)
+            """, [.real(hour)])
+        let t = p.todayTotals()
+        XCTAssertEqual(t.costByTool[.codex] ?? 0, 8, accuracy: 1e-9)  // 1M input at $5 + 0.1M output at $30
+        XCTAssertEqual(t.costByTool[.claude], before.costByTool[.claude])
+        XCTAssertEqual(t.cost, before.cost + 8, accuracy: 1e-9)
+        XCTAssertEqual(MainVM(p, f).costSplit, ["Claude " + f.cost(before.cost), "Codex $8"])
+    }
+
     /// The chosen zone cuts the days of every machine's data: per-day sums move, the whole stays.
     func testTimeZoneMovesDaysNotTotals() throws {
         let p = try StoreDataProvider.fixture(Self.fixtures)

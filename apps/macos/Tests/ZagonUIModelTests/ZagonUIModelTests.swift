@@ -75,6 +75,7 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertEqual(vm.working.count, 3)
         XCTAssertEqual(vm.idle.count, 4)
         XCTAssertEqual(vm.totals.map(\.value), ["7h 20m", "18.4M", "$212"])
+        XCTAssertEqual(vm.costSplit, ["Claude $178", "Codex $34"])
 
         let ru = MainVM(env(.ru).0, env(.ru).1)
         XCTAssertEqual(ru.five?.resetLine, "сброс в 14:20")

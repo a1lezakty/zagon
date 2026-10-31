@@ -334,9 +334,21 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
 
     public func todayTotals() -> Totals {
         read(Totals(sessionSec: 0, tokens: 0, cost: 0)) {
-            let z = timeZone
-            let d = try query.day(Self.day(now, z), detail: false) { Self.bounds($0, z) }
-            return Totals(sessionSec: d.sessionSec, userSec: d.userSec, tokens: d.tokens.total, cost: d.cost)
+            let z = timeZone, key = Self.day(now, z)
+            let d = try query.day(key, detail: false) { Self.bounds($0, z) }
+            var t = Totals(sessionSec: d.sessionSec, userSec: d.userSec, tokens: d.tokens.total, cost: d.cost)
+            // Per AI: whose session the tokens are (its id starts with the tool), priced as `Query.day` prices them.
+            guard let (s, e) = Self.bounds(key, z) else { return t }
+            try query.db.query("""
+                SELECT session_id LIKE 'codex:%', model, sum(input), sum(output), sum(cache_read), sum(cache_write),
+                       sum(cache_write_1h)
+                FROM usage_hour WHERE hour >= ? AND hour < ? GROUP BY 1, 2
+                """, [.real(s), .real(e)]) { r in
+                t.costByTool[r.int(0) == 1 ? .codex : .claude, default: 0] += Pricing.cost(
+                    model: r.text(1) ?? "", input: r.int(2), output: r.int(3), cacheRead: r.int(4), cacheWrite: r.int(5),
+                    cacheWrite1h: r.int(6))
+            }
+            return t
         }
     }
 
