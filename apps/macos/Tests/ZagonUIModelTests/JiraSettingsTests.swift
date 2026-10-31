@@ -88,6 +88,39 @@ final class JiraSettingsTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: token + ".zagon-tmp"))
     }
 
+    /// Set but not working: no token to read. A config.toml that cannot be edited leaves the old token as it was.
+    func testNotReadyAndNoHalfSave() throws {
+        let config = NotifySettings.configPath, token = JiraSettings.tokenPath
+        try JiraSettings.save(url: "https://example.atlassian.net", email: "me@example.com", token: "tok-1", saved: nil,
+                              configPath: config, tokenPath: token)
+        XCTAssertEqual(JiraSettings.load(config)?.ready, true)
+        try FileManager.default.removeItem(atPath: token)
+        XCTAssertEqual(JiraSettings.load(config)?.ready, false)
+        try "tok-1\n".write(toFile: token, atomically: false, encoding: .utf8)
+        try FileManager.default.removeItem(atPath: config)
+        try Data([0x5B, 0xFF, 0x5D, 0x0A]).write(to: URL(fileURLWithPath: config))  // not UTF-8
+        XCTAssertThrowsError(try JiraSettings.save(url: "https://example.atlassian.net", email: "other@example.com", token: "tok-2",
+                                                   saved: nil, configPath: config, tokenPath: token))
+        XCTAssertEqual(try text(token), "tok-1\n")
+    }
+
+    /// Whether the source has the AI engine's CLI: asked over two days (the CLI takes --from only before --to), also
+    /// on the day clocks go back.
+    func testMissingEngine() throws {
+        let zone = try XCTUnwrap(TimeZone(identifier: "Europe/Berlin"))
+        let now = Date(timeIntervalSince1970: 1_792_929_600)  // 2026-10-25 12:00 UTC, the end of summer time there
+        let b = TaskBackend(source: .local) { args, _ in
+            guard let f = args.firstIndex(of: "--from"), let t = args.firstIndex(of: "--to"), args[f + 1] < args[t + 1] else {
+                return Proc.Result(status: 64, out: Data(), err: Data("Error: --from must be before --to\n".utf8))
+            }
+            XCTAssertEqual([args[f + 1], args[t + 1]], ["2026-10-24", "2026-10-25"])
+            return Proc.Result(status: 0, out: Data(#"{"key":"k","from":"2026-10-24","to":"2026-10-25","worked":[],"missing":[],"calls":0,"no_cli":"claude"}"#.utf8),
+                               err: Data())
+        }
+        XCTAssertEqual(b.missingEngine(now: now, zone: zone), "claude")
+        XCTAssertNil(TaskBackend(source: .local) { _, _ in nil }.missingEngine(now: now, zone: zone))
+    }
+
     func testProblems() {
         func p(_ url: String, _ email: String = "me@example.com", token: String = "t", saved: Bool = false) -> String? {
             JiraSettings.problem(url: url, email: email, token: token, saved: saved)

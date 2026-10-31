@@ -35,14 +35,20 @@ struct JiraCard: View {
                 Caps(text: f.t("source.local")).padding(.top, 6)
             }
             HStack(spacing: 8) {
-                Dot(color: saved == nil ? Z.faint : Z.working, size: 7)
-                Text(saved.map { f.t("settings.jira.on", URL(string: $0.url)?.host ?? $0.url, $0.email) } ?? f.t("settings.jira.none"))
+                Dot(color: saved == nil ? Z.faint : saved?.ready == true ? Z.working : Z.bad, size: 7)
+                Text(saved.map { f.t($0.ready ? "settings.jira.on" : "settings.jira.broken", URL(string: $0.url)?.host ?? $0.url, $0.email) }
+                     ?? f.t("settings.jira.none"))
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            row(f.t("settings.jira.url")) { Field(placeholder: "https://your-team.atlassian.net", text: u, height: 30) }
-            row(f.t("settings.jira.email")) { Field(placeholder: "you@example.com", text: e, height: 30) }
-            row(f.t("settings.jira.token")) {
-                Field(placeholder: saved == nil ? "" : f.t("settings.jira.tokenKept"), text: t, height: 30, secure: true)
+            // Not while a check runs: its answer is about what was typed when it started.
+            Group {
+                row(f.t("settings.jira.url")) { Field(placeholder: "https://your-team.atlassian.net", text: u, height: 30) }
+                row(f.t("settings.jira.email")) { Field(placeholder: "you@example.com", text: e, height: 30) }
+                row(f.t("settings.jira.token")) {
+                    Field(placeholder: saved?.ready == true ? f.t("settings.jira.tokenKept") : "", text: t, height: 30, secure: true)
+                }
             }
+            .disabled(checking)
             HStack(spacing: 8) {
                 PillButton(title: f.t("settings.jira.check"), busy: checking) { check(f, u.wrappedValue, e.wrappedValue) }
                 PillButton(title: f.t("settings.jira.save"), primary: true) { save(f, u.wrappedValue, e.wrappedValue) }
@@ -85,7 +91,7 @@ struct JiraCard: View {
         var u = url.trimmingCharacters(in: .whitespacesAndNewlines)
         while u.hasSuffix("/") { u.removeLast() }
         let e = email.trimmingCharacters(in: .whitespacesAndNewlines), t = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let p = JiraSettings.problem(url: u, email: e, token: t, saved: app.jira != nil) {
+        if let p = JiraSettings.problem(url: u, email: e, token: t, saved: app.jira?.ready == true) {
             result = (false, f.t(p))
             return nil
         }
@@ -94,7 +100,7 @@ struct JiraCard: View {
 
     /// A real request with what is typed (the saved token when the field is empty); nothing is saved.
     func check(_ f: Fmt, _ url: String, _ email: String) {
-        guard let v = form(f, url, email) else { return }
+        guard let v = form(f, url, email), app.store != nil else { return }  // the samples send nothing
         let saved = app.jira
         checking = true
         result = nil
@@ -114,10 +120,11 @@ struct JiraCard: View {
 
     func save(_ f: Fmt, _ url: String, _ email: String) {
         guard let v = form(f, url, email), app.store != nil else { return }  // the samples write nothing
+        // Whatever happened, the card shows what the file says now.
+        defer { app.jiraChanged() }
         do {
             try JiraSettings.save(url: v.url, email: v.email, token: v.token, saved: app.jira, configPath: NotifySettings.configPath,
                                   tokenPath: JiraSettings.tokenPath)
-            app.jiraChanged()
             self.url = nil; self.email = nil; token = ""
             result = (true, f.t("settings.jira.saved"))
             Log.shared.write("jira saved")
@@ -128,9 +135,9 @@ struct JiraCard: View {
 
     func disconnect(_ f: Fmt) {
         guard app.store != nil else { return }
+        defer { app.jiraChanged() }
         do {
             try JiraSettings.disconnect(configPath: NotifySettings.configPath, tokenPath: JiraSettings.tokenPath)
-            app.jiraChanged()
             url = nil; email = nil; token = ""
             result = (true, f.t("settings.jira.removed"))
             Log.shared.write("jira disconnected")
@@ -145,7 +152,7 @@ extension AppState {
     func jiraChanged() {
         jira = JiraSettings.load(NotifySettings.configPath)
         guard var c = taskCache[.local] else { return }
-        c.list = nil; c.drafts = nil; c.cards = [:]
+        c.list = nil; c.drafts = nil; c.cards = [:]; c.plans = [:]
         taskCache[.local] = c
     }
 
@@ -161,10 +168,10 @@ extension AppState {
         }
     }
 
-    /// Jira is known not to be connected where `s` keeps its tasks.
+    /// Jira is known not to work where `s` keeps its tasks.
     func jiraOff(_ s: TaskBackend.Source) -> Bool {
         if case .server(let h) = s { return serverJira[h] == .off }
-        return jira == nil
+        return jira?.ready != true
     }
 
     /// The page of issue `key` when the tasks come from this Mac and its Jira is connected.

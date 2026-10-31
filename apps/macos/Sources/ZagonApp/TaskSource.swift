@@ -48,9 +48,9 @@ extension AppState {
             work(s, { try $0.plan(day) }) { $0.plans[day] = $1 }
         case .drafts:
             guard force || have.drafts == nil else { return }
-            // With them, whether the source has the AI engine suggestions are made with (a zagon from before: not known).
-            let today = TaskBackend.day(self.provider.now, zone)
-            work(s, { b in (try b.suggestions(), try? b.summaryPlan(from: today, to: today).noCli) }) {
+            // With them, whether the source has the AI engine suggestions are made with.
+            let now = self.provider.now, zone = self.zone
+            work(s, { b in (try b.suggestions(), b.missingEngine(now: now, zone: zone)) }) {
                 $0.drafts = $1.0.drafts; $0.jira = $1.0.jira; $0.draftNote = nil; $0.noCli = $1.1
             }
         }

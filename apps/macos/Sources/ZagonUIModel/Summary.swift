@@ -184,6 +184,15 @@ extension TaskBackend {
         try decode(["summary", "--from", from, "--to", to, "--plan", "--json"]).0
     }
 
+    /// The AI engine whose CLI the source does not have (nil: it has one, or a zagon from before cannot say).
+    public func missingEngine(now: Date, zone: TimeZone) -> String? {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = zone
+        // Any period will do; the CLI takes --from only before --to.
+        guard let before = cal.date(byAdding: .day, value: -1, to: now) else { return nil }
+        return try? summaryPlan(from: Self.day(before, zone), to: Self.day(now, zone)).noCli
+    }
+
     /// The period written again from its days, after the days without a summary are written one by one. Cancelled,
     /// it stops the call under way (`stoppable`); the days written before stay written there.
     public func writePeriod(_ plan: SummaryPlan, lang: String,

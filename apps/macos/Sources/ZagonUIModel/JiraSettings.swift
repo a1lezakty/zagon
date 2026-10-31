@@ -14,14 +14,26 @@ public struct JiraSettings: Sendable, Equatable {
     public var url: String
     public var email: String
     public var tokenFile: String
+    /// The CLI's client can start: the token file has a line, the address is https (else the CLI has no Jira).
+    public var ready = true
+
+    public init(url: String, email: String, tokenFile: String, ready: Bool = true) {
+        self.url = url; self.email = email; self.tokenFile = tokenFile; self.ready = ready
+    }
 
     /// `~/.zagon/jira-token`.
     public static var tokenPath: String { ZagonPaths().dir + "/jira-token" }
 
     /// nil: not connected.
     public static func load(_ configPath: String) -> JiraSettings? {
-        Sys.readFile(configPath).flatMap { JiraConfig.load(configText: String(decoding: $0, as: UTF8.self)) }
-            .map { JiraSettings(url: $0.baseURL, email: $0.email, tokenFile: $0.tokenFile) }
+        guard let c = Sys.readFile(configPath).flatMap({ JiraConfig.load(configText: String(decoding: $0, as: UTF8.self)) }) else {
+            return nil
+        }
+        // As the client reads it.
+        let file = c.tokenFile.hasPrefix("~/") ? ZagonPaths().home + c.tokenFile.dropFirst() : c.tokenFile
+        let token = Sys.readFile(file).map { String(decoding: $0, as: UTF8.self).contains { !$0.isWhitespace } } ?? false
+        return JiraSettings(url: c.baseURL, email: c.email, tokenFile: c.tokenFile,
+                            ready: token && c.baseURL.lowercased().hasPrefix("https://"))
     }
 
     /// The issue's page.
@@ -42,21 +54,19 @@ public struct JiraSettings: Sendable, Equatable {
     /// `tokenPath`; an empty `token` keeps the saved token file.
     public static func save(url: String, email: String, token: String, saved: JiraSettings?, configPath: String,
                             tokenPath: String) throws {
-        var file = saved?.tokenFile ?? tokenPath
-        if !token.isEmpty {
-            try writeSecret(tokenPath, token + "\n")
-            file = tokenPath
-        }
         try NotifySettings.edit(configPath) { text in
+            // The token only once config.toml has been read: a file that cannot be is left alone with the old token.
+            if !token.isEmpty { try writeSecret(tokenPath, token + "\n") }
+            let file = token.isEmpty ? saved?.tokenFile ?? tokenPath : tokenPath
             // Each new key goes right under the header: this order reads url, email, token_file.
-            [("token_file", file), ("email", email), ("url", url)].reduce(text) {
+            return [("token_file", file), ("email", email), ("url", url)].reduce(text) {
                 TOMLLite.setting($0, section: "jira", key: $1.0, to: $1.1)
             }
         }
     }
 
     /// Removes `url`, `email` and `token_file` from `[jira]` (the CLI then has no Jira; other keys stay) and deletes
-    /// `tokenPath`.
+    /// `tokenPath` (Zagon's own; a token file set by hand elsewhere stays).
     public static func disconnect(configPath: String, tokenPath: String) throws {
         try NotifySettings.edit(configPath) { text in
             var t = text
@@ -65,6 +75,7 @@ public struct JiraSettings: Sendable, Equatable {
             }
             return t
         }
+        unlink(tokenPath + ".zagon-tmp")  // left by an interrupted save
         if unlink(tokenPath) != 0, errno != ENOENT { throw CocoaError(.fileWriteNoPermission) }
     }
 
@@ -91,7 +102,8 @@ public struct JiraSettings: Sendable, Equatable {
             client = try JiraClient(c)
         } else {
             var fds: [Int32] = [-1, -1]
-            guard token.utf8.count <= 512, pipe(&fds) == 0 else { throw JiraError.token("cannot pass the token") }
+            // Close-on-exec: a process spawned meanwhile must not hold either end.
+            guard token.utf8.count <= 512, Sys.pipeCloexec(&fds) else { throw JiraError.token("cannot pass the token") }
             // At most 512 bytes: the pipe holds them all before anyone reads.
             let wrote = Sys.writeAll(fd: fds[1], Array(token.utf8))
             close(fds[1])
@@ -118,7 +130,7 @@ public struct JiraSettings: Sendable, Equatable {
             return .on
         } catch {
             let why = String(describing: error)
-            return why.contains("Jira is not connected") ? .off : .failed(why)
+            return why.contains("Jira is not connected") ? .off : .failed(String(Remote.scrubHomes(why).prefix(160)))
         }
     }
 }

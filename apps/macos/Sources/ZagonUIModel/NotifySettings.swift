@@ -51,15 +51,15 @@ public struct NotifySettings: Sendable, Equatable {
     public func save(_ path: String) throws { try Self.edit(path) { apply(to: $0) } }
 
     /// Rewrites config.toml through `change`, as `save` does.
-    static func edit(_ path: String, _ change: (String) -> String) throws {
+    static func edit(_ path: String, _ change: (String) throws -> String) throws {
         // A dangling symlink would be replaced by a plain file.
         if (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil, Sys.realPath(path) == nil {
             throw CocoaError(.fileNoSuchFile)
         }
         let text = try read(path, strict: true)
         try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
-        guard Sys.writeFile(path, Array(change(text).utf8), mode: 0o600) else { throw CocoaError(.fileWriteUnknown) }
+                                                withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        guard Sys.writeFile(path, Array(try change(text).utf8), mode: 0o600) else { throw CocoaError(.fileWriteUnknown) }
     }
 
     static func read(_ path: String, strict: Bool) throws -> String {
