@@ -93,6 +93,33 @@ let hookPayload = Array("""
         }
     }
 
+    /// Cursor's agent runs the hooks of `~/.claude/settings.json` with its own input (cursor.com/docs/hooks, common
+    /// schema): nothing is recorded and a waiting handoff stays for Claude Code. Claude Code with its config elsewhere
+    /// (`CLAUDE_CONFIG_DIR`) still counts.
+    @Test func cursorAgentCallsAreIgnored() throws {
+        let dir = makeTempDir(), cwd = makeTempDir()
+        let paths = ZagonPaths(home: dir, dir: dir)
+        func feed(_ event: String, _ payload: String) {
+            var fds: [Int32] = [0, 0]
+            #expect(pipe(&fds) == 0)
+            let b = Array(payload.utf8)
+            _ = b.withUnsafeBytes { write(fds[1], $0.baseAddress, b.count) }
+            close(fds[1])
+            HookSpool.handleHook(args: ["claude", event], stdinFD: fds[0], paths: paths)
+            close(fds[0])
+        }
+        #expect(HandoffStore(paths: paths).markPending("h-1", cwd: cwd))
+        let roots = js(cwd)
+        feed("SessionStart", #"{"conversation_id":"c-1","generation_id":"g-1","model":"default","hook_event_name":"sessionStart","cursor_version":"1.7.2","workspace_roots":[\#(roots)],"user_email":null,"transcript_path":null,"session_id":"c-1","is_background_agent":false,"composer_mode":"agent","cwd":\#(roots)}"#)
+        feed("Stop", #"{"conversation_id":"c-1","generation_id":"g-2","model":"default","hook_event_name":"stop","cursor_version":"1.7.2","workspace_roots":[\#(roots)],"user_email":null,"transcript_path":"/h/.cursor/projects/p/agent-transcripts/c-1.txt","status":"completed","loop_count":0}"#)
+        #expect(spoolLines(dir).isEmpty)
+        #expect(Sys.listDir(dir + "/handoffs/pending").count == 1)
+        #expect(!Sys.listDir(dir + "/handoffs/pending").contains { $0.hasSuffix(".used") })
+
+        feed("Stop", #"{"session_id":"s-2","transcript_path":"/h/other-config/projects/p/s-2.jsonl","cwd":\#(roots),"hook_event_name":"Stop","stop_hook_active":false}"#)
+        #expect(spoolLines(dir).compactMap { JValue.parse($0)?["session_id"]?.string } == ["s-2"])
+    }
+
     @Test(.enabled(if: Sys.exists(zagonBin))) func binaryAlwaysExitsZeroSilently() throws {
         let tmp = makeTempDir()
         let file = tmp + "/plain-file"

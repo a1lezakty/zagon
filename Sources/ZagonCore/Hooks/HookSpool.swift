@@ -50,12 +50,21 @@ public enum HookSpool {
         let tool = args.count > 0 ? args[0] : "unknown"
         let event = args.count > 1 ? args[1] : "unknown"
         let payload = isatty(stdinFD) == 1 ? [] : Sys.readAll(fd: stdinFD)
+        if fromCursor(payload) { return }
         let ts = Sys.now()
         if tool == "claude", event == "SessionStart", let out = HandoffStore(paths: paths).sessionStart(payload: payload) {
             Sys.writeAll(fd: 1, Array((out + "\n").utf8))
         }
         guard let line = hookLine(tool: tool, event: event, payload: payload, ts: ts, pid: Sys.clientPid()) else { return }
         append(line, paths: paths, ts: ts)
+    }
+
+    /// A call from Cursor's own agent: Cursor runs the hooks of `~/.claude/settings.json` too ("third-party hooks", on
+    /// by default) for its conversations, which are not Claude Code sessions. Every hook input from Cursor has
+    /// `cursor_version` (cursor.com/docs/hooks, common schema); Claude Code and Codex never send it. Not the
+    /// `CURSOR_*` environment: `claude` started in Cursor's terminal may inherit it.
+    static func fromCursor(_ payload: [UInt8]) -> Bool {
+        JValue.topLevelStrings(payload, keys: ["cursor_version"])?["cursor_version"] != nil
     }
 
     /// Set (`ZAGON_INTERNAL=1`) for the `claude -p` / `codex exec` runs Zagon starts itself (day summary): their hooks
