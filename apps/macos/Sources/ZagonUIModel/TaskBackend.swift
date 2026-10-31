@@ -21,14 +21,18 @@ public struct TaskBackend: Sendable {
 
     /// The CLI inside Zagon.app with the login shell's PATH (git, for links by branch).
     public static func local(cli: String, path: String) -> TaskBackend {
-        TaskBackend(source: .local) { try Proc.run(cli, $0, env: ["PATH": path], timeout: $1) }
+        TaskBackend(source: .local) { try Proc.run(cli, $0, env: ["PATH": path], timeout: $1, stop: stoppable($0) ? .kill : nil) }
     }
 
     public static func server(_ host: String, controlDir: String = Remote.controlDir(), ssh: String = "/usr/bin/ssh") -> TaskBackend {
         TaskBackend(source: .server(host)) {
-            try Proc.run(ssh, Remote.sshArguments(host: host, zagon: $0, controlDir: controlDir), timeout: $1)
+            try Proc.run(ssh, Remote.sshArguments(host: host, zagon: $0, controlDir: controlDir, stoppable: stoppable($0)),
+                         timeout: $1, stop: stoppable($0) ? .closeInput : nil)
         }
     }
+
+    /// `zagon summary` (minutes of AI calls) stops, there too, when the task waiting for it is cancelled.
+    static func stoppable(_ args: [String]) -> Bool { args.first == "summary" }
 
     public struct Failure: Error, Sendable, CustomStringConvertible {
         public var description: String

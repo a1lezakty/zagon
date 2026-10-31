@@ -171,6 +171,56 @@ final class RemoteTests: XCTestCase {
         XCTAssertEqual(a.prefix(2), ["-o", "BatchMode=yes"])
         XCTAssertTrue(a.contains("ControlPath=/tmp/z/%C"))
         XCTAssertEqual(a.suffix(2), ["build-box", "PATH=\"$HOME/.local/bin:$PATH\" zagon export --since 42"])
+        let s = Remote.sshArguments(host: "build-box", zagon: ["summary", "--at", "show"], controlDir: "/tmp/z", stoppable: true)
+        XCTAssertEqual(s.last, "PATH=\"$HOME/.local/bin:$PATH\" sh -c '" + Remote.stopScript + "' sh zagon summary --at show")
+    }
+
+    /// `stopScript` passes the command's output and status through and ends with it; cancelled, it stops the command
+    /// and what the command started. Run from the main thread, as sshd starts it: with a clean signal mask.
+    func testStopScriptEndsWithTheCommandAndStopsOnCancel() async throws {
+        let sh = ["-c", Remote.stopScript, "sh", "/bin/sh", "-c"]
+        let started = Date()
+        let r = try await MainActor.run { try Proc.run("/bin/sh", sh + ["echo out; echo err >&2; exit 3"], timeout: 10, stop: .closeInput) }
+        XCTAssertEqual(r, Proc.Result(status: 3, out: Data("out\n".utf8), err: Data("err\n".utf8)))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+        // The child is found by pgrep (absent from minimal images; then "zagon" has none: on Linux, Foundation sees the
+        // exit only once every process that inherited its descriptors is gone).
+        let pgrep = ["/usr/bin/pgrep", "/bin/pgrep"].contains { FileManager.default.isExecutableFile(atPath: $0) }
+        try await stops(pgrep) { cmd in Task { @MainActor in try Proc.run("/bin/sh", sh + [cmd], timeout: 60, stop: .closeInput) } }
+    }
+
+    /// `.kill`: the process and what it started, from a worker thread (this Mac's zagon).
+    func testKillStopsTheProcessGroup() async throws {
+        try await stops(true) { cmd in Task.detached { try Proc.run("/bin/sh", ["-c", cmd], timeout: 60, stop: .kill) } }
+    }
+
+    /// "zagon" writes its pid and its child's (the AI CLI, in its own process group as zagon starts it, with a process
+    /// of its own: an npm wrapper and the real binary) and waits; the task running it is cancelled.
+    func stops(_ child: Bool, _ start: (String) -> Task<Proc.Result?, Error>) async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("zagon-stop-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let run = start(child ? "echo $$ > \(dir)/z; perl -e 'setpgrp(0, 0); exec @ARGV' sh -c \"sleep 60 & echo \\$! > \(dir)/g; wait\" & echo $! > \(dir)/c; wait"
+                        : "echo $$ > \(dir)/z; echo $$ > \(dir)/c; echo $$ > \(dir)/g; exec sleep 60")
+        func pid(_ name: String) -> Int32? {
+            (try? String(contentsOfFile: dir + "/" + name, encoding: .utf8)).flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        }
+        while pid("g") == nil || pid("c") == nil { try await Task.sleep(nanoseconds: 50_000_000) }
+        let z = pid("z")!, c = pid("c")!, g = pid("g")!, cancelled = Date()
+        run.cancel()
+        do { _ = try await run.value; XCTFail("not stopped") } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertLessThan(Date().timeIntervalSince(cancelled), 3)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertFalse(Self.alive(z))
+        XCTAssertFalse(Self.alive(c))
+        XCTAssertFalse(Self.alive(g))
+    }
+
+    /// Exists and is not a zombie left for a reaper (Linux containers).
+    static func alive(_ pid: Int32) -> Bool {
+        guard kill(pid, 0) == 0 else { return false }
+        let stat = (try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8)) ?? ""
+        return !stat.contains(") Z ")
     }
 }
 
