@@ -599,7 +599,8 @@ struct ZagonApp: App {
 
 /// The status item, rasterised because a menu bar label shows only images and text. Monochrome without a warning is
 /// a template image (the menu bar tints it); otherwise it is drawn in the bar's text colour. Drawn at 1x and 2x: the bar
-/// is on every screen, and each picks its own. 44 × 20 pt either way: a pair of rings or two ring-in-rings.
+/// is on every screen, and each picks its own. 44 × 20 pt for a pair of rings or two ring-in-rings, 20 × 20 for a week
+/// ring alone (`MenuBarVM.AI.weekOnly`).
 ///
 /// Only `StatusIcon` calls this, when the picture changes; nil if nothing got drawn.
 @MainActor
@@ -782,12 +783,14 @@ struct LimitsBlock: View {
                     } else if app.pace && vm.paceFits {
                         let paces = PaceVM.both(app.provider, weekdaysOnly: app.paceWeekdays, f)
                         HStack(alignment: .top, spacing: 16) {
-                            chart(paces.five, vm.five ?? .empty(f.t("limit.five"), f))
+                            if !vm.weekOnly { chart(paces.five, vm.five ?? .empty(f.t("limit.five"), f)) }
                             chart(paces.week, vm.week ?? .empty(f.t("limit.week"), f))
                         }
                     } else {
                         HStack(spacing: 12) {
-                            ring(vm.five ?? .empty(f.t("limit.five"), f)).frame(maxWidth: .infinity, alignment: .leading)
+                            if !vm.weekOnly {
+                                ring(vm.five ?? .empty(f.t("limit.five"), f)).frame(maxWidth: .infinity, alignment: .leading)
+                            }
                             ring(vm.week ?? .empty(f.t("limit.week"), f)).frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
@@ -837,22 +840,26 @@ struct LimitsBlock: View {
         .accessibilityAction { app.showLeft.toggle() }
     }
 
-    /// One AI: the week outside, 5 hours inside with its number; the AI and a line per window beside it.
+    /// One AI: the week outside, 5 hours inside with its number; the AI and a line per window beside it. Without a
+    /// 5-hour window (`AIRingsVM.weekOnly`): the week ring alone with its number, no 5-hour line.
     func nested(_ a: AIRingsVM) -> some View {
         let left = app.showLeft
         func shown(_ r: RingVM) -> Double { (left ? r.leftPct : r.pct) == nil ? 0 : left ? 1 - r.fraction : r.fraction }
-        let pct = left ? a.five.leftPct : a.five.pct
+        let inside = a.weekOnly ? a.week : a.five
+        let pct = left ? inside.leftPct : inside.pct
         let outer = shown(a.week), inner = shown(a.five)
         return HStack(spacing: 10) {
             // Rims of 6 on radii 28 and 22: they touch, no gap.
             ZStack {
                 Ring(fraction: outer, color: Color(hex: a.week.color), size: 64, line: 6, inset: 4).animation(arc, value: outer)
-                Ring(fraction: inner, color: Color(hex: a.five.color), size: 64, line: 6, inset: 10).animation(arc, value: inner)
+                if !a.weekOnly {
+                    Ring(fraction: inner, color: Color(hex: a.five.color), size: 64, line: 6, inset: 10).animation(arc, value: inner)
+                }
                 Text(pct.map { "\($0)%" } ?? "–").font(mono(14, .semibold)).foregroundColor(pct == nil ? Z.secondary : Z.text)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(a.tool.name).font(.system(size: 14, weight: .semibold)).foregroundColor(Z.text)
-                windowLine(a.five.color, a.fiveLine)
+                if !a.weekOnly { windowLine(a.five.color, a.fiveLine) }
                 windowLine(a.week.color, left ? a.weekLeftLine : a.weekLine)
             }
             .lineLimit(1).minimumScaleFactor(0.85)

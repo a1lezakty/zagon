@@ -303,8 +303,27 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 return LimitWindow(usedPct: r.usedPct, resetsAt: Self.date(reset), pctPerHour: r.pctPerHour,
                                    tool: tool == .codex ? .codex : .claude, readAt: Self.date(r.ts))
             }
-            var l = Limits(claude: AILimits(fiveHour: window(.claude, "five_hour"), week: window(.claude, "seven_day")),
-                           codex: AILimits(fiveHour: window(.codex, "primary"), week: window(.codex, "secondary")))
+            // For `AILimits.weekAlone`: week readings over a minute after the 5-hour one was due (a reset's own reading
+            // lands within seconds of it); a failed read keeps both rings.
+            func ai(_ tool: ToolKind, _ five: String, _ week: String) -> AILimits {
+                var a = AILimits(fiveHour: window(tool, five), week: window(tool, week))
+                guard a.week != nil, let f = a.fiveHour, let due = a.fiveDue(at: now) else { return a }
+                func run(after: Date, upTo: Double = .greatestFiniteMagnitude) -> (Double, Double)? {
+                    try? query.db.one("SELECT min(ts), max(ts) FROM limit_snapshot WHERE tool = ? AND window = ? AND ts > ? AND ts <= ?",
+                                      [.text(tool.rawValue), .text(week), .real(after.timeIntervalSince1970 + 60), .real(upTo)]) { r in
+                        r.optReal(0).map { ($0, r.real(1)) }
+                    } ?? nil
+                }
+                // The window is over: the week may have come alone since its last reading already, before the reset.
+                if due == f.resetsAt, let read = f.readAt, case let (lo, hi)? = run(after: read, upTo: due.timeIntervalSince1970),
+                   hi - lo >= 600 {
+                    a.weekAlone = Self.date(lo)
+                } else {
+                    a.weekAlone = run(after: due).map { Self.date($0.0) }
+                }
+                return a
+            }
+            var l = Limits(claude: ai(.claude, "five_hour", "seven_day"), codex: ai(.codex, "primary", "secondary"))
             // For `Limits.claudeHint`; a failed read loses only the hint.
             try? query.db.query("SELECT max(last_at) FROM session WHERE tool = 'claude' AND last_at >= ?",
                                 [.real(now.timeIntervalSince1970 - 7 * 86400)]) { r in l.claudeSeen = r.optReal(0).map(Self.date) }

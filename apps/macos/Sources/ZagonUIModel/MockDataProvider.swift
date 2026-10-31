@@ -13,6 +13,8 @@ public struct MockDataProvider: ZagonDataProvider {
     public var staleLimits = false
     /// Codex limits next to Claude's (both AIs in the menu bar and the panel).
     public var codexLimits = false
+    /// Claude on a plan without a 5-hour window: only the week comes.
+    public var weekOnly = false
     /// Claude used where its status line does not run (an editor extension): sessions, no reading.
     public var claudeUnread = false
     /// The sample's editors: Cursor and VS Code found, Zagon not on in them yet.
@@ -57,6 +59,7 @@ public struct MockDataProvider: ZagonDataProvider {
             l.codex = AILimits(fiveHour: LimitWindow(usedPct: 18, resetsAt: at(30, 16 + 5 / 60), tool: .codex, readAt: ago(6)),
                                week: LimitWindow(usedPct: 71, resetsAt: at(34, 11), tool: .codex, readAt: ago(6)))
         }
+        if weekOnly { l.claude.fiveHour = nil }
         if claudeUnread {
             l.claude = AILimits()
             l.claudeSeen = ago(4)

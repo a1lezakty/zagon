@@ -3,7 +3,8 @@ import ZagonCore
 
 /// The status item. Both AIs with a current reading (or Claude under `Limits.claudeHint`): a ring-in-ring each, Claude
 /// left, Codex right (outer the week, inner 5 hours, the 5-hour number inside). One AI, or none: its pair of rings,
-/// 5 hours left and the week right.
+/// 5 hours left and the week right. An AI without a 5-hour window (`Limits.weekOnly`): its week ring alone, the week's
+/// number inside.
 public struct MenuBarVM: Sendable, Equatable {
     public struct AI: Sendable, Equatable {
         public var tool: Tool
@@ -11,8 +12,10 @@ public struct MenuBarVM: Sendable, Equatable {
         public var five: Int?
         public var week: Int?
         public var colors: RingColors
-        public init(tool: Tool, five: Int?, week: Int?, colors: RingColors) {
-            self.tool = tool; self.five = five; self.week = week; self.colors = colors
+        /// No 5-hour window on the plan: the week ring alone (`five` is nil).
+        public var weekOnly: Bool
+        public init(tool: Tool, five: Int?, week: Int?, colors: RingColors, weekOnly: Bool = false) {
+            self.tool = tool; self.five = five; self.week = week; self.colors = colors; self.weekOnly = weekOnly
         }
     }
 
@@ -21,14 +24,14 @@ public struct MenuBarVM: Sendable, Equatable {
     public var nested: Bool { ais.count > 1 }
     /// Something is red: digits from 80 % (in a ring-in-ring only the 5-hour ones show), a ring from 95 %.
     public var alarm: Bool {
-        ais.contains { max($0.five ?? 0, nested ? 0 : $0.week ?? 0) >= 80 || max($0.five ?? 0, $0.week ?? 0) >= 95 }
+        ais.contains { max($0.five ?? 0, nested && !$0.weekOnly ? 0 : $0.week ?? 0) >= 80 || max($0.five ?? 0, $0.week ?? 0) >= 95 }
     }
     public var tip: String
     /// What VoiceOver reads for the status item.
     public var spoken: String
 
     public init(_ limits: Limits, colors: (Tool) -> RingColors = RingColors.standard, _ f: Fmt) {
-        let now = f.now, current = limits.tools(at: now), shown = limits.shown(at: now)
+        let now = f.now, limits = limits.forRings(at: now), current = limits.tools(at: now), shown = limits.shown(at: now)
         let known = shown.fiveHour ?? shown.week
         let hint = limits.claudeHint(at: now) ? limits.claudeHintLine(f) : nil
         // Nothing current: named after the first AI with any window (`shown` mixes them window by window).
@@ -36,7 +39,8 @@ public struct MenuBarVM: Sendable, Equatable {
         let tools = current.count > 1 ? current : [current.first ?? anyAI ?? .claude]
         let ais = tools.map { t in
             let w = current.count > 1 ? limits[t] : shown
-            return AI(tool: t, five: w.fiveHour?.pct(at: now), week: w.week?.pct(at: now), colors: colors(t))
+            return AI(tool: t, five: w.fiveHour?.pct(at: now), week: w.week?.pct(at: now), colors: colors(t),
+                      weekOnly: limits.weekOnly(t, at: now))
         }
         self.init(ais: ais, known: known != nil || hint != nil, hint: hint, f)
     }
@@ -53,9 +57,10 @@ public struct MenuBarVM: Sendable, Equatable {
             spoken = "Zagon: " + f.t("limit.noData")
             return
         }
-        tip = ais.map { f.t("menubar.tip.ai", $0.tool.name, pct($0.five), pct($0.week)) }.joined(separator: " · ")
-        spoken = "Zagon: " + ais.map { f.t("menubar.spoken.ai", $0.tool.name, used($0.five), used($0.week)) }
-            .joined(separator: "; ")
+        tip = ais.map { $0.weekOnly ? f.t("menubar.tip.weekOnly", $0.tool.name, pct($0.week))
+            : f.t("menubar.tip.ai", $0.tool.name, pct($0.five), pct($0.week)) }.joined(separator: " · ")
+        spoken = "Zagon: " + ais.map { $0.weekOnly ? f.t("menubar.spoken.weekOnly", $0.tool.name, used($0.week))
+            : f.t("menubar.spoken.ai", $0.tool.name, used($0.five), used($0.week)) }.joined(separator: "; ")
         // Claude without readings: where they come from (`Limits.claudeHint`).
         if let hint {
             tip += "\n" + hint

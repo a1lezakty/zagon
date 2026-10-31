@@ -34,6 +34,8 @@ enum Snapshots {
     /// and coloured. `menubar-<mode>@<n>x.png`, one AI: 5 hours / week at 2/41, 62/88, 97/100 and no reading.
     /// `menubar-both-<mode>@<n>x.png`, Claude | Codex: at rest, red digits, red rings, a window without a reading.
     /// `menubar-digits@<n>x.png` / `menubar-both-digits@<n>x.png`: every value 0…99, to see each one inside its ring.
+    /// `menubar-weekonly-<mode>@<n>x.png`, no 5-hour window: Claude alone at rest, red digits, red ring; Claude's week
+    /// ring next to Codex's ring-in-ring, red digits there; both AIs without it.
     static func menubar(_ dir: URL) -> Bool {
         let bars: [(UInt32, Color)] = [(0xF2F2F4, .black.opacity(0.85)), (0x1E1E22, .white.opacity(0.9)),
                                        (0x2F67C8, .white.opacity(0.95))]
@@ -41,10 +43,16 @@ enum Snapshots {
         func vm(_ ais: [(Tool, Int?, Int?)]) -> MenuBarVM {
             MenuBarVM(ais: ais.map { MenuBarVM.AI(tool: $0.0, five: $0.1, week: $0.2, colors: .standard($0.0)) }, f)
         }
+        func weekOnly(_ ais: [(Tool, Int?, Int?)]) -> MenuBarVM {
+            MenuBarVM(ais: ais.map { MenuBarVM.AI(tool: $0.0, five: $0.1, week: $0.2, colors: .standard($0.0), weekOnly: $0.1 == nil) }, f)
+        }
         let sheets: [(String, [MenuBarVM])] = [
             ("", [vm([(.claude, 2, 41)]), vm([(.claude, 62, 88)]), vm([(.claude, 97, 100)]), vm([(.claude, nil, nil)])]),
             ("both-", [vm([(.claude, 62, 35), (.codex, 18, 71)]), vm([(.claude, 88, 50), (.codex, 2, 41)]),
                        vm([(.claude, 97, 100), (.codex, 96, 62)]), vm([(.claude, nil, 35), (.codex, 18, nil)])]),
+            ("weekonly-", [weekOnly([(.claude, nil, 41)]), weekOnly([(.claude, nil, 88)]), weekOnly([(.claude, nil, 97)]),
+                           weekOnly([(.claude, nil, 41), (.codex, 18, 71)]), weekOnly([(.claude, nil, 85), (.codex, 18, 71)]),
+                           weekOnly([(.claude, nil, 41), (.codex, nil, 71)])]),
         ]
         var ok = true
         for (name, states) in sheets {
@@ -190,7 +198,17 @@ enum Snapshots {
         let unread = AppState(provider: two, lang: lang)
         unread.cli = stale.cli
         let e = write(MainPanel().environmentObject(unread), width: 400, "main-hint-\(lang.rawValue)", dir)
-        return a && b && c && d && e
+        // No 5-hour window on Claude's plan: alone, and next to Codex.
+        var week = MockDataProvider(lang: lang)
+        week.weekOnly = true
+        let alone = AppState(provider: week, lang: lang)
+        alone.cli = stale.cli
+        let g = write(MainPanel().environmentObject(alone), width: 400, "main-weekonly-\(lang.rawValue)", dir)
+        week.codexLimits = true
+        let next = AppState(provider: week, lang: lang)
+        next.cli = stale.cli
+        let h = write(MainPanel().environmentObject(next), width: 400, "main-weekonly-both-\(lang.rawValue)", dir)
+        return a && b && c && d && e && g && h
     }
 
     static func write<V: View>(_ view: V, width: CGFloat, scale: CGFloat = 2, _ name: String, _ dir: URL) -> Bool {

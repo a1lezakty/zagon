@@ -91,6 +91,8 @@ public struct AIRingsVM: Sendable, Equatable {
     public var tool: Tool
     public var five: RingVM
     public var week: RingVM
+    /// No 5-hour window on the plan (`Limits.weekOnly`): the week ring alone with its number, no 5-hour line.
+    public var weekOnly: Bool
     /// "5h until 14:20" and "week 35%" (what is left of it, `weekLeftLine`, when the panel shows what is left).
     public var fiveLine: String
     public var weekLine: String
@@ -103,11 +105,13 @@ public struct AIRingsVM: Sendable, Equatable {
         five = l.fiveHour.map { RingVM(title: f.t("limit.five"), window: $0, base: c.five, f: f) } ?? .empty(f.t("limit.five"), f)
         week = l.week.map { RingVM(title: f.t("limit.week"), window: $0, base: c.week, f: f) } ?? .empty(f.t("limit.week"), f)
         let known = five.pct != nil
+        weekOnly = l.fiveHour == nil && week.pct != nil  // `l` went through `Limits.forRings`
         fiveLine = l.fiveHour.flatMap { known ? f.t("limit.ai.five", f.time($0.resetsAt)) : nil } ?? f.t("limit.ai.fiveNone")
         weekLine = f.t("limit.ai.week", week.pct.map { f.pct(Double($0)) } ?? "–")
         weekLeftLine = f.t("limit.ai.week", week.leftPct.map { f.pct(Double($0)) } ?? "–")
-        spoken = tool.name + ": " + five.spoken + "; " + week.spoken
-        spokenLeft = tool.name + ": " + five.spokenLeft + "; " + week.spokenLeft
+        let noFive = " (" + f.t("limit.noFive") + ")"
+        spoken = tool.name + ": " + (weekOnly ? week.spoken + noFive : five.spoken + "; " + week.spoken)
+        spokenLeft = tool.name + ": " + (weekOnly ? week.spokenLeft + noFive : five.spokenLeft + "; " + week.spokenLeft)
     }
 }
 
@@ -123,6 +127,8 @@ public struct MainVM: Sendable {
     /// One AI (or none with a current reading): its pair of rings.
     public var five: RingVM?
     public var week: RingVM?
+    /// That one AI has no 5-hour window (`Limits.weekOnly`): the week ring alone, `five` is nil.
+    public var weekOnly: Bool
     /// Both AIs with a current reading: a ring in a ring each, Claude first; then `five` and `week` serve the pace view.
     public var ais: [AIRingsVM]
     /// The pace view follows Claude's windows (Codex's without them): it stands in for the rings only when they are that
@@ -155,8 +161,9 @@ public struct MainVM: Sendable {
     public var noSessions: String?
 
     public init(_ p: ZagonDataProvider, _ f: Fmt, colors: (Tool) -> RingColors = RingColors.standard) {
-        let limits = p.limits(), current = limits.tools(at: f.now), shown = limits.shown(at: f.now)
+        let limits = p.limits().forRings(at: f.now), current = limits.tools(at: f.now), shown = limits.shown(at: f.now)
         let hinted = limits.claudeHint(at: f.now)
+        weekOnly = current.count == 1 && limits.weekOnly(current[0], at: f.now)
         claudeHint = hinted ? limits.claudeHintLine(f) : nil
         claudeEnable = hinted && limits.claudeEnable
         let oneTool = current.first ?? (shown.fiveHour ?? shown.week)?.tool ?? .claude, one = colors(oneTool)
@@ -164,7 +171,7 @@ public struct MainVM: Sendable {
         week = shown.week.map { RingVM(title: f.t("limit.week"), window: $0, base: one.week, f: f) }
         let ais = current.count > 1 ? current.map { AIRingsVM($0, limits[$0], colors($0), f) } : []
         self.ais = ais
-        paceFits = ais.isEmpty && oneTool == ((limits.fiveHour ?? limits.week)?.tool ?? .claude)
+        paceFits = ais.isEmpty && oneTool == ((weekOnly ? limits.week : limits.fiveHour ?? limits.week)?.tool ?? .claude)
         forecast = ais.isEmpty ? shown.fiveHour.flatMap { MainVM.forecast($0, f) } : ais.lazy.compactMap { a in
             limits[a.tool].fiveHour.flatMap { MainVM.forecast($0, f) }
                 .map { Emphasis(before: a.tool.name + ": " + $0.before, bold: $0.bold, after: $0.after) }
@@ -222,7 +229,8 @@ public struct MainVM: Sendable {
             let each = ais.compactMap { a in age([limits[a.tool].fiveHour, limits[a.tool].week]).map { a.tool.name + " " + f.duration($0) } }
             limitsAge = each.isEmpty ? nil : f.t("limit.updatedEach", each.joined(separator: " · "))
         }
-        limitsMissing = ais.isEmpty ? five?.pct == nil || week?.pct == nil : ais.contains { $0.five.pct == nil || $0.week.pct == nil }
+        limitsMissing = ais.isEmpty ? five?.pct == nil && !weekOnly || week?.pct == nil
+            : ais.contains { $0.five.pct == nil && !$0.weekOnly || $0.week.pct == nil }
         noSessions = sessions.isEmpty ? f.t("sessions.none") : nil
     }
 

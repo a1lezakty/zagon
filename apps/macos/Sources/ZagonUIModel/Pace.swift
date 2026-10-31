@@ -47,7 +47,7 @@ public struct PaceVM: Sendable, Equatable {
 
     /// Both windows of the provider's limits, for the pace view.
     public static func both(_ p: any ZagonDataProvider, weekdaysOnly: Bool, _ f: Fmt) -> (five: PaceVM?, week: PaceVM?) {
-        let l = p.limits()
+        let l = p.limits().forRings(at: f.now)
         return (l.fiveHour.map { PaceVM(title: f.t("limit.five"), window: $0, minutes: 300, history: p.limitHistory(.fiveHour),
                                         base: Palette.fiveHour, f: f) },
                 l.week.map { PaceVM(title: f.t("limit.week"), window: $0, minutes: 10080, history: p.limitHistory(.week),

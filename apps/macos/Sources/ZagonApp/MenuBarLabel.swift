@@ -6,7 +6,8 @@ import ZagonUIModel
 /// percent inside. Both AIs: a ring-in-ring each, Claude left and Codex right, the week outside and 5 hours inside
 /// with its percent. Each AI has its own two colours (settings); monochrome follows the menu bar like a template image,
 /// the outer ring a little fainter so the two rims read apart. A warning keeps the ring apart from the others: from
-/// 80 % its digits turn red, from 95 % the ring too. The track is the bar's own colour, faint.
+/// 80 % its digits turn red, from 95 % the ring too. The track is the bar's own colour, faint. An AI without a 5-hour
+/// window shows its week ring alone, the week's number inside (`MenuBarVM.AI.weekOnly`).
 struct MenuBarLabel: View {
     let vm: MenuBarVM
     var colored = true
@@ -18,9 +19,9 @@ struct MenuBarLabel: View {
     var body: some View {
         HStack(spacing: 4) {
             if vm.nested {
-                ForEach(vm.ais.indices, id: \.self) { ringInRing(vm.ais[$0]) }
+                ForEach(vm.ais.indices, id: \.self) { nested(vm.ais[$0]) }
             } else if let ai = vm.ais.first {
-                ring(ai.five, ai.colors.five)
+                if !ai.weekOnly { ring(ai.five, ai.colors.five) }
                 ring(ai.week, ai.colors.week)
             }
         }
@@ -57,6 +58,10 @@ struct MenuBarLabel: View {
             number(pct, Self.digits)
         }
         .frame(width: Self.size, height: Self.size)
+    }
+
+    @ViewBuilder func nested(_ ai: MenuBarVM.AI) -> some View {
+        if ai.weekOnly { ring(ai.week, ai.colors.week) } else { ringInRing(ai) }
     }
 
     /// One 4 pt track under both rims (two adjacent faint tracks would leave a seam where their edges blend).
