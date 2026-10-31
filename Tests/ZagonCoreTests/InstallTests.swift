@@ -234,7 +234,8 @@ import Testing
         inst.log = { lines.append($0) }
         try inst.install()
         let text = String(decoding: try #require(Sys.readFile(script)), as: UTF8.self)
-        #expect(text.hasPrefix("#!/bin/sh\n") && text.contains("z=\(home)/bin/zagon\n"))
+        #expect(text.hasPrefix("#!/bin/sh\n") && text.contains("z=\(home)/bin/zagon\n") && text.contains("claude-wrap --probe"))
+        #expect(!text.contains("ZAGON_DIR"))  // the default data directory needs none
         var st = stat()
         #expect(stat(script, &st) == 0 && st.st_mode & 0o777 == 0o755)
         #expect(lines.contains { $0.contains("add \"claudeCode.claudeProcessWrapper\": \"\(script)\" to the editor's user settings") })
@@ -252,13 +253,30 @@ import Testing
         Sys.writeFile(remote, Array("{\"claudeCode.claudeProcessWrapper\": \"/nope/wrap\"}".utf8))
         #expect(try panels() == "claude editor panels: claudeCode.claudeProcessWrapper set in \(cursor); "
             + "\(remote) names /nope/wrap, which does not exist: that editor's panel cannot start Claude")
+        // A one-line file with a URL before the key, a profile, an empty value, another wrapper.
+        Sys.writeFile(remote, Array("{\"http.proxy\": \"http://proxy:3128\", \"claudeCode.claudeProcessWrapper\": \"\(script)\"}".utf8))
+        let profile = home + "/.config/Code/User/profiles/p1/settings.json"
+        Sys.mkdirs(Sys.dirname(profile))
+        Sys.writeFile(profile, Array("{\"claudeCode.claudeProcessWrapper\": \"\"}".utf8))
+        #expect(try panels() == "claude editor panels: claudeCode.claudeProcessWrapper set in \(cursor), \(remote)")
+        Sys.writeFile(profile, Array("{\"claudeCode.claudeProcessWrapper\": \"/bin/sh\"}".utf8))
+        #expect(try panels().hasSuffix("; \(profile) runs /bin/sh, not \(script): no limits from that panel"))
+        Sys.writeFile(profile, Array("{}".utf8))
+        // Install says nothing more once an editor has it; the script follows a moved zagon.
+        lines = []
+        try inst.install()
+        #expect(!lines.contains { $0.contains("claudeProcessWrapper") })
+        var moved = o
+        moved.zagon = home + "/bin/zagon2"
+        #expect(try Installer(moved).info()[1].hasSuffix(", but \(script) does not run \(home)/bin/zagon2: run zagon install"))
 
         lines = []
         inst.log = { lines.append($0) }
         try inst.uninstall()
-        #expect(Sys.exists(script))  // a setting left behind still starts Claude through it
-        #expect(lines.contains("claude: kept \(script) (without zagon it runs Claude Code directly); remove the editor setting "
-            + "claudeCode.claudeProcessWrapper, then the file"))
+        // A setting left behind still starts Claude through it, which records nothing now.
+        #expect(Sys.readFile(script) == Array(Installer.wrapScriptText(zagon: nil).utf8))
+        #expect(lines.contains("claude: \(script) now runs Claude Code directly, recording nothing; it stays while "
+            + "claudeCode.claudeProcessWrapper names it in \(cursor), \(remote): remove the setting there before deleting \(home)/.zagon"))
     }
 
     /// `zagon update` keeps the old binary as .prev and leaves no .prev.new behind, also when .prev is already a link

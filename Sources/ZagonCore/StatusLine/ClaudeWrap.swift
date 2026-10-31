@@ -19,6 +19,7 @@ public enum ClaudeWrap {
     static let maxLine = 1 << 16
 
     public static func run(_ args: [String], paths: ZagonPaths = ZagonPaths()) -> Never {
+        if args == ["--probe"] { exit(0) }  // the script asks first: a zagon from before claude-wrap would fail every call
         var argv = args
         if argv.first.map({ $0.hasPrefix("-") }) ?? true {  // the extension found no bundled binary for this platform
             guard let claude = Sys.which("claude") else { fail("no claude to run") }
@@ -93,7 +94,8 @@ public enum ClaudeWrap {
         // Partial writes are retried; a non-blocking stdout would turn a slow editor into a stopped Claude.
         _ = fcntl(1, F_SETFL, fcntl(1, F_GETFL) & ~O_NONBLOCK)
         // The editor stops Claude with SIGTERM: pass it on and die of what the child dies of.
-        // ponytail: its later SIGKILL cannot be passed on; the child then ends when the editor closes its stdin.
+        // ponytail: a SIGKILL (the editor's after 5 s) or a SIGTERM before this point cannot be passed on: a Claude
+        // that hangs then is left running. Exec Claude and copy from a helper process if that ever shows up.
         child = pid
         for s in [SIGTERM, SIGINT, SIGHUP] {
             signal(s) { if ClaudeWrap.child > 0 { kill(ClaudeWrap.child, $0) } else { _exit(128 + $0) } }
@@ -103,7 +105,7 @@ public enum ClaudeWrap {
         var none = sigset_t()
         sigprocmask(SIG_SETMASK, &none, nil)
 
-        var buf = [UInt8](repeating: 0, count: 65536), line: [UInt8] = [], skip = false, copying = true
+        var buf = [UInt8](repeating: 0, count: 65536), line: [UInt8] = [], skip = false
         var status: Int32 = 0, exited = false
         while true {
             // After the child exits, only what is already in the pipe is read: a process it left behind may hold the
@@ -121,11 +123,8 @@ public enum ClaudeWrap {
             let n = buf.withUnsafeMutableBytes { read(p[0], $0.baseAddress, $0.count) }
             if n < 0 && errno == EINTR { continue }
             if n <= 0 { break }
-            // The editor stopped reading: stop Claude, but keep draining so it never blocks on a full pipe.
-            if copying && !Sys.writeAll(fd: 1, Array(buf[..<n])) {
-                copying = false
-                if !exited { kill(pid, SIGTERM) }
-            }
+            // The editor stopped reading: the pipe is closed below, so Claude's next write fails as it would without us.
+            if !Sys.writeAll(fd: 1, Array(buf[..<n])) { break }
             for b in buf[..<n] {
                 if b == 0x0A {
                     if !skip && line.count > marker.count { record(line, paths: paths) }
@@ -141,8 +140,11 @@ public enum ClaudeWrap {
         if !exited { while waitpid(pid, &status, 0) < 0 && errno == EINTR {}; child = 0 }
         let sig = status & 0x7f
         guard sig != 0 else { return (status >> 8) & 0xff }
-        signal(sig, SIG_DFL)
-        raise(sig)
+        // A crash of Claude (SIGSEGV, SIGABRT…) is not re-raised: its crash report would name zagon.
+        if [SIGTERM, SIGINT, SIGHUP, SIGKILL, SIGPIPE].contains(sig) {
+            signal(sig, SIG_DFL)
+            raise(sig)
+        }
         return 128 + sig
     }
 }

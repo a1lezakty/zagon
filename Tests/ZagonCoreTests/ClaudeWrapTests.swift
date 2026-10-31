@@ -107,15 +107,51 @@ import Testing
         #expect(r.status == 3 && Sys.now() - start < 10)
     }
 
-    /// The script in the editor setting: through zagon when it is there, Claude Code directly when it is gone.
+    /// The script in the editor setting: through zagon when it knows claude-wrap; Claude Code directly when zagon is
+    /// gone, older (a rollback: `/bin/false` stands for it) or uninstalled.
     @Test func scriptRunsClaudeDirectlyWithoutZagon() throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
         let args = ["/bin/echo", "hi", "--output-format", "stream-json"]
-        for zagon in [dir + "/gone/zagon"] + (Sys.exists(zagonBin) ? [zagonBin] : []) {
+        for zagon in [dir + "/gone/zagon", "/bin/false", nil] + (Sys.exists(zagonBin) ? [zagonBin] : []) {
             writeScript(dir + "/claude-wrap", Installer.wrapScriptText(zagon: zagon))
             let r = Sys.capture(["/bin/sh", dir + "/claude-wrap"] + args, env: ["HOME": dir, "ZAGON_DIR": dir])
             #expect(r.status == 0 && String(decoding: r.out, as: UTF8.self) == "hi --output-format stream-json\n")
         }
+    }
+
+    /// A data directory other than ~/.zagon reaches the wrapper through the script, not the editor's environment.
+    @Test(.enabled(if: Sys.exists(zagonBin))) func scriptCarriesTheDataDirectory() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        writeScript(dir + "/claude", "#!/bin/sh\necho '\(Self.event)'\n")
+        writeScript(dir + "/claude-wrap", Installer.wrapScriptText(zagon: zagonBin, dataDir: dir + "/data"))
+        let r = Sys.capture(["/usr/bin/env", "-u", "ZAGON_DIR", "/bin/sh", dir + "/claude-wrap", dir + "/claude",
+                             "--output-format", "stream-json"], env: ["HOME": dir])
+        #expect(r.status == 0 && limits(dir + "/data").count == 1 && limits(dir).isEmpty)
+    }
+
+    @Test(.enabled(if: Sys.exists(zagonBin))) func failuresAndMissingBinary() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        // Nothing to spawn: the exec fallback fails too, with a word on stderr.
+        let gone = Sys.capture([zagonBin, "claude-wrap", dir + "/missing", "--output-format", "stream-json"], env: ["ZAGON_DIR": dir])
+        #expect(gone.status == 127 && String(decoding: gone.err, as: UTF8.self).contains("cannot run \(dir)/missing"))
+        // No bundled binary: the extension passes the arguments alone, claude comes from PATH.
+        writeScript(dir + "/claude", "#!/bin/sh\necho \"$@\"\n")
+        let path = Sys.capture([zagonBin, "claude-wrap", "--version"], env: ["ZAGON_DIR": dir, "PATH": dir + ":/usr/bin:/bin"])
+        #expect(path.status == 0 && String(decoding: path.out, as: UTF8.self) == "--version\n")
+        #expect(Sys.capture([zagonBin, "claude-wrap", "--probe"]).status == 0)
+    }
+
+    /// The editor closes the stream: Claude's writes fail as without the wrapper (this one exits then), the wrapper ends.
+    @Test(.enabled(if: Sys.exists(zagonBin))) func aClosedStdoutStopsClaude() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        writeScript(dir + "/claude", "#!/bin/sh\nwhile echo '{\"type\":\"x\"}'; do :; done\n")
+        let start = Sys.now()
+        let r = Sys.capture(["/bin/sh", "-c", "\"$0\" claude-wrap \"$1\" --output-format stream-json | head -c 10 >/dev/null; echo done",
+                             zagonBin, dir + "/claude"], timeout: 20, env: ["ZAGON_DIR": dir])
+        #expect(r.status == 0 && String(decoding: r.out, as: UTF8.self) == "done\n" && Sys.now() - start < 10)
     }
 }
