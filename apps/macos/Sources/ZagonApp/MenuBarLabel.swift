@@ -24,9 +24,9 @@ struct MenuBarLabel: View {
         .fixedSize()
     }
 
-    /// 20 pt rings with a 1.5 pt rim leave a 17 pt hole; "88", the widest pair, is about 11 × 6.4 pt in 9 pt bold, so
-    /// its corners stay ~2 pt off the rim.
-    static let size: CGFloat = 20, line: CGFloat = 1.5
+    /// 20 pt rings with a 2 pt rim leave a 16 pt hole; "88", the widest pair, is about 11 × 6.4 pt in 9 pt bold, so
+    /// its corners stay ~1.5 pt off the rim. A whole-point inset keeps the rim on pixels: 0.75 got rounded off-centre.
+    static let size: CGFloat = 20, line: CGFloat = 2
     static let digits = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .bold)
 
     /// 100 % and over is a full ring with "!": three digits do not fit inside.
