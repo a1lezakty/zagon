@@ -423,12 +423,16 @@ struct Field: View {
     var fill = Z.sidebar
     var border = Z.control
     var radius: CGFloat = 8
+    /// The text is not shown (a token).
+    var secure = false
     @Environment(\.isSnapshot) private var snapshot
     var body: some View {
         Group {
             if snapshot {
-                Text(text.isEmpty ? placeholder : text).foregroundColor(text.isEmpty ? Z.muted : Z.text)
+                Text(text.isEmpty ? placeholder : secure ? "••••••••" : text).foregroundColor(text.isEmpty ? Z.muted : Z.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            } else if secure {
+                SecureField(placeholder, text: $text).textFieldStyle(.plain).foregroundColor(Z.text)
             } else {
                 TextField(placeholder, text: $text).textFieldStyle(.plain).foregroundColor(Z.text)
             }

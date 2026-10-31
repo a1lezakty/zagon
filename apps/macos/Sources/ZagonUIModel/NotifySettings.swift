@@ -48,15 +48,18 @@ public struct NotifySettings: Sendable, Equatable {
 
     /// Writes these settings into the file, keeping every other line, its mode and a symlink (0600 when new). A file
     /// that cannot be read, or is not UTF-8, is left alone.
-    public func save(_ path: String) throws {
+    public func save(_ path: String) throws { try Self.edit(path) { apply(to: $0) } }
+
+    /// Rewrites config.toml through `change`, as `save` does.
+    static func edit(_ path: String, _ change: (String) -> String) throws {
         // A dangling symlink would be replaced by a plain file.
         if (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil, Sys.realPath(path) == nil {
             throw CocoaError(.fileNoSuchFile)
         }
-        let text = try Self.read(path, strict: true)
+        let text = try read(path, strict: true)
         try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
-        guard Sys.writeFile(path, Array(apply(to: text).utf8), mode: 0o600) else { throw CocoaError(.fileWriteUnknown) }
+        guard Sys.writeFile(path, Array(change(text).utf8), mode: 0o600) else { throw CocoaError(.fileWriteUnknown) }
     }
 
     static func read(_ path: String, strict: Bool) throws -> String {
