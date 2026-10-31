@@ -151,14 +151,14 @@ struct ToastView: View {
 struct WelcomeBar: View {
     @EnvironmentObject private var app: AppState
     var body: some View {
-        let f = app.f, vm = MainVM(app.provider, f)
+        let f = app.f
         // macOS 26 lets the user hide menu bar items in its settings.
         let hider = ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0))
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 16) {
                 Banner.blue(Emphasis(before: f.t("welcome.text") + (hider ? "\n" + f.t("welcome.settings") : "")))
                 HStack(alignment: .top, spacing: 6) {
-                    MenuBarLabel(five: vm.five?.pct, week: vm.week?.pct, colored: !app.monoIcon, tint: Z.text)
+                    MenuBarLabel(vm: app.menuBar, colored: !app.monoIcon, tint: Z.text)
                         .scaleEffect(2).frame(width: 88, height: 40)
                     Image(systemName: "arrow.up.right").font(.system(size: 16, weight: .semibold)).foregroundColor(Z.secondary)
                 }

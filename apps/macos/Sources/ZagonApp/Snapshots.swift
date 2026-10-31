@@ -31,51 +31,68 @@ enum Snapshots {
     }
 
     /// The status item on a light, a dark and a wallpaper-tinted menu bar, at the bar's own size and at 2x, monochrome
-    /// and coloured: `menubar-<mode>@<n>x.png`. Columns: 5 hours / week at 2/41, 62/88, 97/100 and no reading.
-    /// `menubar-digits@<n>x.png`: every value 0…99, to see each pair inside its ring.
+    /// and coloured. `menubar-<mode>@<n>x.png`, one AI: 5 hours / week at 2/41, 62/88, 97/100 and no reading.
+    /// `menubar-both-<mode>@<n>x.png`, Claude | Codex: at rest, red digits, red rings, a window without a reading.
+    /// `menubar-digits@<n>x.png` / `menubar-both-digits@<n>x.png`: every value 0…99, to see each one inside its ring.
     static func menubar(_ dir: URL) -> Bool {
         let bars: [(UInt32, Color)] = [(0xF2F2F4, .black.opacity(0.85)), (0x1E1E22, .white.opacity(0.9)),
                                        (0x2F67C8, .white.opacity(0.95))]
-        let states: [(Int?, Int?)] = [(2, 41), (62, 88), (97, 100), (nil, nil)]
+        let f = Fmt(lang: .en, now: Date())
+        func vm(_ ais: [(Tool, Int?, Int?)]) -> MenuBarVM {
+            MenuBarVM(ais: ais.map { MenuBarVM.AI(tool: $0.0, five: $0.1, week: $0.2, colors: .standard($0.0)) }, f)
+        }
+        let sheets: [(String, [MenuBarVM])] = [
+            ("", [vm([(.claude, 2, 41)]), vm([(.claude, 62, 88)]), vm([(.claude, 97, 100)]), vm([(.claude, nil, nil)])]),
+            ("both-", [vm([(.claude, 62, 35), (.codex, 18, 71)]), vm([(.claude, 88, 50), (.codex, 2, 41)]),
+                       vm([(.claude, 97, 100), (.codex, 96, 62)]), vm([(.claude, nil, 35), (.codex, 18, nil)])]),
+        ]
         var ok = true
-        for colored in [false, true] {
-            let sheet = VStack(spacing: 8) {
-                ForEach(bars.indices, id: \.self) { b in
-                    HStack(spacing: 40) {
-                        ForEach(states.indices, id: \.self) { s in
-                            HStack(spacing: 14) {
-                                MenuBarLabel(five: states[s].0, week: states[s].1, colored: colored, tint: bars[b].1)
-                                Image(systemName: "wifi")
-                                Image(systemName: "battery.75percent")
-                                Text("Thu 20:18")
+        for (name, states) in sheets {
+            for colored in [false, true] {
+                let sheet = VStack(spacing: 8) {
+                    ForEach(bars.indices, id: \.self) { b in
+                        HStack(spacing: 40) {
+                            ForEach(states.indices, id: \.self) { s in
+                                HStack(spacing: 14) {
+                                    MenuBarLabel(vm: states[s], colored: colored, tint: bars[b].1)
+                                    Image(systemName: "wifi")
+                                    Image(systemName: "battery.75percent")
+                                    Text("Thu 20:18")
+                                }
                             }
+                            Spacer(minLength: 0)
                         }
-                        Spacer(minLength: 0)
+                        .font(Font(NSFont.menuBarFont(ofSize: 0) as CTFont))
+                        .foregroundColor(bars[b].1)
+                        .padding(.horizontal, 12)
+                        .frame(height: 24)
+                        .background(Color(hex: bars[b].0))
                     }
-                    .font(Font(NSFont.menuBarFont(ofSize: 0) as CTFont))
-                    .foregroundColor(bars[b].1)
-                    .padding(.horizontal, 12)
-                    .frame(height: 24)
-                    .background(Color(hex: bars[b].0))
+                }
+                .padding(8)
+                .background(Color(hex: Palette.muted))
+                for scale in [1, 2] as [CGFloat] {
+                    ok = write(sheet, width: 1280, scale: scale, "menubar-\(name)\(colored ? "color" : "mono")@\(Int(scale))x", dir) && ok
                 }
             }
-            .padding(8)
-            .background(Color(hex: Palette.muted))
+        }
+        for (name, both) in [("", false), ("both-", true)] {
+            let digits = VStack(spacing: 6) {
+                ForEach(0..<10) { r in
+                    HStack(spacing: 16) {
+                        ForEach(0..<5) { c in
+                            let n = r * 10 + c * 2
+                            MenuBarLabel(vm: both ? vm([(.claude, n, 40), (.codex, n + 1, 70)]) : vm([(.claude, n, n + 1)]),
+                                         tint: bars[0].1)
+                        }
+                    }
+                }
+            }
+            .padding(12)
+            .background(Color(hex: bars[0].0))
             for scale in [1, 2] as [CGFloat] {
-                ok = write(sheet, width: 1280, scale: scale, "menubar-\(colored ? "color" : "mono")@\(Int(scale))x", dir) && ok
+                ok = write(digits, width: 320, scale: scale, "menubar-\(name)digits@\(Int(scale))x", dir) && ok
             }
-        }
-        let digits = VStack(spacing: 6) {
-            ForEach(0..<10) { r in
-                HStack(spacing: 16) {
-                    ForEach(0..<5) { c in MenuBarLabel(five: r * 10 + c * 2, week: r * 10 + c * 2 + 1, tint: bars[0].1) }
-                }
-            }
-        }
-        .padding(12)
-        .background(Color(hex: bars[0].0))
-        for scale in [1, 2] as [CGFloat] {
-            ok = write(digits, width: 320, scale: scale, "menubar-digits@\(Int(scale))x", dir) && ok
         }
         return ok
     }
