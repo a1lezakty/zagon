@@ -27,7 +27,7 @@ final class ClaudeEnv {
         if let h = FileHandle(forWritingAtPath: path(rel)) {
             h.truncateFile(atOffset: 0); h.write(text.data(using: .utf8)!); h.closeFile()
         } else {
-            FileManager.default.createFile(atPath: path(rel), contents: text.data(using: .utf8)!)
+            _ = FileManager.default.createFile(atPath: path(rel), contents: text.data(using: .utf8)!)
         }
     }
     func write(_ rel: String, lines: [String]) { write(rel, lines.map { $0 + "\n" }.joined()) }
@@ -40,7 +40,7 @@ final class ClaudeEnv {
     /// A new file renamed over the old path (new inode), like an atomic rewrite or log rotation.
     func replace(_ rel: String, lines: [String]) {
         let tmp = path(rel) + ".tmp"
-        FileManager.default.createFile(atPath: tmp, contents: lines.map { $0 + "\n" }.joined().data(using: .utf8)!)
+        _ = FileManager.default.createFile(atPath: tmp, contents: lines.map { $0 + "\n" }.joined().data(using: .utf8)!)
         #expect(rename(tmp, path(rel)) == 0)
     }
 

@@ -41,9 +41,9 @@ struct TasksScreen: View {
             }
         }
         .task(id: "\(String(describing: app.currentTaskSource))|\(detail?.key ?? "")") {
-            await app.loadTasks(.list)
-            await app.loadTasks(.drafts)
-            if let key = detail?.key { await app.loadTasks(.card(key)) }
+            app.loadTasks(.list)
+            app.loadTasks(.drafts)
+            if let key = detail?.key { app.loadTasks(.card(key)) }
         }
     }
 

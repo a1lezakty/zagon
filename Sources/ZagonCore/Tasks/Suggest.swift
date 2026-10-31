@@ -501,8 +501,8 @@ public struct TaskSuggester {
 
     /// Writes a Jira cache of the day and drops those of other days (only the day being suggested is ever reused).
     func setCache(_ key: String, day: String, _ members: [JValue.Member], now: Timestamp) {
-        try? store.db.run("DELETE FROM meta WHERE (key LIKE 'suggest:jira:%' OR key LIKE 'suggest:jira-ctx:%') AND key NOT LIKE ?",
-                          [.text("%:" + day)])
+        _ = try? store.db.run("DELETE FROM meta WHERE (key LIKE 'suggest:jira:%' OR key LIKE 'suggest:jira-ctx:%') AND key NOT LIKE ?",
+                              [.text("%:" + day)])
         try? setMeta(key, .object([.init("at", .string(Time.dayString(now))), .init("ts", .number("\(now)"))] + members))
     }
 

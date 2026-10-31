@@ -265,7 +265,7 @@ struct TaskMCPJiraTests {
 @Suite struct TaskMCPSuggestTests {
     /// task_suggestions lists (makes) the day's suggestions; the answer needs confirm: true and changes the links.
     @Test func suggestionsThroughMCP() throws {
-        var x = try SuggestFixture()
+        let x = try SuggestFixture()
         let a = try x.tasks.add(title: "Encoder research", key: "PROJ-1")
         try x.tasks.setStatus(a.id, .inProgress)
         try x.f.session("claude:s1", title: "encoder gains", working: [(D0 + 9 * H, D0 + 10 * H)])

@@ -34,7 +34,7 @@ private func h(_ x: Double) -> Double { D0 + x * H }
     /// No task at all: the AI is still asked and suggests new ones; a new task counts nowhere until accepted, then it
     /// is a task here with the stretches linked and its text as the day's worklog text.
     @Test func suggestAcceptRejectNew() throws {
-        var x = try SuggestFixture()
+        let x = try SuggestFixture()
         try x.f.session("claude:s1", title: "retry logic", working: [(h(9), h(10))])
         try x.f.session("claude:s2", title: "retry tests", working: [(h(11), h(11.5))])
         try x.f.session("claude:s3", title: "slides", working: [(h(13), h(13.5))])
@@ -90,7 +90,7 @@ private func h(_ x: Double) -> Double { D0 + x * H }
 
     /// A key only when sure; otherwise the new task the AI gave; a stretch linked meanwhile is not taken.
     @Test func keyWhenSureElseNew() throws {
-        var x = try SuggestFixture()
+        let x = try SuggestFixture()
         let a = try x.tasks.add(title: "Encoder research", key: "PROJ-1")
         try x.tasks.setStatus(a.id, .inProgress)
         try x.f.session("claude:s1", title: "encoder gains", working: [(h(9), h(10))])

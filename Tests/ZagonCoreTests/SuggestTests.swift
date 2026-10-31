@@ -64,7 +64,7 @@ private func h(_ x: Double) -> Double { D0 + x * H }
     /// A suggestion counts nowhere (time, plan) until accepted; accepted it is a manual link for its period only;
     /// asking again does not call the AI twice or add the same suggestion twice; a rejected task is not offered again.
     @Test func suggestAcceptReject() throws {
-        var x = try SuggestFixture()
+        let x = try SuggestFixture()
         let a = try x.tasks.add(title: "Encoder research", key: "PROJ-1"), b = try x.tasks.add(title: "Meetings", key: "OPS-2")
         try x.tasks.setStatus(a.id, .inProgress); try x.tasks.setStatus(b.id, .inProgress)
         try x.f.session("claude:s1", title: "encoder gains", working: [(h(9), h(10)), (h(10.1), h(11))])
@@ -259,7 +259,7 @@ private func h(_ x: Double) -> Double { D0 + x * H }
     /// Asked periods, not one time mark: work going on right after an open suggestion, stretches the size limit left
     /// out, and the rest after a failed call are all asked later; costs add up.
     @Test func everyStretchIsAskedOnce() throws {
-        var x = try SuggestFixture()
+        let x = try SuggestFixture()
         let a = try x.tasks.add(title: "Encoder research", key: "PROJ-1")
         try x.tasks.setStatus(a.id, .inProgress)
         try x.f.session("claude:s1", title: "encoder gains", working: [(h(9), h(10))])
