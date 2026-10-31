@@ -314,8 +314,9 @@ public final class JiraClient {
     /// full. Not one request per issue as `myWorklogs`.
     public func myWorklogs(search jql: String, from: Timestamp, to: Timestamp) throws -> (logs: [JiraWorklog], summary: [String: String]) {
         let me = try accountId()
-        var logs: [JiraWorklog] = [], summary: [String: String] = [:], token: String?
+        var logs: [JiraWorklog] = [], summary: [String: String] = [:], token: String?, pages = 0
         repeat {
+            pages += 1
             var body: [String: JSONValue] = ["jql": .s(jql), "fields": .a([.s("summary"), .s("worklog")]), "maxResults": .n(100)]
             if let token { body["nextPageToken"] = .s(token) }
             let page = try JSONDecoder().decode(WorklogSearchPage.self, from: Data(try request("POST", "/rest/api/2/search/jql",
@@ -324,11 +325,14 @@ public final class JiraClient {
                 summary[i.key] = i.fields?.summary ?? ""
                 let all: [JiraWorklog]
                 if let w = i.fields?.worklog, let ws = w.worklogs, ws.count >= w.total ?? .max { all = ws.compactMap { Self.worklog($0, i.key) } }
-                else { all = try worklogs(issue: i.key, startedAfter: from - 86400) }
+                else {
+                    do { all = try worklogs(issue: i.key, startedAfter: from - 86400) }
+                    catch JiraError.http(404, _) { all = [] }  // gone since the search
+                }
                 logs += all.filter { $0.accountId == me && $0.started >= from && $0.started < to }
             }
             token = page.issues.isEmpty || page.isLast == true ? nil : page.nextPageToken
-        } while token != nil && summary.count < 10_000
+        } while token != nil && pages < 200
         return (logs, summary)
     }
 

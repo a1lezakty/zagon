@@ -116,6 +116,7 @@ public struct Reconcile: Codable, Sendable {
 
     /// Claude Code deletes transcripts older than its `cleanupPeriodDays` (30 by default), so its history is whole
     /// only from the earliest end of a Claude session Zagon has; Codex keeps everything (then its first session).
+    /// ponytail: that first day itself may miss sessions deleted before Zagon read them (nothing here tells it apart).
     static func coverageFrom(_ db: SQLite) throws -> String? {
         let t = try db.one("""
             SELECT coalesce((SELECT min(last_at) FROM session WHERE tool = 'claude' AND last_at IS NOT NULL),
@@ -128,11 +129,17 @@ public struct Reconcile: Codable, Sendable {
 extension DayWorklog {
     /// Your time per task and day (`TaskTime`, as `log plan` counts it; links refreshed first) against your worklogs
     /// started in the range, matched by Jira key and local day. Days after `today` are not counted, days before
-    /// `Reconcile.coverageFrom` are not reconciled. Jira: the `worklogAuthor` search (paged), then each issue's own
-    /// worklog list; the issues of tasks worked in the range and of worklogs Zagon wrote are read directly too, as the
-    /// search index lags a new worklog by minutes. A Jira failure leaves the sessions part.
+    /// `Reconcile.coverageFrom` are not reconciled. Jira: the `worklogAuthor` search (paged) with each issue's worklogs
+    /// (`JiraClient.myWorklogs(search:)`); the issues of tasks worked in the range and of worklogs Zagon wrote that it
+    /// did not find are read directly, as the search index lags a new worklog by minutes. A Jira failure leaves the
+    /// sessions part.
     public func reconcile(from: String, to requested: String, today: String = Time.dayString(Time.now())) throws -> Reconcile {
-        guard Time.parseDay(from) != nil, Time.parseDay(requested) != nil, Time.parseDay(today) != nil else { throw TaskError("dates must be YYYY-MM-DD") }
+        // Days are compared as strings: `2026-10-1` becomes `2026-10-01`; a date that does not exist (02-31) is refused.
+        func norm(_ s: String) throws -> String {
+            guard let p = Time.parseDay(s), let d = Time.addDays(s, 0), Time.parseDay(d)?.2 == p.2 else { throw TaskError("\(s): dates must be YYYY-MM-DD") }
+            return d
+        }
+        let (from, requested, today) = (try norm(from), try norm(requested), try norm(today))
         let to = min(requested, today)
         guard from <= to else { throw TaskError(from > today ? "from \(from) is after today" : "from \(from) is after to \(to)") }
         var days = [from]
@@ -283,7 +290,9 @@ extension DayWorklog {
             do { out += try jira.worklogs(issue: k, startedAfter: from - 86400).filter { $0.accountId == me && $0.started >= from && $0.started < to } }
             catch JiraError.http(404, _) { continue }
         }
-        return (out.sorted { $0.started < $1.started }, summary)
+        // A moved issue's old key (kept by a task) reads the same worklogs again under that key: count each once.
+        var seen = Set<String>()
+        return (out.filter { seen.insert($0.id).inserted }.sorted { $0.started < $1.started }, summary)
     }
 }
 
@@ -312,7 +321,10 @@ public enum ReconcileText {
         if let c = r.coverageFrom, c > r.from {
             out.append("reconciled from \(c): no whole session history before it"
                        + (r.totals.jiraBeforeCoverageSec > 0 ? "; Jira has \(hm(r.totals.jiraBeforeCoverageSec)) there" : ""))
-        } else if r.coverageFrom == nil { out.append("no sessions yet: nothing to reconcile") }
+        } else if r.coverageFrom == nil {
+            out.append("no sessions yet: nothing to reconcile"
+                       + (r.totals.jiraBeforeCoverageSec > 0 ? "; Jira has \(hm(r.totals.jiraBeforeCoverageSec)) in the range" : ""))
+        }
         switch r.jira {
         case "connected": break
         case "failed": out.append("Jira failed, sessions only: \(r.jiraError ?? "")")
@@ -357,8 +369,8 @@ public enum ReconcileText {
         if r.jira == "connected" {
             out += ["| In Jira | \(hm(r.totals.jiraSec)) |", "| Not logged | \(hm(r.totals.unloggedSec)) |",
                     "| In Jira beyond sessions | \(hm(r.totals.jiraOnlySec)) |"]
-            if r.totals.jiraBeforeCoverageSec > 0, let c = r.coverageFrom {
-                out.append("| In Jira before \(c) (not reconciled) | \(hm(r.totals.jiraBeforeCoverageSec)) |")
+            if r.totals.jiraBeforeCoverageSec > 0 {
+                out.append("| In Jira \(r.coverageFrom.map { "before \($0)" } ?? "with no sessions") (not reconciled) | \(hm(r.totals.jiraBeforeCoverageSec)) |")
             }
         }
         out += ["| Tasks with no Jira key | \(hm(r.totals.zagonOnlySec)) |", "| No task | \(hm(r.totals.noTaskSec)) |", "",

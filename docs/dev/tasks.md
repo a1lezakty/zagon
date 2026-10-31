@@ -125,17 +125,21 @@ found → `logged`; not found and the claim older than 5 min → `planned` again
 
 `zagon log reconcile --from --to [--json|--md|--csv]`, MCP `worklog_reconcile`, the Mac app: your time per task and
 day over a range (at most 400 days; days after today are not counted, `to` says the last one) against your worklogs
-started in it, matched by Jira key and local day. Links are refreshed once for the range, then `TaskTime.compute` per
-day (as `log plan` counts it). Jira is only read: the `worklogAuthor` search a day wider (paged), then each issue's own
-worklog list (one request per issue, not per day); the issues of tasks worked in the range and of rows Zagon logged
-are read directly too (the search index lags a new worklog). Jira failing or not connected leaves the sessions part,
-with `jira` = `failed` / `not_connected`.
+started in it, matched by Jira key and local day (dates are normalized: `2026-10-1` = `2026-10-01`, `02-31` is
+refused). Links are refreshed once for the range, then `TaskTime.compute` per day (as `log plan` counts it). Jira is
+only read: the `worklogAuthor` search a day wider (`JiraClient.myWorklogs(search:)`: `/rest/api/2/search/jql` with the
+`worklog` field, paged; Jira embeds up to 20 worklogs per issue, an issue with more is read in full); the issues of
+tasks worked in the range and of rows Zagon logged that the search did not find are read directly (the search index
+lags a new worklog; an old key of a moved issue reads the same worklogs: each id counts once). Live, 2 months: 7
+requests, 8.5 s (3 months 11 s; without Jira 6 s). Jira failing or not connected leaves the sessions part, with `jira` =
+`failed` / `not_connected`. Local task links are refreshed as for `log plan`; nothing is written to Jira.
 Status of a task's day: `only_sessions`, `only_jira`, `mismatch` (apart by more than `[worklog]
 reconcile_tolerance_min`, default 15), `match`; over the range a task matches only when every day does. A task with
 no Jira key is `zagon_only`, work with no task is `no_task`, a row per project and branch (its time split by each
 session's working time that day). `coverage_from`: Claude Code deletes transcripts after `cleanupPeriodDays`, so
-history is whole from the earliest end of a Claude session on (no Claude sessions: the first session); earlier days are
-not reconciled, their worklogs only sum to `jira_before_coverage_sec`. Totals: `session_sec - jira_sec ==
+history is whole from the earliest end of a Claude session on (no Claude sessions: the first session; that first day
+may itself miss sessions deleted before Zagon read them); earlier days are not reconciled, their worklogs only sum to
+`jira_before_coverage_sec`. Totals: `session_sec - jira_sec ==
 unlogged_sec - jira_only_sec`. Markdown, CSV (a line per task and day, minutes) and JSON come from `ReconcileText`.
 
 ## Suggestions (`TaskSuggester`, Tasks/Suggest.swift)

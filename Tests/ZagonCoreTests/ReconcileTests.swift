@@ -49,7 +49,7 @@ struct ReconcileTests {
     /// worklogs the search does not see yet, one of them 01:30 +03:00 on 10-30 = 22:30 on 10-29 here. PROJ-3: worked
     /// 10-30, logged 10-31 (same length, other day). OPS-4: logged, no task here. 1 h of work with no task. ZAG-1: own
     /// task, 30 m.
-    func fixture(_ jira: JiraClient?, setupError: String? = nil) throws -> DayWorklog {
+    func fixture(_ jira: JiraClient?, setupError: String? = nil, extra: (Fixture) throws -> Void = { _ in }) throws -> DayWorklog {
         let f = try Fixture(), t = Tasks(store: f.store)
         try t.add(title: "dialogs", key: "PROJ-1"); try t.add(title: "reports", key: "PROJ-2"); try t.add(title: "exports", key: "PROJ-3")
         let own = try t.add(title: "own")
@@ -63,6 +63,7 @@ struct ReconcileTests {
         try f.session("claude:e", branch: "PROJ-3", title: "Export work", working: [(D0 + 35 * H, D0 + 36 * H)])
         try t.setDone(own.id, day: "2026-10-29", text: "Own work by hand")
         try f.session("claude:d", branch: "PROJ-1", title: "Night dialogs", working: [(D0 + 71 * H, D0 + 73 * H)])
+        try extra(f)
         return DayWorklog(store: f.store, linker: try TaskLinker(), jira: jira, jiraSetupError: setupError)
     }
 
@@ -129,6 +130,25 @@ struct ReconcileTests {
         #expect(ReconcileText.text(r).hasPrefix("2026-10-27 – 2026-11-01: worked 10:30 · in Jira 7:05 · not logged 5:30"))
     }
 
+    /// A task kept the old key of a moved issue: the search finds the new key, the direct read of the old one returns
+    /// the same worklog; it counts once. An issue gone between the search and its full read (404) is skipped.
+    @Test func movedIssueCountsOnceAndGoneIssueIsSkipped() throws {
+        let moved = #""MOVED-9": {"summary": "Moved", "status": "Done", "category": "done", "assignee": "acc-me", "worklogs": [{"id": "9", "author": "acc-me", "started": "2026-10-29T18:00:00.000+0000", "seconds": 1200}]},"#
+        let s = Self.state.replacingOccurrences(of: #"{"me": "acc-me", "issues": {"#,
+                                                with: #"{"me": "acc-me", "aliases": {"OLD-1": "MOVED-9"}, "worklog_404": ["PROJ-1"], "issues": {"# + moved)
+        let m = try JiraMock(state: s)
+        let w = try fixture(try JiraClient(m.config)) { f in
+            try Tasks(store: f.store).add(title: "moved", key: "OLD-1")
+            try f.session("claude:m", branch: "OLD-1", title: "Moved work", working: [(D0 + 18 * H, D0 + 19 * H)])
+        }
+        let r = try w.reconcile(from: "2026-10-29", to: "2026-10-29", today: reconcileToday)
+        #expect(r.jira == "connected", "\(r.jiraError ?? "")")
+        #expect(r.days.flatMap(\.rows).flatMap(\.worklogs).filter { $0.id == "9" }.count == 1)
+        #expect(row(r, "2026-10-29", "OLD-1")?.status == .onlySessions && row(r, "2026-10-29", "MOVED-9")?.jiraSec == 1200)
+        // PROJ-1 has 4 worklogs (more than the mock embeds) and its full read is 404: nothing from it, no failure.
+        #expect(row(r, "2026-10-29", "PROJ-1")?.jiraSec == 0)
+    }
+
     @Test func toleranceFromTheWorklog() throws {
         let m = try JiraMock(state: Self.state)
         var w = try fixture(try JiraClient(m.config))
@@ -168,6 +188,10 @@ struct ReconcileTests {
         #expect(throws: TaskError.self) { try w.reconcile(from: "2026-10-30", to: "2026-10-29", today: reconcileToday) }
         #expect(throws: TaskError.self) { try w.reconcile(from: "2026-10-29", to: "29.10.2026", today: reconcileToday) }
         #expect(throws: TaskError.self) { try w.reconcile(from: "2025-01-01", to: "2026-10-29", today: reconcileToday) }
+        #expect(throws: TaskError.self) { try w.reconcile(from: "2026-02-31", to: "2026-10-29", today: reconcileToday) }
+        // Not zero-padded: the same days as padded ones.
+        let loose = try w.reconcile(from: "2026-10-9", to: "2026-10-30", today: "2026-11-3")
+        #expect(loose.from == "2026-10-09" && loose.to == "2026-10-30" && loose.days.map(\.day) == ["2026-10-29"])
     }
 
     /// A range into the future is counted to today and says so; a range that starts after today is refused.

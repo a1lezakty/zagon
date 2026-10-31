@@ -119,7 +119,9 @@ class H(BaseHTTPRequestHandler):
                 out["nextPageToken"] = str(at + 1)
             return self.send(200, out)
         if len(parts) >= 5 and parts[:4] == ["rest", "api", "2", "issue"]:
-            key = parts[4]
+            key = state.get("aliases", {}).get(parts[4], parts[4])  # a moved issue's old key
+            if key in state.get("worklog_404", []) and parts[-1] == "worklog":
+                return self.send(404, {"errorMessages": ["Issue does not exist"]})
             if key not in issues:
                 return self.send(404, {"errorMessages": ["Issue does not exist"]})
             i = issues[key]
