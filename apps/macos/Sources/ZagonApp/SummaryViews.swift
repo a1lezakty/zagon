@@ -99,7 +99,7 @@ extension AppState {
                 }
             }
             let message = ((sent.isEmpty ? [] : [f.t("settings.summary.sent", sent.joined(separator: ", "))]) + failed).joined(separator: "\n")
-            await MainActor.run {
+            await MainActor.run { [sent] in
                 self.summaries.atMessage = message
                 for h in sent { self.summaries.serverAt[h] = at ?? "off" }
             }

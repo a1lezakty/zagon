@@ -319,8 +319,8 @@ public struct DaySummary {
         let w = words
         guard !f.sessions.isEmpty, let r = complete(DaySummary.instruction(w) + DaySummary.digest(f, w)) else { return nil }
         let refs = f.sessions.map { SummaryDoc.Ref(project: $0.project ?? w.tool($0.tool), sec: $0.workingSec, cost: $0.cost, keys: $0.tasks) }
-        guard var (doc, unused) = SummaryDoc.parse(answer: r.text, refs: refs, tasks: f.tasks, lang: w.en ? "en" : "ru",
-                                                   from: f.day, to: f.day) else {
+        guard case (var doc, let unused)? = SummaryDoc.parse(answer: r.text, refs: refs, tasks: f.tasks, lang: w.en ? "en" : "ru",
+                                                              from: f.day, to: f.day) else {
             failure.reason = "the \(r.engine) answer has no cards"; log("summary: " + failure.reason!); return nil
         }
         if doc.overview.isEmpty { doc.overview = DaySummary.plain(f, w).overview }
