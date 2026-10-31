@@ -56,11 +56,30 @@ public struct LimitWindow: Sendable {
 public struct AILimits: Sendable {
     public var fiveHour: LimitWindow?
     public var week: LimitWindow?
-    public init(fiveHour: LimitWindow? = nil, week: LimitWindow? = nil) { self.fiveHour = fiveHour; self.week = week }
+    /// The first week reading over a minute after the 5-hour window was due (`fiveDue`), for `weekOnly`; nil = none.
+    public var weekAlone: Date?
+    public init(fiveHour: LimitWindow? = nil, week: LimitWindow? = nil, weekAlone: Date? = nil) {
+        self.fiveHour = fiveHour; self.week = week; self.weekAlone = weekAlone
+    }
 
     /// A window was read since its last reset. An older reading is stale: the window started over, usage is unknown
     /// (`RingVM.pct` is nil then).
     public func current(at now: Date) -> Bool { [fiveHour, week].contains { $0?.pct(at: now) != nil } }
+
+    /// When the 5-hour window should have been read again: with every week reading while it runs (each reply brings
+    /// both), at the first reply after its reset once it is over.
+    public func fiveDue(at now: Date) -> Date? { fiveHour.map { $0.pct(at: now) != nil ? $0.readAt ?? now : $0.resetsAt } }
+
+    /// The plan has no 5-hour window (Claude Ultra since 31.10.2026: only the weekly limit), so the rings show the week
+    /// alone. The week is current, and the 5-hour window never came, or the week has come for 10 minutes since it was
+    /// due without it. A status line drops the 5-hour window at its reset and brings it back with the next reply, so a
+    /// reading at the reset or the first one after a long idle (seconds before the reply) is not enough.
+    public func weekOnly(at now: Date) -> Bool {
+        guard week?.pct(at: now) != nil else { return false }
+        guard fiveHour != nil else { return true }
+        guard let alone = weekAlone, let read = week?.readAt else { return false }
+        return read.timeIntervalSince(alone) >= 600
+    }
 }
 
 /// The limits of Claude and Codex, each AI on its own.
@@ -94,10 +113,30 @@ public struct Limits: Sendable {
     /// after a reset shows the hint until the next terminal reply. Exact: count only `entrypoint: claude-vscode`
     /// sessions, once the store keeps it (track core).
     public func claudeHint(at now: Date) -> Bool {
-        guard let seen = claudeSeen, now.timeIntervalSince(seen) < 7 * 86400 else { return false }
+        guard let seen = claudeSeen, now.timeIntervalSince(seen) < 7 * 86400, !weekOnly(.claude, at: now) else { return false }
         let windows = [claude.fiveHour, claude.week]
         if windows.allSatisfy({ $0 == nil }) { return true }
         return windows.contains { w in w.map { $0.pct(at: now) == nil && $0.resetsAt < seen } ?? false }
+    }
+
+    /// `AILimits.weekOnly` of one AI. A Claude status line left open re-sends its last reading every minute (on some
+    /// servers), also when nobody is at Claude after a reset; so with an old 5-hour reading Claude must also have been
+    /// used since it was due.
+    /// ponytail: use in an editor's panel (no status line) next to such an idle terminal still counts; exact would be
+    /// per-session readings.
+    public func weekOnly(_ tool: Tool, at now: Date) -> Bool {
+        let l = self[tool]
+        guard l.weekOnly(at: now) else { return false }
+        guard tool == .claude, let due = l.fiveDue(at: now) else { return true }
+        return claudeSeen.map { $0 > due } ?? false
+    }
+
+    /// The limits as the rings show them: an AI without a 5-hour window (`weekOnly`) has none, not its last one.
+    public func forRings(at now: Date) -> Limits {
+        var l = self
+        if weekOnly(.claude, at: now) { l.claude.fiveHour = nil }
+        if weekOnly(.codex, at: now) { l.codex.fiveHour = nil }
+        return l
     }
 
     /// The AIs shown, Claude first: those with a current reading, and Claude under `claudeHint`. Two: a ring-in-ring

@@ -88,6 +88,33 @@ final class StoreDataProviderTests: XCTestCase {
         XCTAssertNil(p.limits().claudeSeen)
     }
 
+    /// `AILimits.weekAlone`: the first week reading over a minute after the 5-hour one was due; none while both come.
+    func testWeekAlone() throws {
+        let p = try StoreDataProvider.fixture(Self.fixtures)
+        let now = p.now.timeIntervalSince1970
+        _ = try p.query.db.run("DELETE FROM limit_snapshot")
+        func add(_ window: String, _ pct: Double, resets: Double, at ts: Double) throws {
+            _ = try p.query.db.run("INSERT INTO limit_snapshot VALUES('claude', ?, ?, ?, NULL, ?)",
+                                   [.text(window), .real(pct), .real(resets), .real(ts)])
+        }
+        // Both come: nothing alone.
+        try add("five_hour", 30, resets: now + 3600, at: now - 120)
+        try add("seven_day", 40, resets: now + 86400, at: now - 120)
+        XCTAssertNil(p.limits().claude.weekAlone)
+        // The week alone since: from its first reading over a minute after the 5 hours'.
+        try add("seven_day", 40, resets: now + 86400, at: now - 90)  // within the minute: a reset's own reading
+        try add("seven_day", 41, resets: now + 86400, at: now - 30)
+        try add("seven_day", 41, resets: now + 86400, at: now)
+        let l = p.limits()
+        XCTAssertEqual(l.claude.weekAlone?.timeIntervalSince1970, now - 30)
+        XCTAssertEqual(l.claude.week?.readAt?.timeIntervalSince1970, now)
+        // The 5 hours over: due at their reset.
+        _ = try p.query.db.run("UPDATE limit_snapshot SET resets_at = ? WHERE window = 'five_hour'", [.real(now - 100)])
+        XCTAssertEqual(p.limits().claude.weekAlone?.timeIntervalSince1970, now - 30)
+        _ = try p.query.db.run("UPDATE limit_snapshot SET resets_at = ? WHERE window = 'five_hour'", [.real(now - 50)])
+        XCTAssertNil(p.limits().claude.weekAlone)
+    }
+
     /// Under the hint, the editors' settings of the home folder: off in the editor found, then on.
     func testClaudeEditors() throws {
         let p = try StoreDataProvider.fixture(Self.fixtures)

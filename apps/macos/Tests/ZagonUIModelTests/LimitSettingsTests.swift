@@ -71,14 +71,14 @@ final class LimitSettingsTests: XCTestCase {
                                    codex: AILimits(fiveHour: LimitWindow(usedPct: 50, resetsAt: gone, tool: .codex))), f)
         XCTAssertEqual(old.tip, "Claude: 5 ч –, неделя –")
 
-        // Both current, Claude without a week; over 100 %.
+        // Both current, Claude without a week; over 100 %. Codex with only its week: no 5-hour window (`weekOnly`).
         let soon = p.now.addingTimeInterval(600)
         let gap = MenuBarVM(Limits(claude: AILimits(fiveHour: LimitWindow(usedPct: 103, resetsAt: soon, tool: .claude)),
                                    codex: AILimits(week: LimitWindow(usedPct: 20, resetsAt: soon, tool: .codex))), f)
         XCTAssertTrue(gap.nested)
         XCTAssertEqual([gap.ais[0].five, gap.ais[0].week, gap.ais[1].five, gap.ais[1].week], [103, nil, nil, 20])
         XCTAssertTrue(gap.alarm)
-        XCTAssertEqual(gap.tip, "Claude: 5 ч 103 %, неделя – · Codex: 5 ч –, неделя 20 %")
+        XCTAssertEqual(gap.tip, "Claude: 5 ч 103 %, неделя – · Codex: неделя 20 % (без 5-часового лимита)")
 
         let none = MenuBarVM(Limits(), f)
         XCTAssertEqual([none.tip, none.spoken], ["5 ч: – · неделя: –", "Zagon: нет данных"])
@@ -86,6 +86,100 @@ final class LimitSettingsTests: XCTestCase {
 
     /// Claude used where its status line does not run (the VS Code / Cursor extension): no reading, yet it is shown with
     /// "–" and where its limits come from, not left out as if broken.
+    /// A plan without a 5-hour window (any AI): the week ring alone with the week's number, alarm by the week. Not
+    /// when the 5 hours only reset (the next reply brings them back) or nobody used Claude since.
+    func testWeekOnly() {
+        var p = MockDataProvider(lang: .ru, timeZone: utc)
+        let f = Fmt(lang: .ru, timeZone: utc, now: p.now)
+        let fixed = { (l: Limits) in MainVM(ZagonUIModelTests.Fixed(base: p, l: l), f) }
+        let week = { (pct: Double, tool: Tool, read: Date) in LimitWindow(usedPct: pct, resetsAt: p.at(33, 9), tool: tool, readAt: read) }
+
+        // Only the week, Claude alone: one ring, the week's number; no hint, nothing missing.
+        p.weekOnly = true
+        var l = p.limits()
+        l.claudeSeen = p.ago(1)
+        XCTAssertTrue(l.weekOnly(.claude, at: p.now))
+        XCTAssertFalse(l.claudeHint(at: p.now))
+        let one = MenuBarVM(l, f)
+        XCTAssertEqual(one.ais, [MenuBarVM.AI(tool: .claude, five: nil, week: 41, colors: .standard(.claude), weekOnly: true)])
+        XCTAssertFalse(one.nested)
+        XCTAssertEqual(one.tip, "Claude: неделя 41 % (без 5-часового лимита)")
+        XCTAssertEqual(one.spoken, "Zagon: Claude: неделя — использовано 41 % (без 5-часового лимита)")
+        let panel = fixed(l)
+        XCTAssertTrue(panel.weekOnly)
+        XCTAssertNil(panel.five)
+        XCTAssertEqual(panel.week?.pct, 41)
+        XCTAssertFalse(panel.limitsMissing)
+        XCTAssertNil(panel.claudeHint)
+        XCTAssertNil(panel.forecast)
+        XCTAssertEqual(panel.limitsHeader, "ЛИМИТЫ CLAUDE")
+        // Alarm by the week: digits from 80 %, the ring from 95 %.
+        l.claude.week = week(85, .claude, p.ago(1))
+        XCTAssertTrue(MenuBarVM(l, f).alarm)
+
+        // Both AIs: Claude's week ring alone, Codex's ring-in-ring; alarm by Claude's week even next to Codex.
+        p.codexLimits = true
+        l = p.limits()
+        let both = MenuBarVM(l, f)
+        XCTAssertTrue(both.nested)
+        XCTAssertEqual(both.ais.map(\.weekOnly), [true, false])
+        XCTAssertEqual(both.ais.map { [$0.five, $0.week] }, [[nil, 41], [18, 71]])
+        XCTAssertEqual(both.tip, "Claude: неделя 41 % (без 5-часового лимита) · Codex: 5 ч 18 %, неделя 71 %")
+        XCTAssertFalse(both.alarm)
+        l.claude.week = week(85, .claude, p.ago(1))
+        XCTAssertTrue(MenuBarVM(l, f).alarm)
+        let rings = fixed(p.limits()).ais
+        XCTAssertEqual(rings.map(\.weekOnly), [true, false])
+        XCTAssertEqual(rings[0].spoken, "Claude: " + rings[0].week.spoken + " (без 5-часового лимита)")
+        XCTAssertFalse(fixed(p.limits()).limitsMissing)
+        // Codex without its 5 hours, alone: the same, no session needed.
+        let codex = Limits(codex: AILimits(week: week(30, .codex, p.ago(1))))
+        XCTAssertTrue(codex.weekOnly(.codex, at: p.now))
+        XCTAssertEqual(MenuBarVM(codex, f).ais.map(\.weekOnly), [true])
+
+        // The 5 hours came back: as before.
+        p.codexLimits = false
+        p.weekOnly = false
+        l = p.limits()
+        l.claudeSeen = p.ago(1)
+        XCTAssertFalse(l.weekOnly(.claude, at: p.now))
+        XCTAssertEqual(MenuBarVM(l, f).ais, [MenuBarVM.AI(tool: .claude, five: 62, week: 41, colors: .standard(.claude))])
+        XCTAssertFalse(fixed(l).weekOnly)
+
+        // The 5-hour reading from before, the week coming alone for 10 minutes since it was due, Claude used: week-only.
+        // While the window still runs (the plan changed in it), and after its reset.
+        for five in [LimitWindow(usedPct: 30, resetsAt: p.at(30, 14), tool: .claude, readAt: p.ago(40)),
+                     LimitWindow(usedPct: 30, resetsAt: p.ago(40), tool: .claude, readAt: p.ago(200))] {
+            l = Limits(claude: AILimits(fiveHour: five, week: week(41, .claude, p.ago(1)), weekAlone: p.ago(12)), claudeSeen: p.ago(1))
+            XCTAssertTrue(l.weekOnly(.claude, at: p.now))
+            XCTAssertNil(l.forRings(at: p.now).claude.fiveHour)
+            XCTAssertEqual(MenuBarVM(l, f).ais.map { [$0.five, $0.week] }, [[nil, 41]])
+            XCTAssertNil(fixed(l).limitsAge)  // the old 5-hour reading does not age the rings
+            // Under 10 minutes: not yet.
+            l.claude.weekAlone = p.ago(5)
+            XCTAssertFalse(l.weekOnly(.claude, at: p.now))
+            // Nobody at Claude since it was due (a status line left open re-sends its reading): not week-only.
+            l.claude.weekAlone = p.ago(12)
+            l.claudeSeen = p.ago(300)
+            XCTAssertFalse(l.weekOnly(.claude, at: p.now))
+        }
+        // The 5 hours reset, live use: the first reading after a long idle comes seconds before the reply that brings
+        // them back. Not week-only: the stale ring with "–" next to the week, as before.
+        l = Limits(claude: AILimits(fiveHour: LimitWindow(usedPct: 30, resetsAt: p.ago(180), tool: .claude, readAt: p.ago(200)),
+                                    week: week(41, .claude, p.ago(0.1)), weekAlone: p.ago(0.1)), claudeSeen: p.ago(0.1))
+        XCTAssertFalse(l.weekOnly(.claude, at: p.now))
+        let reset = MenuBarVM(l, f)
+        XCTAssertEqual(reset.ais, [MenuBarVM.AI(tool: .claude, five: nil, week: 41, colors: .standard(.claude))])
+        XCTAssertTrue(reset.tip.hasPrefix("Claude: 5 ч –, неделя 41 %"))
+        XCTAssertTrue(fixed(l).limitsMissing)
+        // No week reading since the reset at all: as before.
+        l.claude.weekAlone = nil
+        XCTAssertFalse(l.weekOnly(.claude, at: p.now))
+        // The week itself stale: nothing current, no week-only.
+        l = Limits(claude: AILimits(week: LimitWindow(usedPct: 41, resetsAt: p.ago(1), tool: .claude, readAt: p.ago(60))))
+        XCTAssertFalse(l.weekOnly(.claude, at: p.now))
+    }
+
     func testClaudeHint() {
         var p = MockDataProvider(lang: .ru, timeZone: utc)
         let f = Fmt(lang: .ru, timeZone: utc, now: p.now)
