@@ -84,6 +84,65 @@ final class LimitSettingsTests: XCTestCase {
         XCTAssertEqual([none.tip, none.spoken], ["5 ч: – · неделя: –", "Zagon: нет данных"])
     }
 
+    /// Claude used where its status line does not run (the VS Code / Cursor extension): no reading, yet it is shown with
+    /// "–" and where its limits come from, not left out as if broken.
+    func testClaudeHint() {
+        var p = MockDataProvider(lang: .ru, timeZone: utc)
+        let f = Fmt(lang: .ru, timeZone: utc, now: p.now)
+        let hint = "Лимиты Claude приходят из claude в терминале. В Cursor и VS Code включи claudeCode.useTerminal."
+        let fixed = { (l: Limits) in MainVM(ZagonUIModelTests.Fixed(base: p, l: l), f) }
+
+        // Sessions, no reading: Claude alone, its pair of rings with "–".
+        p.claudeUnread = true
+        let unread = p.limits()
+        XCTAssertTrue(unread.claudeHint(at: p.now))
+        let alone = MenuBarVM(unread, f)
+        XCTAssertEqual(alone.ais, [MenuBarVM.AI(tool: .claude, five: nil, week: nil, colors: .standard(.claude))])
+        XCTAssertEqual(alone.tip, "Claude: 5 ч –, неделя –\n" + hint)
+        XCTAssertTrue(alone.spoken.hasSuffix("нет данных. " + hint))
+        let panel = MainVM(p, f)
+        XCTAssertEqual([panel.claudeHint, panel.limitsMissing], [true, true])
+        XCTAssertTrue(panel.ais.isEmpty)
+        XCTAssertNil(panel.five)
+        XCTAssertEqual(panel.limitsHeader, "ЛИМИТЫ CLAUDE")
+        // With Codex: both, a ring-in-ring each (before, Codex alone).
+        p.codexLimits = true
+        let both = MenuBarVM(p.limits(), f)
+        XCTAssertTrue(both.nested)
+        XCTAssertEqual(both.ais.map { [$0.five, $0.week] }, [[nil, nil], [18, 71]])
+        XCTAssertEqual(both.tip, "Claude: 5 ч –, неделя – · Codex: 5 ч 18 %, неделя 71 %\n" + hint)
+        XCTAssertEqual(MainVM(p, f).ais.map { [$0.five.pct, $0.week.pct] }, [[nil, nil], [18, 71]])
+        XCTAssertTrue(MainVM(p, f).claudeHint)
+
+        // A current reading: as before.
+        p.claudeUnread = false
+        var l = p.limits()
+        l.claudeSeen = p.now
+        XCTAssertFalse(l.claudeHint(at: p.now))
+        XCTAssertEqual(MenuBarVM(l, f).tip, "Claude: 5 ч 62 %, неделя 41 % · Codex: 5 ч 18 %, неделя 71 %")
+        XCTAssertFalse(fixed(l).claudeHint)
+        // No Claude session in 7 days: Codex alone, as before.
+        l.claude = AILimits()
+        for seen in [nil, p.now.addingTimeInterval(-8 * 86400)] {
+            l.claudeSeen = seen
+            XCTAssertEqual(l.tools(at: p.now), [.codex])
+            XCTAssertEqual(MenuBarVM(l, f).tip, "Codex: 5 ч 18 %, неделя 71 %")
+            XCTAssertFalse(fixed(l).claudeHint)
+        }
+
+        // A reading from before the reset: just old if Claude was not used since (an idle week); the hint once it was.
+        let reset = p.now.addingTimeInterval(-3600), five = LimitWindow(usedPct: 97, resetsAt: reset - 86400, tool: .claude)
+        var old = Limits(claude: AILimits(fiveHour: five, week: LimitWindow(usedPct: 47, resetsAt: reset, tool: .claude)),
+                         claudeSeen: reset - 60)
+        XCTAssertFalse(old.claudeHint(at: p.now))
+        XCTAssertEqual(MenuBarVM(old, f).tip, "Claude: 5 ч –, неделя –")
+        XCTAssertFalse(fixed(old).claudeHint)
+        old.claudeSeen = reset + 60
+        XCTAssertTrue(old.claudeHint(at: p.now))
+        XCTAssertEqual(MenuBarVM(old, f).tip, "Claude: 5 ч –, неделя –\n" + hint)
+        XCTAssertTrue(fixed(old).claudeHint)
+    }
+
     /// The status item's picture is drawn when what it shows changes, not each time the label asks for it (0.1.2 drew it
     /// on every update of the app, and a redraw set off the next one: a busy core).
     @MainActor

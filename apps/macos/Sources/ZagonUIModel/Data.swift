@@ -67,7 +67,11 @@ public struct AILimits: Sendable {
 public struct Limits: Sendable {
     public var claude: AILimits
     public var codex: AILimits
-    public init(claude: AILimits = AILimits(), codex: AILimits = AILimits()) { self.claude = claude; self.codex = codex }
+    /// When a Claude session was last active, within the last 7 days; nil = none.
+    public var claudeSeen: Date?
+    public init(claude: AILimits = AILimits(), codex: AILimits = AILimits(), claudeSeen: Date? = nil) {
+        self.claude = claude; self.codex = codex; self.claudeSeen = claudeSeen
+    }
 
     /// Both windows of one AI (the samples): Codex's when the first window says so, else Claude's.
     public init(fiveHour: LimitWindow?, week: LimitWindow?) {
@@ -78,12 +82,23 @@ public struct Limits: Sendable {
 
     public subscript(_ tool: Tool) -> AILimits { tool == .codex ? codex : claude }
 
-    /// The AIs with a current reading, Claude first. Two: both are shown, a ring-in-ring each; one: its pair of rings.
-    public func tools(at now: Date) -> [Tool] { Tool.allCases.filter { self[$0].current(at: now) } }
+    /// Claude was used and its limits have no current reading: they come only from its status line, and Claude Code in
+    /// an editor (the VS Code / Cursor extension) does not run it. Shown as an AI without readings ("–") with a hint, not
+    /// left out. A stale reading counts only when Claude was used after its windows started over.
+    public func claudeHint(at now: Date) -> Bool {
+        guard let seen = claudeSeen, now.timeIntervalSince(seen) < 7 * 86400, !claude.current(at: now) else { return false }
+        return [claude.fiveHour, claude.week].allSatisfy { ($0?.resetsAt ?? .distantPast) < seen }
+    }
+
+    /// The AIs shown, Claude first: those with a current reading, and Claude under `claudeHint`. Two: a ring-in-ring
+    /// each; one: its pair of rings.
+    public func tools(at now: Date) -> [Tool] {
+        Tool.allCases.filter { self[$0].current(at: now) || $0 == .claude && claudeHint(at: now) }
+    }
     public func both(at now: Date) -> Bool { tools(at: now).count == 2 }
 
-    /// The windows shown when one AI is shown: the one with a current reading; with none (or both), as `fiveHour` /
-    /// `week`. Two AIs are shown each with its own: `self[tool]`.
+    /// The windows shown when one AI is shown: that AI's (current, or Claude's under `claudeHint`); with none (or both),
+    /// as `fiveHour` / `week`. Two AIs are shown each with its own: `self[tool]`.
     public func shown(at now: Date) -> AILimits {
         let t = tools(at: now)
         return t.count == 1 ? self[t[0]] : AILimits(fiveHour: fiveHour, week: week)

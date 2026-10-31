@@ -147,11 +147,14 @@ public struct MainVM: Sendable {
     public var limitsAge: String?
     /// A window has no current reading: the panel says when one comes.
     public var limitsMissing: Bool
+    /// Claude was used without a reading (`Limits.claudeHint`): the panel says where its limits come from instead.
+    public var claudeHint: Bool
     /// No sessions at all: one line instead of an empty block.
     public var noSessions: String?
 
     public init(_ p: ZagonDataProvider, _ f: Fmt, colors: (Tool) -> RingColors = RingColors.standard) {
         let limits = p.limits(), current = limits.tools(at: f.now), shown = limits.shown(at: f.now)
+        claudeHint = limits.claudeHint(at: f.now)
         let oneTool = current.first ?? (shown.fiveHour ?? shown.week)?.tool ?? .claude, one = colors(oneTool)
         five = shown.fiveHour.map { RingVM(title: f.t("limit.five"), window: $0, base: one.five, f: f) }
         week = shown.week.map { RingVM(title: f.t("limit.week"), window: $0, base: one.week, f: f) }
@@ -200,7 +203,8 @@ public struct MainVM: Sendable {
         costSplit = split.count == 2 ? split : []
 
         let windows = [shown.fiveHour, shown.week].compactMap { $0 }
-        let tools = Tool.allCases.filter { t in windows.contains { $0.tool == t } }
+        let tools = claudeHint && ais.isEmpty ? [Tool.claude]
+            : Tool.allCases.filter { t in windows.contains { $0.tool == t } }
         limitsHeader = (tools.isEmpty || !ais.isEmpty ? f.t("limit.header.none")
             : f.t("limit.header", tools.map(\.name).joined(separator: " · "))).uppercased()
         limitsHeaderLeft = f.t("limit.header.left").uppercased()

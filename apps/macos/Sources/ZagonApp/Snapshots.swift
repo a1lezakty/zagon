@@ -151,8 +151,8 @@ enum Snapshots {
         return ok
     }
 
-    /// The panel with nothing to show yet (an empty store, not connected), with the last reading from before a reset, and
-    /// with both AIs (a ring in a ring each, used and left).
+    /// The panel with nothing to show yet (an empty store, not connected), with the last reading from before a reset,
+    /// with both AIs (a ring in a ring each, used and left), and with Claude used in an editor (no reading, the hint).
     static func emptyStates(_ lang: Lang, _ dir: URL) -> Bool {
         let empty = AppState(provider: StoreDataProvider.empty(), lang: lang)
         empty.cli = Connect.Status(missing: ["hooks: ~/.claude/settings.json"])
@@ -169,7 +169,11 @@ enum Snapshots {
         let c = write(MainPanel().environmentObject(both), width: 400, "main-both-\(lang.rawValue)", dir)
         both.showLeft = true
         let d = write(MainPanel().environmentObject(both), width: 400, "main-both-left-\(lang.rawValue)", dir)
-        return a && b && c && d
+        two.claudeUnread = true
+        let unread = AppState(provider: two, lang: lang)
+        unread.cli = stale.cli
+        let e = write(MainPanel().environmentObject(unread), width: 400, "main-hint-\(lang.rawValue)", dir)
+        return a && b && c && d && e
     }
 
     static func write<V: View>(_ view: V, width: CGFloat, scale: CGFloat = 2, _ name: String, _ dir: URL) -> Bool {

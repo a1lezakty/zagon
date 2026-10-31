@@ -770,7 +770,8 @@ struct LimitsBlock: View {
                 .onTapGesture { app.showLeft.toggle() }
                 if vm.limitsMissing {
                     let unconnected = app.localTools && !(app.cli?.connected ?? true)
-                    Text(f.t(unconnected ? "limit.hint.connect" : "limit.hint.wait")).font(.system(size: 12)).foregroundColor(Z.muted)
+                    let hint = unconnected ? "limit.hint.connect" : vm.claudeHint ? "limit.hint.terminal" : "limit.hint.wait"
+                    Text(f.t(hint)).font(.system(size: 12)).foregroundColor(Z.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

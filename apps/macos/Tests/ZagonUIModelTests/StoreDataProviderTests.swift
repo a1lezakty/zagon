@@ -18,6 +18,12 @@ final class StoreDataProviderTests: XCTestCase {
         XCTAssertEqual(main.five?.resetLine, "resets at 14:20")
         XCTAssertEqual(main.week?.resetLine, "resets Mon 09:00")
         XCTAssertEqual(main.forecast?.plain, "At this pace the 5-hour limit runs out at 13:50, 30m before the reset.")
+        // Claude used, with a current reading: no hint; the hint once the readings are gone.
+        var limits = p.limits()
+        XCTAssertNotNil(limits.claudeSeen)
+        XCTAssertFalse(main.claudeHint)
+        limits.claude = AILimits()
+        XCTAssertTrue(limits.claudeHint(at: p.now))
         XCTAssertEqual(main.waiting.map(\.title), ["web-app — demo video", "api-server — PROJ-12"])
         XCTAssertEqual(main.waiting.map(\.time), ["12m", "4m"])
         XCTAssertEqual(main.waiting.first?.subtitle, "laptop · asks for permission")

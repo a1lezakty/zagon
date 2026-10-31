@@ -27,7 +27,7 @@ public struct MenuBarVM: Sendable, Equatable {
 
     public init(_ limits: Limits, colors: (Tool) -> RingColors = RingColors.standard, _ f: Fmt) {
         let now = f.now, current = limits.tools(at: now), shown = limits.shown(at: now)
-        let known = shown.fiveHour ?? shown.week
+        let known = shown.fiveHour ?? shown.week, hint = limits.claudeHint(at: now)
         // Nothing current: named after the first AI with any window (`shown` mixes them window by window).
         let anyAI = Tool.allCases.first { (limits[$0].fiveHour ?? limits[$0].week) != nil }
         let tools = current.count > 1 ? current : [current.first ?? anyAI ?? .claude]
@@ -35,13 +35,13 @@ public struct MenuBarVM: Sendable, Equatable {
             let w = current.count > 1 ? limits[t] : shown
             return AI(tool: t, five: w.fiveHour?.pct(at: now), week: w.week?.pct(at: now), colors: colors(t))
         }
-        self.init(ais: ais, known: known != nil, f)
+        self.init(ais: ais, known: known != nil || hint, hint: hint, f)
     }
 
     /// Sample values (settings preview, snapshots).
     public init(ais: [AI], _ f: Fmt) { self.init(ais: ais, known: true, f) }
 
-    private init(ais: [AI], known: Bool, _ f: Fmt) {
+    private init(ais: [AI], known: Bool, hint: Bool = false, _ f: Fmt) {
         self.ais = ais
         let pct = { (p: Int?) in p.map { f.t("num.pct", "\($0)") } ?? "–" }
         let used = { (p: Int?) in p.map { f.t("limit.usedPct", f.t("num.pct", "\($0)")) } ?? f.t("limit.noData") }
@@ -53,6 +53,11 @@ public struct MenuBarVM: Sendable, Equatable {
         tip = ais.map { f.t("menubar.tip.ai", $0.tool.name, pct($0.five), pct($0.week)) }.joined(separator: " · ")
         spoken = "Zagon: " + ais.map { f.t("menubar.spoken.ai", $0.tool.name, used($0.five), used($0.week)) }
             .joined(separator: "; ")
+        // Claude without readings: where they come from (`Limits.claudeHint`).
+        if hint {
+            tip += "\n" + f.t("limit.hint.terminal")
+            spoken += ". " + f.t("limit.hint.terminal")
+        }
     }
 }
 
