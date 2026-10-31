@@ -93,6 +93,7 @@ struct MCPFixture {
         #expect(r["result"]?["protocolVersion"]?.string == "2025-06-18")
         #expect(r["result"]?["capabilities"]?["tools"] != nil && r["result"]?["capabilities"]?["prompts"] != nil)
         #expect(r["result"]?["serverInfo"]?["name"]?.string == "zagon")
+        #expect(r["result"]?["serverInfo"]?["version"]?.string == zagonVersion)  // the one `zagon --version` prints
         let old = try f.request("initialize", #"{"protocolVersion":"1999-01-01"}"#)
         #expect(old["result"]?["protocolVersion"]?.string == MCPServer.protocolVersions[0])
         #expect(f.server.handle(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#) == nil)

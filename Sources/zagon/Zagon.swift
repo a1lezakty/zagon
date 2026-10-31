@@ -1,4 +1,5 @@
 import ArgumentParser
+import ZagonCore
 
 // Each subcommand lives in Commands/<Name>Command.swift; add yours here, one per line.
 @main

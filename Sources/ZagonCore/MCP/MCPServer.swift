@@ -3,7 +3,6 @@
 public final class MCPServer {
     /// Newest first; `initialize` answers with the client's version if listed here, else with the first one.
     public static let protocolVersions = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
-    public static let serverVersion = "0.1.0"
 
     public let tools: [MCPTool]
     public let prompts: [MCPPrompt]
@@ -69,7 +68,7 @@ public final class MCPServer {
             let v = Self.protocolVersions.contains(asked) ? asked : Self.protocolVersions[0]
             return ["protocolVersion": .string(v),
                     "capabilities": ["tools": ["listChanged": false], "prompts": ["listChanged": false]],
-                    "serverInfo": ["name": "zagon", "version": .string(Self.serverVersion)],
+                    "serverInfo": ["name": "zagon", "version": .string(zagonVersion)],
                     "instructions": .string(Self.instructions)]
         case "ping":
             return .object([])
