@@ -120,6 +120,23 @@ func parse(_ lines: [String], agent: String = "", indexPrompts: Bool = true) -> 
         #expect(long.userMessages.first?.text?.utf8.count == ClaudeParser.textLimit)
     }
 
+    /// The VS Code / Cursor extension puts the open file or the selection in text blocks of their own before the typed
+    /// text (a record in the shape it writes); a key in their paths is not one the human typed.
+    @Test func editorContextBlocksAreNotTheTypedText() {
+        let ext = #","permissionMode":"default","origin":{"kind":"human"},"promptSource":"sdk","entrypoint":"claude-vscode""#
+        let opened = #"{"type":"text","text":"<ide_opened_file>The user opened the file /w/PROJ-7-old/src/a.swift in the IDE. This may or may not be related to the current task.</ide_opened_file>"}"#
+        let selection = #"{"type":"text","text":"<ide_selection>The user selected the lines 3 to 9 from /w/alpha/b.swift:\n"# + String(repeating: "x", count: 3000) + #"</ide_selection>"}"#
+        let out = parse([
+            userLine(T0, content: "[\(opened),{\"type\":\"text\",\"text\":\"PROJ-1: fix the parser\"}]", extra: ext),
+            userLine(T0 + 1, content: "[\(selection),\(opened),{\"type\":\"text\",\"text\":\"and this\"}]", extra: ext),
+            userLine(T0 + 2, content: "[\(opened),{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"data\":\"AAAA\"}}]", extra: ext),
+            queuedLine(T0 + 3, prompt: "[\(opened),{\"type\":\"text\",\"text\":\"queued one\"}]"),
+        ])
+        #expect(out.badLines == 0)
+        #expect(out.userMessages.map(\.ts) == [T0, T0 + 1, T0 + 2, T0 + 3])
+        #expect(out.userMessages.map(\.text) == ["PROJ-1: fix the parser", "and this", "", "queued one"])
+    }
+
     @Test func channelMessagesAreTyped() {
         let channel = #","isMeta":true,"origin":{"kind":"channel","server":"plugin:telegram:telegram"},"turnOrigin":"peer","promptSource":"system""#
         let out = parse([
