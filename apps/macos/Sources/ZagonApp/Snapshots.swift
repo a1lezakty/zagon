@@ -151,7 +151,8 @@ enum Snapshots {
         return ok
     }
 
-    /// The panel with nothing to show yet (an empty store, not connected) and with the last reading from before a reset.
+    /// The panel with nothing to show yet (an empty store, not connected), with the last reading from before a reset, and
+    /// with both AIs (a ring in a ring each, used and left).
     static func emptyStates(_ lang: Lang, _ dir: URL) -> Bool {
         let empty = AppState(provider: StoreDataProvider.empty(), lang: lang)
         empty.cli = Connect.Status(missing: ["hooks: ~/.claude/settings.json"])
@@ -161,7 +162,14 @@ enum Snapshots {
         stale.cli = AppState.mock(lang).cli
         let a = write(MainPanel().environmentObject(empty), width: 400, "main-empty-\(lang.rawValue)", dir)
         let b = write(MainPanel().environmentObject(stale), width: 400, "main-stale-\(lang.rawValue)", dir)
-        return a && b
+        var two = MockDataProvider(lang: lang)
+        two.codexLimits = true
+        let both = AppState(provider: two, lang: lang)
+        both.cli = stale.cli
+        let c = write(MainPanel().environmentObject(both), width: 400, "main-both-\(lang.rawValue)", dir)
+        both.showLeft = true
+        let d = write(MainPanel().environmentObject(both), width: 400, "main-both-left-\(lang.rawValue)", dir)
+        return a && b && c && d
     }
 
     static func write<V: View>(_ view: V, width: CGFloat, scale: CGFloat = 2, _ name: String, _ dir: URL) -> Bool {

@@ -89,7 +89,8 @@ public struct MockDataProvider: ZagonDataProvider {
     }
 
     public func todayTotals() -> Totals {
-        Totals(sessionSec: 7 * Self.h + 20 * 60, userSec: 3 * Self.h, tokens: 18_400_000, cost: 212)
+        Totals(sessionSec: 7 * Self.h + 20 * 60, userSec: 3 * Self.h, tokens: 18_400_000, cost: 212,
+               costByTool: [.claude: 178, .codex: 34])
     }
 
     public func hosts() -> [Host] {

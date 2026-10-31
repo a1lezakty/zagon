@@ -156,8 +156,10 @@ public struct Totals: Sendable, Equatable {
     public var userSec: Double
     public var tokens: Int
     public var cost: Double
-    public init(sessionSec: Double, userSec: Double = 0, tokens: Int, cost: Double) {
-        self.sessionSec = sessionSec; self.userSec = userSec; self.tokens = tokens; self.cost = cost
+    /// The cost per AI; empty where nobody split it.
+    public var costByTool: [Tool: Double]
+    public init(sessionSec: Double, userSec: Double = 0, tokens: Int, cost: Double, costByTool: [Tool: Double] = [:]) {
+        self.sessionSec = sessionSec; self.userSec = userSec; self.tokens = tokens; self.cost = cost; self.costByTool = costByTool
     }
 }
 

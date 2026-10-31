@@ -79,7 +79,7 @@ struct SessionsScreen: View {
     @EnvironmentObject private var app: AppState
     @State private var showIdle = true
     var body: some View {
-        let vm = MainVM(app.provider, app.f)
+        let vm = MainVM(app.provider, app.f, colors: { app.colors($0) })
         Page {
             Header(app.f.t("nav.sessions"))
             HStack(alignment: .top, spacing: 16) {

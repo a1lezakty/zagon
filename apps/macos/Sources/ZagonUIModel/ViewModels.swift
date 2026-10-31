@@ -86,6 +86,31 @@ public struct RingVM: Sendable, Equatable {
     }
 }
 
+/// One AI in the panel when both have a current reading: a ring in a ring, the week outside, 5 hours inside.
+public struct AIRingsVM: Sendable, Equatable {
+    public var tool: Tool
+    public var five: RingVM
+    public var week: RingVM
+    /// "5h until 14:20" and "week 35%" (what is left of it, `weekLeftLine`, when the panel shows what is left).
+    public var fiveLine: String
+    public var weekLine: String
+    public var weekLeftLine: String
+    public var spoken: String
+    public var spokenLeft: String
+
+    init(_ tool: Tool, _ l: AILimits, _ c: RingColors, _ f: Fmt) {
+        self.tool = tool
+        five = l.fiveHour.map { RingVM(title: f.t("limit.five"), window: $0, base: c.five, f: f) } ?? .empty(f.t("limit.five"), f)
+        week = l.week.map { RingVM(title: f.t("limit.week"), window: $0, base: c.week, f: f) } ?? .empty(f.t("limit.week"), f)
+        let known = five.pct != nil
+        fiveLine = l.fiveHour.flatMap { known ? f.t("limit.ai.five", f.time($0.resetsAt)) : nil } ?? f.t("limit.ai.fiveNone")
+        weekLine = f.t("limit.ai.week", week.pct.map { f.pct(Double($0)) } ?? "–")
+        weekLeftLine = f.t("limit.ai.week", week.leftPct.map { f.pct(Double($0)) } ?? "–")
+        spoken = tool.name + ": " + five.spoken + "; " + week.spoken
+        spokenLeft = tool.name + ": " + five.spokenLeft + "; " + week.spokenLeft
+    }
+}
+
 public struct SessionRowVM: Sendable, Identifiable, Equatable {
     public var id: String
     public var title: String
@@ -95,8 +120,14 @@ public struct SessionRowVM: Sendable, Identifiable, Equatable {
 }
 
 public struct MainVM: Sendable {
+    /// One AI (or none with a current reading): its pair of rings.
     public var five: RingVM?
     public var week: RingVM?
+    /// Both AIs with a current reading: a ring in a ring each, Claude first; then `five` and `week` serve the pace view.
+    public var ais: [AIRingsVM]
+    /// The pace view follows Claude's windows (Codex's without them): it stands in for the rings only when they are that
+    /// AI's, not Codex's next to Claude's old history.
+    public var paceFits: Bool
     public var forecast: Emphasis?
     public var waitingHeader: String
     public var waiting: [SessionRowVM]
@@ -107,19 +138,30 @@ public struct MainVM: Sendable {
     public var idleHideButton: String?
     public var idle: [SessionRowVM]
     public var totals: [Stat]
+    /// Under the price: "Claude $X", "Codex $Y" when both spent something today; else empty.
+    public var costSplit: [String]
     /// Above the rings: whose limits they are, and how old the reading is once that is over 15 minutes.
     public var limitsHeader: String
+    /// Over the rings-in-rings when they show what is left.
+    public var limitsHeaderLeft: String
     public var limitsAge: String?
     /// A window has no current reading: the panel says when one comes.
     public var limitsMissing: Bool
     /// No sessions at all: one line instead of an empty block.
     public var noSessions: String?
 
-    public init(_ p: ZagonDataProvider, _ f: Fmt) {
-        let limits = p.limits()
-        five = limits.fiveHour.map { RingVM(title: f.t("limit.five"), window: $0, base: Palette.fiveHour, f: f) }
-        week = limits.week.map { RingVM(title: f.t("limit.week"), window: $0, base: Palette.week, f: f) }
-        forecast = limits.fiveHour.flatMap { MainVM.forecast($0, f) }
+    public init(_ p: ZagonDataProvider, _ f: Fmt, colors: (Tool) -> RingColors = RingColors.standard) {
+        let limits = p.limits(), current = limits.tools(at: f.now), shown = limits.shown(at: f.now)
+        let oneTool = current.first ?? (shown.fiveHour ?? shown.week)?.tool ?? .claude, one = colors(oneTool)
+        five = shown.fiveHour.map { RingVM(title: f.t("limit.five"), window: $0, base: one.five, f: f) }
+        week = shown.week.map { RingVM(title: f.t("limit.week"), window: $0, base: one.week, f: f) }
+        let ais = current.count > 1 ? current.map { AIRingsVM($0, limits[$0], colors($0), f) } : []
+        self.ais = ais
+        paceFits = ais.isEmpty && oneTool == ((limits.fiveHour ?? limits.week)?.tool ?? .claude)
+        forecast = ais.isEmpty ? shown.fiveHour.flatMap { MainVM.forecast($0, f) } : ais.lazy.compactMap { a in
+            limits[a.tool].fiveHour.flatMap { MainVM.forecast($0, f) }
+                .map { Emphasis(before: a.tool.name + ": " + $0.before, bold: $0.bold, after: $0.after) }
+        }.first
 
         let sessions = p.liveSessions().sorted { $0.since < $1.since }
         func row(_ s: LiveSession, _ detail: String) -> SessionRowVM {
@@ -152,14 +194,27 @@ public struct MainVM: Sendable {
         totals = [Stat(f.duration(today.sessionSec), f.t("stat.sessionsWorked")),
                   Stat(f.tokens(today.tokens), f.t("stat.tokensToday")),
                   Stat(f.cost(today.cost), f.t("stat.apiPrices"))]
+        let split = Tool.allCases.compactMap { t in
+            today.costByTool[t].flatMap { $0 > 0 ? t.name + " " + f.cost($0) : nil }
+        }
+        costSplit = split.count == 2 ? split : []
 
-        let windows = [limits.fiveHour, limits.week].compactMap { $0 }
-        let tools = [Tool.claude, .codex].filter { t in windows.contains { $0.tool == t } }
-        limitsHeader = (tools.isEmpty ? f.t("limit.header.none")
-            : f.t("limit.header", tools.map { $0 == .codex ? "Codex" : "Claude" }.joined(separator: " · "))).uppercased()
-        let age = windows.compactMap(\.readAt).max().map { f.now.timeIntervalSince($0) }
-        limitsAge = age.flatMap { $0 > 900 ? f.t("limit.updated", f.duration($0)) : nil }
-        limitsMissing = five?.pct == nil || week?.pct == nil
+        let windows = [shown.fiveHour, shown.week].compactMap { $0 }
+        let tools = Tool.allCases.filter { t in windows.contains { $0.tool == t } }
+        limitsHeader = (tools.isEmpty || !ais.isEmpty ? f.t("limit.header.none")
+            : f.t("limit.header", tools.map(\.name).joined(separator: " · "))).uppercased()
+        limitsHeaderLeft = f.t("limit.header.left").uppercased()
+        // A reading over 15 minutes old says so; with both AIs each says its own: "Claude 20m · Codex 6h ago".
+        func age(_ ws: [LimitWindow?]) -> Double? {
+            ws.compactMap { $0?.readAt }.max().map { f.now.timeIntervalSince($0) }.flatMap { $0 > 900 ? $0 : nil }
+        }
+        if ais.isEmpty {
+            limitsAge = age(windows).map { f.t("limit.updated", f.duration($0)) }
+        } else {
+            let each = ais.compactMap { a in age([limits[a.tool].fiveHour, limits[a.tool].week]).map { a.tool.name + " " + f.duration($0) } }
+            limitsAge = each.isEmpty ? nil : f.t("limit.updatedEach", each.joined(separator: " · "))
+        }
+        limitsMissing = ais.isEmpty ? five?.pct == nil || week?.pct == nil : ais.contains { $0.five.pct == nil || $0.week.pct == nil }
         noSessions = sessions.isEmpty ? f.t("sessions.none") : nil
     }
 

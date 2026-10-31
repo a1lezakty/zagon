@@ -75,12 +75,83 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertEqual(vm.working.count, 3)
         XCTAssertEqual(vm.idle.count, 4)
         XCTAssertEqual(vm.totals.map(\.value), ["7h 20m", "18.4M", "$212"])
+        XCTAssertEqual(vm.costSplit, ["Claude $178", "Codex $34"])
 
         let ru = MainVM(env(.ru).0, env(.ru).1)
         XCTAssertEqual(ru.five?.resetLine, "сброс в 14:20")
         XCTAssertEqual(ru.week?.resetLine, "сброс пн 09:00")
         XCTAssertEqual(ru.forecast?.plain, "При таком темпе 5-часовой лимит кончится в 13:50 — за 30 мин до сброса.")
         XCTAssertEqual(ru.waitingHeader, "ЖДУТ ТЕБЯ · 2")
+    }
+
+    /// Both AIs with a current reading: a ring in a ring each, in their colours; a stale reading is no second AI.
+    func testPanelBothAIs() {
+        let utc = TimeZone(identifier: "UTC")!
+        var p = MockDataProvider(lang: .en, timeZone: utc)
+        let f = Fmt(lang: .en, timeZone: utc, now: p.now)
+        XCTAssertTrue(MainVM(p, f).ais.isEmpty)
+        p.codexLimits = true
+        let violet = RingColors(five: Palette.violet, week: Palette.violet)
+        let vm = MainVM(p, f, colors: { $0 == .codex ? violet : .standard($0) })
+        XCTAssertEqual(vm.ais.map(\.tool), [.claude, .codex])
+        XCTAssertEqual(vm.ais.map { [$0.five.pct, $0.week.pct] }, [[62, 41], [18, 71]])
+        XCTAssertEqual(vm.ais.map { [$0.fiveLine, $0.weekLine, $0.weekLeftLine] },
+                       [["5h until 14:20", "week 41%", "week 59%"], ["5h until 16:05", "week 71%", "week 29%"]])
+        XCTAssertEqual(vm.ais.map { [$0.five.color, $0.week.color] }, [[Palette.fiveHour, Palette.week], [Palette.violet, Palette.violet]])
+        XCTAssertTrue(vm.ais[1].spoken.hasPrefix("Codex: 5 hours: 18% used, resets at 16:05"))
+        XCTAssertTrue(vm.ais[1].spokenLeft.hasPrefix("Codex: 5 hours: 82% left"))
+        XCTAssertEqual([vm.limitsHeader, vm.limitsHeaderLeft], ["LIMITS", "LIMITS · LEFT"])
+        XCTAssertNil(vm.limitsAge)
+        XCTAssertFalse(vm.limitsMissing)
+        XCTAssertEqual(vm.forecast?.plain, "Claude: At this pace the 5-hour limit runs out at 13:50, 30m before the reset.")
+        XCTAssertFalse(vm.paceFits)
+        XCTAssertTrue(MainVM(env(.en).0, f).paceFits)
+
+        // Codex read 3 hours ago, still in its window: its own age. Read before its reset: Claude alone, as before.
+        var l = p.limits()
+        l.codex.fiveHour?.readAt = p.now.addingTimeInterval(-3 * 3600)
+        l.codex.week?.readAt = p.now.addingTimeInterval(-3 * 3600)
+        XCTAssertEqual(MainVM(Fixed(base: p, l: l), Fmt(lang: .ru, timeZone: utc, now: p.now)).limitsAge, "Codex 3 ч 00 м назад")
+        // Codex's 5 hours reset since, its week goes on: still both, the 5-hour ring says it has no reading.
+        l.codex.fiveHour?.resetsAt = p.now.addingTimeInterval(-60)
+        let reset = MainVM(Fixed(base: p, l: l), f)
+        XCTAssertEqual(reset.ais.map(\.tool), [.claude, .codex])
+        XCTAssertEqual([reset.ais[1].five.pct, reset.ais[1].week.pct], [nil, 71])
+        XCTAssertEqual(reset.ais[1].fiveLine, "5h –")
+        XCTAssertTrue(reset.limitsMissing)
+        l.codex = AILimits(fiveHour: LimitWindow(usedPct: 90, resetsAt: p.now.addingTimeInterval(-60), tool: .codex))
+        let one = MainVM(Fixed(base: p, l: l), f, colors: { $0 == .codex ? violet : .standard($0) })
+        XCTAssertTrue(one.ais.isEmpty)
+        XCTAssertEqual([one.five?.pct, one.week?.pct], [62, 41])
+        XCTAssertEqual(one.limitsHeader, "CLAUDE LIMITS")
+        // Codex alone: its pair of rings in its colours.
+        l.claude = AILimits()
+        l.codex.week = LimitWindow(usedPct: 30, resetsAt: p.now.addingTimeInterval(86400), tool: .codex)
+        let codex = MainVM(Fixed(base: p, l: l), f, colors: { $0 == .codex ? violet : .standard($0) })
+        XCTAssertEqual([codex.five?.pct, codex.week?.pct], [nil, 30])
+        XCTAssertEqual(codex.week?.color, Palette.violet)
+        XCTAssertEqual(codex.limitsHeader, "CODEX LIMITS")
+        XCTAssertTrue(codex.paceFits)  // no Claude windows: the pace view follows Codex
+        // Claude's old reading stays: the pace view would draw it next to Codex's rings, so the rings stay.
+        l.claude = AILimits(fiveHour: LimitWindow(usedPct: 97, resetsAt: p.now.addingTimeInterval(-600), tool: .claude))
+        XCTAssertFalse(MainVM(Fixed(base: p, l: l), f).paceFits)
+    }
+
+    /// The mock with other limits.
+    struct Fixed: ZagonDataProvider {
+        var base: MockDataProvider
+        var l: Limits
+        var now: Date { base.now }
+        func limits() -> Limits { l }
+        func liveSessions() -> [LiveSession] { base.liveSessions() }
+        func todayTotals() -> Totals { base.todayTotals() }
+        func hosts() -> [ZagonUIModel.Host] { base.hosts() }
+        func day(_ d: Date) -> DayData { base.day(d) }
+        func week(containing d: Date) -> WeekData { base.week(containing: d) }
+        func month(containing d: Date) -> MonthData { base.month(containing: d) }
+        func search(_ text: String) -> [SearchHit] { base.search(text) }
+        func tasks() -> [TaskItem] { base.tasks() }
+        func worklog(_ d: Date) -> WorklogData { base.worklog(d) }
     }
 
     func testLaunchWindow() {
