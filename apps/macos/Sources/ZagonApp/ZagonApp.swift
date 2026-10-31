@@ -732,7 +732,8 @@ struct MainPanel: View {
 
 /// Rings or pace charts; a click switches between used + reset time and left + time until the reset. Whose limits they
 /// are on top; a window with no current reading shows "–" and a line on when one comes, not 0 %. Both AIs with a current
-/// reading: a ring in a ring each (the pace view follows one AI, so it gives way; also to rings of the other AI).
+/// reading: a ring in a ring each (the pace view follows one AI, so it gives way; also to rings of the other AI). Claude
+/// used without readings (`Limits.claudeHint`) is shown too, and the line says where its limits come from.
 struct LimitsBlock: View {
     @EnvironmentObject private var app: AppState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -770,8 +771,12 @@ struct LimitsBlock: View {
                 .onTapGesture { app.showLeft.toggle() }
                 if vm.limitsMissing {
                     let unconnected = app.localTools && !(app.cli?.connected ?? true)
-                    Text(f.t(unconnected ? "limit.hint.connect" : "limit.hint.wait")).font(.system(size: 12)).foregroundColor(Z.muted)
+                    Text(unconnected ? f.t("limit.hint.connect") : vm.claudeHint ?? f.t("limit.hint.wait"))
+                        .font(.system(size: 12)).foregroundColor(Z.muted)
                         .fixedSize(horizontal: false, vertical: true)
+                    if !unconnected, let setting = vm.claudeSetting {
+                        CopyButton(title: f.t("limit.hint.copy"), height: 28, radius: 8, fontSize: 12) { setting }
+                    }
                 }
             }
             if let fc = vm.forecast { Banner.amber(fc) }

@@ -1,7 +1,9 @@
 import Foundation
+import ZagonCore
 
-/// The status item. Both AIs with a current reading: a ring-in-ring each, Claude left, Codex right (outer the week,
-/// inner 5 hours, the 5-hour number inside). One AI, or none: its pair of rings, 5 hours left and the week right.
+/// The status item. Both AIs with a current reading (or Claude under `Limits.claudeHint`): a ring-in-ring each, Claude
+/// left, Codex right (outer the week, inner 5 hours, the 5-hour number inside). One AI, or none: its pair of rings,
+/// 5 hours left and the week right.
 public struct MenuBarVM: Sendable, Equatable {
     public struct AI: Sendable, Equatable {
         public var tool: Tool
@@ -28,6 +30,7 @@ public struct MenuBarVM: Sendable, Equatable {
     public init(_ limits: Limits, colors: (Tool) -> RingColors = RingColors.standard, _ f: Fmt) {
         let now = f.now, current = limits.tools(at: now), shown = limits.shown(at: now)
         let known = shown.fiveHour ?? shown.week
+        let hint = limits.claudeHint(at: now) ? limits.claudeHintLine(f) : nil
         // Nothing current: named after the first AI with any window (`shown` mixes them window by window).
         let anyAI = Tool.allCases.first { (limits[$0].fiveHour ?? limits[$0].week) != nil }
         let tools = current.count > 1 ? current : [current.first ?? anyAI ?? .claude]
@@ -35,13 +38,13 @@ public struct MenuBarVM: Sendable, Equatable {
             let w = current.count > 1 ? limits[t] : shown
             return AI(tool: t, five: w.fiveHour?.pct(at: now), week: w.week?.pct(at: now), colors: colors(t))
         }
-        self.init(ais: ais, known: known != nil, f)
+        self.init(ais: ais, known: known != nil || hint != nil, hint: hint, f)
     }
 
     /// Sample values (settings preview, snapshots).
     public init(ais: [AI], _ f: Fmt) { self.init(ais: ais, known: true, f) }
 
-    private init(ais: [AI], known: Bool, _ f: Fmt) {
+    private init(ais: [AI], known: Bool, hint: String? = nil, _ f: Fmt) {
         self.ais = ais
         let pct = { (p: Int?) in p.map { f.t("num.pct", "\($0)") } ?? "–" }
         let used = { (p: Int?) in p.map { f.t("limit.usedPct", f.t("num.pct", "\($0)")) } ?? f.t("limit.noData") }
@@ -53,6 +56,24 @@ public struct MenuBarVM: Sendable, Equatable {
         tip = ais.map { f.t("menubar.tip.ai", $0.tool.name, pct($0.five), pct($0.week)) }.joined(separator: " · ")
         spoken = "Zagon: " + ais.map { f.t("menubar.spoken.ai", $0.tool.name, used($0.five), used($0.week)) }
             .joined(separator: "; ")
+        // Claude without readings: where they come from (`Limits.claudeHint`).
+        if let hint {
+            tip += "\n" + hint
+            spoken += ". " + hint
+        }
+    }
+}
+
+extension Limits {
+    /// Under `claudeHint`: where Claude's limits come from. The wrapper setting when the script is there, else the
+    /// terminal.
+    public func claudeHintLine(_ f: Fmt) -> String {
+        claudeWrapper.map { f.t("limit.hint.wrapper", $0) } ?? f.t("limit.hint.terminal")
+    }
+
+    /// The line for the editor's settings.json that "Copy setting" gives (as `Installer.editorSetting` prints it).
+    public var claudeSetting: String? {
+        claudeWrapper.map { "\"claudeCode.claudeProcessWrapper\": " + JValue.string($0).compact }
     }
 }
 

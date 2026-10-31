@@ -297,8 +297,15 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 return LimitWindow(usedPct: r.usedPct, resetsAt: Self.date(reset), pctPerHour: r.pctPerHour,
                                    tool: tool == .codex ? .codex : .claude, readAt: Self.date(r.ts))
             }
-            return Limits(claude: AILimits(fiveHour: window(.claude, "five_hour"), week: window(.claude, "seven_day")),
-                          codex: AILimits(fiveHour: window(.codex, "primary"), week: window(.codex, "secondary")))
+            var l = Limits(claude: AILimits(fiveHour: window(.claude, "five_hour"), week: window(.claude, "seven_day")),
+                           codex: AILimits(fiveHour: window(.codex, "primary"), week: window(.codex, "secondary")))
+            // For `Limits.claudeHint`; a failed read loses only the hint.
+            try? query.db.query("SELECT max(last_at) FROM session WHERE tool = 'claude' AND last_at >= ?",
+                                [.real(now.timeIntervalSince1970 - 7 * 86400)]) { r in l.claudeSeen = r.optReal(0).map(Self.date) }
+            // Where `zagon install` puts it (`Installer.wrapScript`).
+            let wrapper = ZagonPaths().dir + "/bin/claude-wrap"
+            l.claudeWrapper = FileManager.default.isExecutableFile(atPath: wrapper) ? wrapper : nil
+            return l
         }
     }
 

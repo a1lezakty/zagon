@@ -67,7 +67,15 @@ public struct AILimits: Sendable {
 public struct Limits: Sendable {
     public var claude: AILimits
     public var codex: AILimits
-    public init(claude: AILimits = AILimits(), codex: AILimits = AILimits()) { self.claude = claude; self.codex = codex }
+    /// When a Claude session was last active, within the last 7 days; nil = none.
+    public var claudeSeen: Date?
+    /// The script that brings Claude's limits from an editor's panel (`claudeCode.claudeProcessWrapper`) when it is
+    /// installed; nil = not there, the hint offers only `claudeCode.useTerminal`.
+    public var claudeWrapper: String?
+    public init(claude: AILimits = AILimits(), codex: AILimits = AILimits(), claudeSeen: Date? = nil,
+                claudeWrapper: String? = nil) {
+        self.claude = claude; self.codex = codex; self.claudeSeen = claudeSeen; self.claudeWrapper = claudeWrapper
+    }
 
     /// Both windows of one AI (the samples): Codex's when the first window says so, else Claude's.
     public init(fiveHour: LimitWindow?, week: LimitWindow?) {
@@ -78,12 +86,29 @@ public struct Limits: Sendable {
 
     public subscript(_ tool: Tool) -> AILimits { tool == .codex ? codex : claude }
 
-    /// The AIs with a current reading, Claude first. Two: both are shown, a ring-in-ring each; one: its pair of rings.
-    public func tools(at now: Date) -> [Tool] { Tool.allCases.filter { self[$0].current(at: now) } }
+    /// Claude was used and its limits did not come: they come from its status line, and Claude Code in an editor's
+    /// panel (the VS Code / Cursor extension) does not run it. No reading at all, or a window that started over before
+    /// Claude was last used and has no reading since (a terminal reply would have brought one). Shown with "–" and a
+    /// hint, not left out.
+    /// ponytail: any Claude session counts as use, also the user's own `claude -p` / SDK runs (no status line either): one
+    /// after a reset shows the hint until the next terminal reply. Exact: count only `entrypoint: claude-vscode`
+    /// sessions, once the store keeps it (track core).
+    public func claudeHint(at now: Date) -> Bool {
+        guard let seen = claudeSeen, now.timeIntervalSince(seen) < 7 * 86400 else { return false }
+        let windows = [claude.fiveHour, claude.week]
+        if windows.allSatisfy({ $0 == nil }) { return true }
+        return windows.contains { w in w.map { $0.pct(at: now) == nil && $0.resetsAt < seen } ?? false }
+    }
+
+    /// The AIs shown, Claude first: those with a current reading, and Claude under `claudeHint`. Two: a ring-in-ring
+    /// each; one: its pair of rings.
+    public func tools(at now: Date) -> [Tool] {
+        Tool.allCases.filter { self[$0].current(at: now) || $0 == .claude && claudeHint(at: now) }
+    }
     public func both(at now: Date) -> Bool { tools(at: now).count == 2 }
 
-    /// The windows shown when one AI is shown: the one with a current reading; with none (or both), as `fiveHour` /
-    /// `week`. Two AIs are shown each with its own: `self[tool]`.
+    /// The windows shown when one AI is shown: that AI's (current, or Claude's under `claudeHint`); with none (or both),
+    /// as `fiveHour` / `week`. Two AIs are shown each with its own: `self[tool]`.
     public func shown(at now: Date) -> AILimits {
         let t = tools(at: now)
         return t.count == 1 ? self[t[0]] : AILimits(fiveHour: fiveHour, week: week)
