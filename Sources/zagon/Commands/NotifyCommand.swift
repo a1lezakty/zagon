@@ -167,7 +167,6 @@ struct SummaryCommand: ParsableCommand {
             print(m.text)
             let used = try summary.kept(day)?.engine ?? "?"
             if used == "none", let e = summary.missingCLI { warn(Self.noCLI(e)) }
-            if used == "none", let e = summary.failure.reason { warn(Self.aiError(e)) }
             print("\n(\(used), \(Int((Time.monotonic() - t0) * 1000)) ms, picture \(m.photo?.count ?? 0) bytes)")
             if let png, let p = m.photo, !Sys.writeFile(png, p) { throw ValidationError("cannot write \(png)") }
             guard send else { return }
@@ -199,14 +198,12 @@ struct SummaryCommand: ParsableCommand {
     }
 
     static func noCLI(_ engine: String) -> String { "\(engine) CLI not found on \(Ingest.hostName()): written without AI" }
-    static func aiError(_ reason: String) -> String { "the AI did not answer (\(reason)): written without AI" }
 
     func show(_ key: String, _ k: DaySummary.Kept?, noCLI: String? = nil, aiError: String? = nil) throws {
         guard let k else { throw ValidationError("nothing kept for \(key)") }
         let noCLI = k.engine == "none" ? noCLI : nil, aiError = k.engine == "none" ? aiError : nil
         if json { return try emit(Kept(key: key, engine: k.engine, created: k.created, doc: k.doc, noCli: noCLI, aiError: aiError)) }
-        if let noCLI { warn(Self.noCLI(noCLI)) }
-        if let aiError { warn(Self.aiError(aiError)) }
+        if let noCLI { warn(Self.noCLI(noCLI)) }  // a failed call has said why in the log (stderr)
         print(k.doc.text())
         var t = time_t(k.created.rounded(.down)), v = tm()
         localtime_r(&t, &v)

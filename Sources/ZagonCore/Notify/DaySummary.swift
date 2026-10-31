@@ -349,12 +349,13 @@ public struct DaySummary {
             let r = runner([claude, "-p", "--safe-mode", "--permission-mode", "default", "--model", config.summaryModel,
                             "--tools", "", "--max-turns", "1", "--no-session-persistence", "--output-format", "json"],
                            prompt, run, config.summaryTimeout)
-            let v = r.status == 0 ? JValue.parse(r.out) : nil
-            guard let v, v["is_error"] != .bool(true), let text = v["result"]?.string?.trimmingSpaces, !text.isEmpty else {
-                // an error answer's `result` is the error, not a reply
-                failed(what, "claude", r.status, r.err, v?["is_error"] == .bool(true) ? v?["result"]?.string : nil); return nil
+            let v = JValue.parse(r.out)
+            guard r.status == 0, let v, v["is_error"] != .bool(true), let answer = v["result"]?.string?.trimmingSpaces, !answer.isEmpty else {
+                // an error answer's `result` is the error, not a reply (claude exits 1 with it)
+                failed(what, "claude", r.status, r.err, v?["is_error"] == .bool(true) ? v?["result"]?.string : nil, prompt: text)
+                return nil
             }
-            return (String(text), "claude", v)
+            return (String(answer), "claude", v)
         case "codex":
             guard let codex = engineCLI else { log("\(what): codex CLI not found"); return nil }
             let file = run + "/\(what)-\(Int(Sys.now())).txt"
@@ -364,7 +365,7 @@ public struct DaySummary {
                             "-c", "features.hooks=false", "-o", file, "-"], prompt, run,
                            config.summaryTimeout)
             guard r.status == 0, let out = Sys.readFile(file), !String(decoding: out, as: UTF8.self).trimmingSpaces.isEmpty else {
-                failed(what, "codex", r.status, r.err, nil); return nil
+                failed(what, "codex", r.status, r.err, nil, prompt: text); return nil
             }
             return (String(String(decoding: out, as: UTF8.self).trimmingSpaces), "codex", nil)
         default: return nil
@@ -372,9 +373,11 @@ public struct DaySummary {
     }
 
     /// Keeps and logs why a call failed, never with the prompt: the error claude answered, else the last `ERROR:`
-    /// line of the CLI's stderr (codex echoes the prompt there), else claude's first stderr line; cut to 200 characters.
-    func failed(_ what: String, _ engine: String, _ status: Int32, _ err: [UInt8], _ answered: String?) {
-        let lines = String(decoding: err, as: UTF8.self).split(separator: "\n").map { String($0.trimmingSpaces) }.filter { !$0.isEmpty }
+    /// line of the CLI's stderr, else claude's first stderr line; cut to 200 characters. Lines of the prompt are left
+    /// out (codex echoes it to stderr, and a Jira text in it may hold an `ERROR:` line).
+    func failed(_ what: String, _ engine: String, _ status: Int32, _ err: [UInt8], _ answered: String?, prompt: String) {
+        let lines = String(decoding: err, as: UTF8.self).split(separator: "\n").map { String($0.trimmingSpaces) }
+            .filter { !$0.isEmpty && !prompt.contains($0) }
         let line = answered.flatMap { $0.split(separator: "\n").first.map { String($0.trimmingSpaces) } }
             ?? lines.last { $0.hasPrefix("ERROR:") }.map { String($0.dropFirst(6).trimmingSpaces) }
             ?? (engine == "claude" ? lines.first : nil)

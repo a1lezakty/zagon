@@ -340,12 +340,13 @@ private func sections(_ md: String) -> [String] {
 
     @Test func aiResultIsCheckedAndRedacted() throws {
         let stub = dir + "/claude"
-        #expect(writeScript(stub, "#!/bin/sh\ncat > /dev/null\nprintf %s \"$ZAGON_INTERNAL\" > \"$0.env\"\n"
+        #expect(writeScript(stub, "#!/bin/sh\ncat > /dev/null\nprintf %s \"$ZAGON_INTERNAL $*\" > \"$0.env\"\n"
                                   + "printf '%s' '{\"result\":\"## Goal\\n- short, token=abcdefgh12345678\"}'\n"))
         let out = try #require(Handoff.compress(Self.md, tool: "claude", runDir: dir + "/run", bin: stub))
         #expect(out.hasPrefix("handoff: v1 | from: claude | session: s\n" + Handoff.framing + "\n\n## Goal\n- short, token=[redacted]"))
         #expect(out.hasSuffix(Handoff.footer + "\n"))
-        #expect(Sys.readFile(stub + ".env") == Array("1".utf8)) // its hooks write no spool line
+        // its hooks write no spool line; the user's permission mode (bypassPermissions stops claude as root) is not used
+        #expect(Sys.readFile(stub + ".env").map { String(decoding: $0, as: UTF8.self) }?.hasPrefix("1 -p --permission-mode default ") == true)
         let bad = dir + "/bad"
         #expect(writeScript(bad, "#!/bin/sh\nexit 3\n"))
         #expect(Handoff.compress(Self.md, tool: "claude", runDir: dir + "/run", bin: bad) == nil)

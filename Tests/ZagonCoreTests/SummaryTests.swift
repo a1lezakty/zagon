@@ -156,8 +156,8 @@ import Testing
         #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\necho '\(root)' >&2\nexit 1\n"))
         #expect(s.complete("secret prompt") == nil && s.failure.reason == "claude: " + root)
         #expect(logged == ["summary: claude failed (1): " + root])
-        // An error answer: its result is the error.
-        #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"is_error\":true,\"result\":\"Credit balance is too low\"}'\n"))
+        // An error answer: its result is the error (claude exits 1 with it).
+        #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"is_error\":true,\"result\":\"Credit balance is too low\"}'\nexit 1\n"))
         #expect(s.complete("x") == nil && s.failure.reason == "claude: Credit balance is too low")
         #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"is_error\":false,\"result\":\"ok\"}'\n"))
         #expect(s.complete("x")?.text == "ok" && s.failure.reason == nil)
@@ -165,8 +165,8 @@ import Testing
         s.config.summaryEngine = "codex"
         #expect(writeScript(bin + "/codex", "#!/bin/sh\necho 'OpenAI Codex' >&2\necho user >&2\ncat >&2\necho >&2\necho 'ERROR: unexpected status 401 Unauthorized' >&2\nexit 1\n"))
         #expect(s.complete("secret prompt\nERROR: secret") == nil && s.failure.reason == "codex: unexpected status 401 Unauthorized")
-        #expect(writeScript(bin + "/codex", "#!/bin/sh\ncat >&2\nexit 2\n"))
-        #expect(s.complete("secret prompt") == nil && s.failure.reason == "codex: exit 2")
+        #expect(writeScript(bin + "/codex", "#!/bin/sh\ncat >&2\necho >&2\nexit 2\n"))
+        #expect(s.complete("secret prompt\nERROR: secret in a Jira text") == nil && s.failure.reason == "codex: exit 2")
         #expect(!logged.joined().contains("secret"))
     }
 
