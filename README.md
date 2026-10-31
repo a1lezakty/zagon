@@ -225,6 +225,52 @@ Code transcript and takes a message typed in another session from 5 s before to 
 
 Name worker sessions like their tmux targets (`claude --name`): then only send-keys aimed at that name count for them.
 
+### Jira
+
+Jira is optional and stays off until you configure it. There is no settings screen for it yet: it is set in
+`~/.zagon/config.toml`.
+
+```toml
+[jira]
+url = "https://example.atlassian.net"
+email = "you@example.com"
+token_file = "~/.config/zagon/jira-token"   # an Atlassian API token, the file's last non-empty line
+# review_statuses = ["review", "qa", "test", "release"]   # optional: statuses that mean "in review"
+```
+
+Create the token at id.atlassian.com → Security → API tokens, then keep it in a file only you can read:
+
+```sh
+mkdir -p ~/.config/zagon && chmod 700 ~/.config/zagon
+# put the token in ~/.config/zagon/jira-token, then:
+chmod 600 ~/.config/zagon/jira-token
+```
+
+- Only https is accepted (plain http only to localhost). The token goes to `curl` through its config on stdin, never
+  on the command line or in logs.
+- Zagon reads Jira (read-only) at most once an hour, or when you run `zagon task import`. It writes only after you
+  confirm: `zagon log commit`, or creating an issue from a suggestion.
+- `zagon doctor` says whether Jira is configured.
+
+### Editors: VS Code, Cursor and other forks, JetBrains
+
+Zagon reads Claude limits (the 5-hour and weekly rings) only from Claude Code's status line (`zagon statusline`,
+installed by `zagon install`). The Claude Code extension for VS Code and its forks (Cursor, Windsurf / Devin Desktop,
+VSCodium, Kiro…) runs Claude Code headless and never calls the status line, so sessions in the extension panel are
+counted (tokens, time, tasks: their transcripts land in `~/.claude/projects` as usual) but bring no limit readings.
+
+- To get limits there, run `claude` in the editor's terminal, or set `"claudeCode.useTerminal": true` in the editor
+  settings (the extension then runs the regular CLI in a terminal). `zagon doctor` shows when the last limit reading
+  came.
+- JetBrains IDEs: the Claude Code plugin runs the regular `claude` in the IDE's terminal, so the status line and the
+  limits work as in any terminal.
+- The editors' own agents (Cursor's Agent, Devin / Windsurf, Trae, VS Code's agent mode) are not Claude Code, so their
+  work is not counted. Several of them run the Claude Code hooks from `~/.claude/settings.json` ("third-party hooks",
+  on by default in Cursor and Devin); Zagon ignores those calls, so they do not show up as Claude sessions.
+- Task suggestions and summaries use the `claude` CLI. When only the editor extension is installed, Zagon falls back
+  to the newest Claude Code binary bundled with it in any of those editors
+  (`~/.<editor>/extensions/anthropic.claude-code-*/resources/native-binary/claude`).
+
 ## MCP
 
 `zagon mcp` serves the Zagon data to Claude Code, Codex and other MCP clients over stdio. Register it with:
