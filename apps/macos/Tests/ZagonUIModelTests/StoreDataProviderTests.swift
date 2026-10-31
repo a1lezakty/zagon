@@ -21,7 +21,7 @@ final class StoreDataProviderTests: XCTestCase {
         // Claude used, with a current reading: no hint; the hint once the readings are gone.
         var limits = p.limits()
         XCTAssertNotNil(limits.claudeSeen)
-        XCTAssertFalse(main.claudeHint)
+        XCTAssertNil(main.claudeHint)
         limits.claude = AILimits()
         XCTAssertTrue(limits.claudeHint(at: p.now))
         XCTAssertEqual(main.waiting.map(\.title), ["web-app — demo video", "api-server — PROJ-12"])
@@ -76,6 +76,16 @@ final class StoreDataProviderTests: XCTestCase {
         XCTAssertTrue(log.rows.isEmpty)
         XCTAssertNil(log.commitTitle)
         XCTAssertEqual(p.hosts().map(\.name), ["laptop"])
+    }
+
+    /// When Claude was last used: Claude's sessions of the last 7 days only.
+    func testClaudeSeen() throws {
+        let p = try StoreDataProvider.fixture(Self.fixtures)
+        let last = try XCTUnwrap(p.limits().claudeSeen)
+        XCTAssertLessThan(p.now.timeIntervalSince(last), 86400)
+        _ = try p.query.db.run("UPDATE session SET tool = 'codex' WHERE last_at >= ?", [.real(p.now.timeIntervalSince1970 - 86400)])
+        _ = try p.query.db.run("UPDATE session SET last_at = ? WHERE tool = 'claude'", [.real(p.now.timeIntervalSince1970 - 8 * 86400)])
+        XCTAssertNil(p.limits().claudeSeen)
     }
 
     /// Today's price per AI adds up to the day's; the tokens of a Codex session count for Codex.

@@ -302,6 +302,9 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
             // For `Limits.claudeHint`; a failed read loses only the hint.
             try? query.db.query("SELECT max(last_at) FROM session WHERE tool = 'claude' AND last_at >= ?",
                                 [.real(now.timeIntervalSince1970 - 7 * 86400)]) { r in l.claudeSeen = r.optReal(0).map(Self.date) }
+            // Where `zagon install` puts it.
+            let wrapper = ZagonPaths().dir + "/claude-wrap"
+            l.claudeWrapper = FileManager.default.isExecutableFile(atPath: wrapper) ? wrapper : nil
             return l
         }
     }

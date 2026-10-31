@@ -69,8 +69,12 @@ public struct Limits: Sendable {
     public var codex: AILimits
     /// When a Claude session was last active, within the last 7 days; nil = none.
     public var claudeSeen: Date?
-    public init(claude: AILimits = AILimits(), codex: AILimits = AILimits(), claudeSeen: Date? = nil) {
-        self.claude = claude; self.codex = codex; self.claudeSeen = claudeSeen
+    /// The script that brings Claude's limits from an editor's panel (`claudeCode.claudeProcessWrapper`) when it is
+    /// installed; nil = not there, the hint offers only `claudeCode.useTerminal`.
+    public var claudeWrapper: String?
+    public init(claude: AILimits = AILimits(), codex: AILimits = AILimits(), claudeSeen: Date? = nil,
+                claudeWrapper: String? = nil) {
+        self.claude = claude; self.codex = codex; self.claudeSeen = claudeSeen; self.claudeWrapper = claudeWrapper
     }
 
     /// Both windows of one AI (the samples): Codex's when the first window says so, else Claude's.
@@ -82,12 +86,15 @@ public struct Limits: Sendable {
 
     public subscript(_ tool: Tool) -> AILimits { tool == .codex ? codex : claude }
 
-    /// Claude was used and its limits have no current reading: they come only from its status line, and Claude Code in
-    /// an editor (the VS Code / Cursor extension) does not run it. Shown as an AI without readings ("–") with a hint, not
-    /// left out. A stale reading counts only when Claude was used after its windows started over.
+    /// Claude was used and its limits did not come: they come from its status line, and Claude Code in an editor's
+    /// panel (the VS Code / Cursor extension) does not run it. No reading at all, or a window that started over before
+    /// Claude was last used and has no reading since (a terminal reply would have brought one). Shown with "–" and a
+    /// hint, not left out.
     public func claudeHint(at now: Date) -> Bool {
-        guard let seen = claudeSeen, now.timeIntervalSince(seen) < 7 * 86400, !claude.current(at: now) else { return false }
-        return [claude.fiveHour, claude.week].allSatisfy { ($0?.resetsAt ?? .distantPast) < seen }
+        guard let seen = claudeSeen, now.timeIntervalSince(seen) < 7 * 86400 else { return false }
+        let windows = [claude.fiveHour, claude.week]
+        if windows.allSatisfy({ $0 == nil }) { return true }
+        return windows.contains { w in w.map { $0.pct(at: now) == nil && $0.resetsAt < seen } ?? false }
     }
 
     /// The AIs shown, Claude first: those with a current reading, and Claude under `claudeHint`. Two: a ring-in-ring
