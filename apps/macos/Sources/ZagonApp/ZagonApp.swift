@@ -506,7 +506,8 @@ struct ZagonApp: App {
             MainPanel().environmentObject(state).preferredColorScheme(.dark)
         } label: {
             // ponytail: rebuilt on every AppState change; give the status item its own observable if that shows in a profile
-            Image(nsImage: statusIcon(state))
+            let icon = statusIcon(state)
+            Image(nsImage: icon).accessibilityLabel(Text(icon.accessibilityDescription ?? "Zagon"))
         }
         .menuBarExtraStyle(.window)
         .commands { ZagonCommands(app: state) }

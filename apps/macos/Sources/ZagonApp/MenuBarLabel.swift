@@ -31,7 +31,8 @@ struct MenuBarLabel: View {
     /// its corners stay ~1.5 pt off the rim. A whole-point inset keeps the rim on pixels: 0.75 got rounded off-centre.
     static let size: CGFloat = 20, line: CGFloat = 2
     static let digits = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .bold)
-    /// A ring-in-ring: two 2 pt rims with no gap leave a 12 pt hole, so its digits are 8 pt.
+    /// A ring-in-ring: two 2 pt rims with no gap leave a 12 pt hole, so its digits are 8 pt; "88" (~9.8 × 5.7 pt) clears
+    /// the rim by ~0.3 pt at its corners, more where the glyphs round off.
     static let inner = NSFont.monospacedDigitSystemFont(ofSize: 8, weight: .bold)
 
     func color(_ pct: Int?, _ own: UInt32, faint: Bool = false) -> Color {

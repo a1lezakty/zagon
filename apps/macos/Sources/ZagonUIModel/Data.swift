@@ -69,7 +69,7 @@ public struct Limits: Sendable {
     public var codex: AILimits
     public init(claude: AILimits = AILimits(), codex: AILimits = AILimits()) { self.claude = claude; self.codex = codex }
 
-    /// One AI's windows (the samples): Codex's when the windows say so, else Claude's.
+    /// Both windows of one AI (the samples): Codex's when the first window says so, else Claude's.
     public init(fiveHour: LimitWindow?, week: LimitWindow?) {
         let w = AILimits(fiveHour: fiveHour, week: week)
         self.init(claude: (fiveHour ?? week)?.tool == .codex ? AILimits() : w,
@@ -82,7 +82,8 @@ public struct Limits: Sendable {
     public func tools(at now: Date) -> [Tool] { Tool.allCases.filter { self[$0].current(at: now) } }
     public func both(at now: Date) -> Bool { tools(at: now).count == 2 }
 
-    /// The windows shown when one AI is shown: the one with a current reading; with none, as `fiveHour` / `week`.
+    /// The windows shown when one AI is shown: the one with a current reading; with none (or both), as `fiveHour` /
+    /// `week`. Two AIs are shown each with its own: `self[tool]`.
     public func shown(at now: Date) -> AILimits {
         let t = tools(at: now)
         return t.count == 1 ? self[t[0]] : AILimits(fiveHour: fiveHour, week: week)

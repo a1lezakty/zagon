@@ -65,6 +65,21 @@ final class LimitSettingsTests: XCTestCase {
         stale.claude.week = nil
         stale.codex = AILimits(fiveHour: LimitWindow(usedPct: 9, resetsAt: p.now.addingTimeInterval(600), tool: .codex))
         XCTAssertEqual(MenuBarVM(stale, f).ais, [MenuBarVM.AI(tool: .codex, five: 9, week: nil, colors: .standard(.codex))])
+        // Nothing current, each AI with one stale window: named after Claude, whose window is there.
+        let gone = p.now.addingTimeInterval(-60)
+        let old = MenuBarVM(Limits(claude: AILimits(week: LimitWindow(usedPct: 50, resetsAt: gone, tool: .claude)),
+                                   codex: AILimits(fiveHour: LimitWindow(usedPct: 50, resetsAt: gone, tool: .codex))), f)
+        XCTAssertEqual(old.tip, "Claude: 5 ч –, неделя –")
+
+        // Both current, Claude without a week; over 100 %.
+        let soon = p.now.addingTimeInterval(600)
+        let gap = MenuBarVM(Limits(claude: AILimits(fiveHour: LimitWindow(usedPct: 103, resetsAt: soon, tool: .claude)),
+                                   codex: AILimits(week: LimitWindow(usedPct: 20, resetsAt: soon, tool: .codex))), f)
+        XCTAssertTrue(gap.nested)
+        XCTAssertEqual([gap.ais[0].five, gap.ais[0].week, gap.ais[1].five, gap.ais[1].week], [103, nil, nil, 20])
+        XCTAssertTrue(gap.alarm)
+        XCTAssertEqual(gap.tip, "Claude: 5 ч 103 %, неделя – · Codex: 5 ч –, неделя 20 %")
+
         let none = MenuBarVM(Limits(), f)
         XCTAssertEqual([none.tip, none.spoken], ["5 ч: – · неделя: –", "Zagon: нет данных"])
     }

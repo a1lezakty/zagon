@@ -28,7 +28,9 @@ public struct MenuBarVM: Sendable, Equatable {
     public init(_ limits: Limits, colors: (Tool) -> RingColors = RingColors.standard, _ f: Fmt) {
         let now = f.now, current = limits.tools(at: now), shown = limits.shown(at: now)
         let known = shown.fiveHour ?? shown.week
-        let tools = current.count > 1 ? current : [current.first ?? known?.tool ?? .claude]
+        // Nothing current: named after the first AI with any window (`shown` mixes them window by window).
+        let anyAI = Tool.allCases.first { (limits[$0].fiveHour ?? limits[$0].week) != nil }
+        let tools = current.count > 1 ? current : [current.first ?? anyAI ?? .claude]
         let ais = tools.map { t in
             let w = current.count > 1 ? limits[t] : shown
             return AI(tool: t, five: w.fiveHour?.pct(at: now), week: w.week?.pct(at: now), colors: colors(t))
