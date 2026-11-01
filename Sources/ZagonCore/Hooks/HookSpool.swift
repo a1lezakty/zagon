@@ -23,7 +23,7 @@ public struct ZagonPaths: Sendable {
 }
 
 /// `zagon hook <tool> <event>` and `zagon statusline` write one compact NDJSON line per call to
-/// `spool/<yyyy-mm-dd>.ndjson` (UTC day; Cursor's agent: `<yyyy-mm-dd>.cursor.ndjson`). Only ids, paths, event names and numbers: never prompt text or tool input.
+/// `spool/<yyyy-mm-dd>.ndjson` (UTC day; Cursor's agent: `<yyyy-mm-dd>.cursor.ndjson`). Only ids, paths, event names and numbers (Cursor's prompts: their task keys, `cursorLine`): never prompt text or tool input.
 public enum HookSpool {
     /// Hook payload fields copied to the spool (everything else, e.g. `prompt`, `tool_input`, is dropped).
     static let hookKeys: Set<String> = ["session_id", "cwd", "hook_event_name", "notification_type", "tool_name",

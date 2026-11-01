@@ -41,8 +41,8 @@ public enum SpoolIngest {
         for name in names where name.hasPrefix(".limits-") {
             if let m = Sys.mtime(spoolDir + "/" + name), m < now - Double(retainDays) * 86400 { Sys.remove(spoolDir + "/" + name) }
         }
-        // Cursor's lines are its only record of time (CursorSource): kept as long as the dedup ledger, beyond Claude
-        // Code's 30-day cleanup, so a rebuilt database counts them again.
+        // Cursor's lines are its only record of time (CursorSource): kept 40 days, beyond Claude Code's 30-day cleanup,
+        // so a rebuilt database counts them again.
         let oldestCursor = Sys.utcDay(now - Double(max(retainDays, 40)) * 86400)
         for name in files {
             if String(name.prefix(10)) < (name.hasSuffix(".cursor.ndjson") ? oldestCursor : oldest) {

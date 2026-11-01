@@ -48,10 +48,15 @@ import Testing
         let deskReal = Sys.realPath(desk) ?? desk
         #expect(CursorTranscriptParser.folder(ofSlug: String(deskReal.dropFirst().map { $0.isLetter || $0.isNumber ? $0 : "-" }),
                                               home: Sys.realPath(tmp) ?? tmp) == (nil, "app"))
-        // Nor through a link to it.
+        // On macOS not through a link either (it may lead into a guarded folder); elsewhere links are followed.
         _ = symlink(deskReal, tmp + "/link")
-        let linkSlug = String(((Sys.realPath(tmp) ?? tmp) + "/link").dropFirst().map { $0.isLetter || $0.isNumber ? $0 : "-" })
+        let linkPath = (Sys.realPath(tmp) ?? tmp) + "/link"
+        let linkSlug = String(linkPath.dropFirst().map { $0.isLetter || $0.isNumber ? $0 : "-" })
+        #if canImport(Darwin)
         #expect(CursorTranscriptParser.folder(ofSlug: linkSlug, home: Sys.realPath(tmp) ?? tmp) == (nil, "link"))
+        #else
+        #expect(CursorTranscriptParser.folder(ofSlug: linkSlug, home: Sys.realPath(tmp) ?? tmp) == (linkPath, "link"))
+        #endif
     }
 
     /// A transcript as Cursor 3.x writes it: no times except `<timestamp>` before some typed messages.

@@ -174,8 +174,8 @@ struct CursorTranscriptParser: LineParser {
 
     /// The folder a project slug names: Cursor writes `/Users/me/my-app` as `Users-me-my-app` (also spaces and dots
     /// as `-`), so each level is matched against the folder's entries; nil when it is gone or not a folder, and never
-    /// looked into a folder macOS guards with a consent prompt (`Projects.guarded`; links are not followed, they may lead
-    /// into one). `name`: the
+    /// looked into a folder macOS guards with a consent prompt (`Projects.guarded`; on macOS links are not followed, they
+    /// may lead into one). `name`: the
     /// project, the folder's name, else the part of the slug no folder matched (`my-cool-app` under `~/Documents`).
     static func folder(ofSlug slug: String, home: String) -> (path: String?, name: String) {
         func key(_ name: String) -> String { String(name.map { $0.isLetter || $0.isNumber ? $0 : "-" }) }
@@ -185,11 +185,15 @@ struct CursorTranscriptParser: LineParser {
             if Projects.guarded(dir, homes: homes) { break }
             let entries = Sys.listDir(dir.isEmpty ? "/" : dir).filter { e in
                 let k = key(e)
-                return !k.isEmpty && (rest == k || rest.hasPrefix(k + "-"))
+                guard !k.isEmpty, rest == k || rest.hasPrefix(k + "-") else { return false }
+                #if canImport(Darwin)
+                var st = stat()  // a link may lead into a guarded folder (Linux has no consent prompts: links are fine)
+                return lstat(dir + "/" + e, &st) == 0 && st.st_mode & S_IFMT != S_IFLNK
+                #else
+                return true
+                #endif
             }
-            var st = stat()
-            guard let e = entries.max(by: { $0.count < $1.count }), lstat(dir + "/" + e, &st) == 0,
-                  st.st_mode & S_IFMT != S_IFLNK else { break }
+            guard let e = entries.max(by: { $0.count < $1.count }) else { break }
             dir += "/" + e
             rest = rest.dropFirst(e.count).drop { $0 == "-" }
         }

@@ -56,10 +56,11 @@ keeps them on its servers; Zagon reads no credentials). Two sources, both `Curso
   left out). Lines hold no times; a typed message (`<user_query>`, its text for keys and search) is placed only when
   a `<timestamp>` tag (minutes, `UTC±h[:mm]`) precedes it, and its turn ends a second before the next placed one, the
   last at the file's mtime (also when only answer lines came since), each at most 10 minutes, and none when that end
-  is over 30 minutes away: approximate time. The stamp is the last `<timestamp>` before the last `<user_query>`. Title
+  is over 30 minutes away: approximate time. User time too: a capped turn's end counts as the moment the user read
+  the answer (TurnBuilder), so a reply within `idle_gap` of it joins the two stretches. The stamp is the last `<timestamp>` before the last `<user_query>`. Title
   = the first line of the first typed message (rank 0). The folder is found by matching the slug (`/` and other
-  non-alphanumerics as `-`) against folder entries, never inside folders macOS guards and never through a link;
-  unknown = no cwd, project = the part of the slug no folder matched. Sub-agent logs are not read. Archive copies
+  non-alphanumerics as `-`) against folder entries, never inside folders macOS guards nor, on macOS, through a link;
+  unknown = no cwd, project = the part of the slug no folder matched. Archive copies
   neither source (Claude Code and Codex only).
   Only messages more than a minute before `<data-dir>/cursor-hooks` (the first Cursor hook's time, written once by
   `zagon hook`) count: after that the hooks do, and the two never overlap.
@@ -276,7 +277,7 @@ the pending batch and stop. Log: `<data-dir>/logs/daemon.log` (+ `.1`, `.2`, at 
 ## Live status from hooks (`Hooks/`)
 
 `zagon hook <claude|codex> <Event>` appends one line per call to `~/.zagon/spool/<UTC day>.ndjson` (ids, paths,
-event names; never prompt text or tool input). A hook line also carries `pid` (`Sys.clientPid()`: the Claude Code /
+event names; Cursor's prompts only as their task keys; never prompt text or tool input). A hook line also carries `pid` (`Sys.clientPid()`: the Claude Code /
 Codex process, skipping the `sh -c` around hook commands; Linux only). Only handoff reads it, to match `zagon mcp` to
 its conversation; it is never stored in the database. `SpoolIngest.run` applies new lines to `session.status` /
 `status_at` and records a `waiting` activity interval when a `waiting_*` status ends. Older events never overwrite
