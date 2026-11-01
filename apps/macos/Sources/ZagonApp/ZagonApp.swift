@@ -554,14 +554,22 @@ final class AppState: ObservableObject {
         else { say(f.t("connect.checked")) }
     }
 
-    /// The day summary and the worklog texts rebuilt at 23:55 in the worklog zone (`[worklog] rebuild_at_end`), as a
-    /// server's service does: `zagon log at-end` of the CLI inside Zagon.app, again after the seconds it answers.
+    /// On a Mac without a server, the day summary and the worklog texts rebuilt at 23:55 in the worklog zone
+    /// (`[worklog] rebuild_at_end`), as a server's service does: `zagon log at-end` of the CLI inside Zagon.app, again
+    /// after the seconds it answers. With a server checked its service does that; the Mac waits.
     private var worklogTexts: Task<Void, Never>?
+    var endOfDayTexts: Bool { worklogTexts != nil }
     func startWorklogTexts() {
         guard let bin = Self.cliPath, worklogTexts == nil else { return }
         worklogTexts = Task.detached(priority: .background) { [weak self] in
             while !Task.isCancelled {
-                let path = await MainActor.run { self?.cliEnvPath } ?? Connect.path(loginShell: nil, home: NSHomeDirectory())
+                guard let now = await MainActor.run(body: { self.map { (servers: $0.remoteHosts, path: $0.cliEnvPath) } }) else { return }
+                guard now.servers.isEmpty else {
+                    try? await Task.sleep(nanoseconds: 600 * 1_000_000_000)
+                    continue
+                }
+                // The first pass may come before `runCLI` found the login shell's PATH (nvm's claude): look it up then.
+                let path = now.path ?? Connect.path(loginShell: Connect.loginShellPath(), home: NSHomeDirectory())
                 let r = (try? Proc.run(bin, ["log", "at-end"], env: ["PATH": path], timeout: 1200)) ?? nil
                 for l in String(decoding: r?.err ?? Data(), as: UTF8.self).split(separator: "\n").prefix(3) {
                     Log.shared.write("worklog: " + Log.scrub(String(l)))
@@ -582,6 +590,10 @@ final class AppState: ObservableObject {
             let r = Result { try b.handoff(id) }
             await MainActor.run {
                 switch r {
+                case .success(let md) where md.isEmpty && s.server != nil:
+                    // A server's zagon prints it; nothing back (a Mac over ssh copies it there) is nothing copied.
+                    self.say(self.f.t("handoff.empty", s.server ?? ""), error: true)
+                    done(false)
                 case .success(let md):
                     if !md.isEmpty { copyToPasteboard(md) }
                     self.say(self.f.t("handoff.copied"))

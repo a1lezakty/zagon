@@ -38,11 +38,12 @@ enum MacNotifications {
         }
     }
 
-    /// The first notification found the permission undecided and asked (the store's write queue only).
-    private static var asked = false
+    /// Passes that found the permission undecided (the store's write queue only); the first one asked.
+    private static var undecided = 0
 
     /// Called on the store's write queue. Denied = dropped, not retried: the user said no, and a retry every pass would
-    /// only fill the log. Not decided yet: asked once, and retried until the user answers (the first warning is kept).
+    /// only fill the log. Not decided yet: asked once and retried for 12 passes (a minute with the window open, 12 with
+    /// it closed), so the first warning waits for the answer; a prompt left unanswered drops it then.
     static func deliver(title: String, text: String, loud: Bool) -> Bool {
         let center = UNUserNotificationCenter.current()
         let done = DispatchSemaphore(value: 0)
@@ -50,8 +51,9 @@ enum MacNotifications {
         center.getNotificationSettings { status = $0.authorizationStatus; done.signal() }
         guard done.wait(timeout: .now() + 5) == .success else { return false }
         if status == .notDetermined {
-            if !asked { asked = true; ask() }
-            return false
+            if undecided == 0 { ask() }
+            undecided += 1
+            return undecided > 12
         }
         guard status == .authorized || status == .provisional else { return true }
         let content = UNMutableNotificationContent()

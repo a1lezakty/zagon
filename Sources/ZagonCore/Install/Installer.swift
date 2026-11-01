@@ -298,8 +298,12 @@ public struct Installer {
         if o.mcp && forOther {
             log("mcp: not removed from sudo; run `zagon uninstall` as \(userName) for it")
         } else if o.mcp {
-            if let claude = claudeCLI, claudeHasMCP() {
-                _ = runner([claude, "mcp", "remove", "--scope", "user", "zagon"]); log("claude: MCP server zagon removed")
+            if claudeHasMCP() {
+                if let claude = claudeCLI {
+                    _ = runner([claude, "mcp", "remove", "--scope", "user", "zagon"]); log("claude: MCP server zagon removed")
+                } else {
+                    log("claude: MCP server zagon left in \(o.claudeJSON) (no claude CLI to remove it with)")
+                }
             }
             if let codex = Sys.which("codex", path: o.searchPath), codexHasMCP() {
                 _ = runner([codex, "mcp", "remove", "zagon"]); log("codex: MCP server zagon removed")
@@ -832,7 +836,7 @@ public struct Installer {
         if o.mcp {
             for (tool, on, has) in [("claude", o.claude, claudeHasMCP()), ("codex", o.codex, codexHasMCP())] where on {
                 if !has && (tool == "claude" ? claudeCLI : Sys.which(tool, path: o.searchPath)) == nil {
-                    add(true, "\(tool): MCP skipped (no \(tool) CLI on PATH)"); continue
+                    add(true, "\(tool): MCP skipped (no \(tool) CLI on PATH" + (tool == "claude" ? " or in an editor extension)" : ")")); continue
                 }
                 add(has, "\(tool): MCP server zagon " + (has ? "registered" : "not registered"))
             }

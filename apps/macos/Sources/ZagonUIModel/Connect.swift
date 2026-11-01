@@ -113,10 +113,12 @@ public struct EditorPanelsVM: Sendable, Equatable {
     /// "Check the panel": when the panel last started Claude through Zagon and when its last limits reading came
     /// (`ClaudeWrap.panelSeen`).
     public static func panelCheck(run: Date?, reading: Date?, _ f: Fmt) -> String {
+        // This week by weekday, older with the date ("Wed 16:26" three weeks ago would read as this week).
+        func when(_ d: Date) -> String { f.now.timeIntervalSince(d) > 6 * 86400 ? f.shortDay(d) + " " + f.time(d) : f.resetMoment(d) }
         guard let run else { return f.t("editors.notSeen") }
         // A reading older than the last start belongs to an earlier chat: still the last one from the panel.
-        guard let reading else { return f.t("editors.seenNoReading", f.resetMoment(run)) }
-        return f.t("editors.seen", f.resetMoment(run), f.resetMoment(reading))
+        guard let reading else { return f.t("editors.seenNoReading", when(run)) }
+        return f.t("editors.seen", when(run), when(reading))
     }
 
     /// `panelCheck` of this Mac now.

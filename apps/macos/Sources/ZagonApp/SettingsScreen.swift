@@ -184,7 +184,9 @@ struct SettingsScreen: View {
                            set: { summaryTime = $0; summaryTimeBad = false })
         return Card(spacing: 12) {
             Text(f.t("settings.summary")).font(.system(size: 15, weight: .semibold))
-            Text(f.t(servers.isEmpty ? "settings.summary.noServer" : "settings.summary.note")).font(.system(size: 13))
+            // Without a server the Mac rebuilds at the end of the day itself, when that is on (`startWorklogTexts`).
+            let mac = servers.isEmpty && app.endOfDayTexts && (app.worklogConfig[.local] ?? nil)?.rebuildAtEnd != false
+            Text(f.t(!servers.isEmpty ? "settings.summary.note" : mac ? "settings.summary.mac" : "settings.summary.noServer")).font(.system(size: 13))
                 .foregroundColor(Z.secondary).fixedSize(horizontal: false, vertical: true)
             CheckRow(title: f.t("settings.summary.on"), on: at != nil) {
                 summaryTime = nil
@@ -432,7 +434,8 @@ struct EditorPanelsCard: View {
                     }
                     .disabled(app.cliBusy)
                     if vm.canDisable {
-                        Text(EditorPanelsVM.panelCheck(f)).font(.system(size: 12)).foregroundColor(Z.body).fixedSize(horizontal: false, vertical: true)
+                        // The samples' line is made up: a real one reads the machine rendering them.
+                        Text(snapshot ? EditorPanelsVM.panelCheck(run: f.now - 3600, reading: f.now - 3000, f) : EditorPanelsVM.panelCheck(f)).font(.system(size: 12)).foregroundColor(Z.body).fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
                     Text(f.t("connect.onlyApp")).foregroundColor(Z.muted)
