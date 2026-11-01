@@ -29,7 +29,10 @@ is about (of the session and its sub-agents, by the folder of each interval, `ac
 - title: the whole session;
 - branch the agent recorded (`session.git_branch`): the intervals in the session's folder;
 - typed key (`task_key`, written at ingest, no text; works with `index_prompts` off): from the message on through
-  the following intervals while no pause is longer than `idle_gap`, until a message with other keys;
+  the following intervals while no pause is longer than `idle_gap`, until a message with other keys. Not from
+  `<system-reminder>` spans or lines with a clock range (a pasted worklog list). A key in the title (first non-empty
+  line) of a brief the message points to (`read /path/BRIEF.md`) reaches the same way, as `brief` (rank of a typed key);
+  the brief's body cites other keys and gives none;
 - `worktree`: the branch checked out in the interval's folder at that time (checkouts from the folder's HEAD
   reflog; the current branch if there were none);
 - commits: your commits (`--author=<repo user.email>`, none without it; all branches; by author time, which a
@@ -39,7 +42,10 @@ is about (of the session and its sub-agents, by the folder of each interval, `ac
   folder) counts for the repositories one or two levels below it: agents there commit with `git -C` or full paths.
   Known limits: a session there gets those commits whatever it did (nothing tells which repository it touched);
   an amended or squashed commit keeps its first author time, so work done before the amend is not covered by it.
-`linkSessions` rebuilds title/branch/message links, `linkDay` the day's commit/worktree links; manual links are
+Only keys of known projects count (for linking and `unknownKeys`): Jira's (`JiraCache.projects`, the projects you
+can browse, read with the issues), `TaskLinker.projects` and those of the registry's tasks; without Jira projects
+every match counts. So `BRIEF-2` or `EN-150` are no keys where Jira has no such project.
+`linkSessions` rebuilds title/branch/message/brief links, `linkDay` the day's commit/worktree links; manual links are
 never touched. `unknownKeys` lists keys in branches, titles and typed messages of the day that match no task (the
 plan suggests adding them). A key that is no task but one of your Jira issues (`JiraCache.mine`) becomes a task as its
 work is linked (`TaskLinker.Known`); keys of other issues stay unknown. `task_done` with source `auto` is written when a

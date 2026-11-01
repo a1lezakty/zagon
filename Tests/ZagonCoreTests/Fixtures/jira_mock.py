@@ -8,6 +8,7 @@ Faults (optional): "lose_post_replies": N — the next N worklog POSTs are store
 "post_status": [500, 400] — the next POSTs get these codes and store nothing; "bad_post_bodies": N — the next N POSTs
 are stored but answered 201 with a body that is not JSON; "search_lag": true — worklogs added by POST do not show in
 the worklogAuthor search (its index lags). The same post_status / lose_post_replies apply to issue POSTs.
+"browse_fails": true — the project list without `action` (projects you can browse) answers 500.
 """
 import base64, json, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -56,6 +57,8 @@ class H(BaseHTTPRequestHandler):
         if method == "GET" and u.path == "/rest/api/2/myself":
             return self.send(200, {"accountId": me})
         if method == "GET" and u.path == "/rest/api/3/project/search":
+            if state.get("browse_fails") and "action" not in q:  # the browse list (no action) failing
+                return self.send(500, {"errorMessages": ["down"]})
             ps = state.get("projects", [])
             at = int(q.get("startAt", 0))
             return self.send(200, {"values": ps[at:at + 1], "isLast": at + 1 >= len(ps)})  # one per page

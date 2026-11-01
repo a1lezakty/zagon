@@ -350,11 +350,12 @@ public final class JiraClient {
         return out.sorted { $0.started < $1.started }
     }
 
-    /// Projects you may create issues in, by key.
-    public func projects() throws -> [JiraProject] {
+    /// Projects you may create issues in (`action` "create"; nil = those you can browse), by key.
+    public func projects(action: String? = "create") throws -> [JiraProject] {
         var out: [JiraProject] = []
         while true {
-            let p = try get("/rest/api/3/project/search?action=create&startAt=\(out.count)&maxResults=50", ProjectPage.self)
+            let p = try get("/rest/api/3/project/search?\(action.map { "action=\($0)&" } ?? "")startAt=\(out.count)&maxResults=50",
+                            ProjectPage.self)
             out += p.values
             if p.values.isEmpty || p.isLast != false || out.count >= 1000 { return out.sorted { $0.key < $1.key } }
         }

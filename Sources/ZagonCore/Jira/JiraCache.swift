@@ -10,6 +10,8 @@ public struct JiraCache: Sendable, Equatable {
     public var mine: Set<String> = []
     /// With your worklogs in the last 7 days.
     public var logged: Set<String> = []
+    /// Keys of the projects you can browse: a key of another project (`BRIEF-2`) is no task (`TaskLinker`).
+    public var projects: Set<String> = []
     /// `[jira] review_statuses` of the last read: how a task made from an issue here gets its status.
     public var review = JiraConfig.defaultReview
     public init() {}
@@ -34,6 +36,7 @@ public struct JiraCache: Sendable, Equatable {
         }
         c.mine = Set(v["mine"]?.array?.compactMap(\.string) ?? [])
         c.logged = Set(v["logged"]?.array?.compactMap(\.string) ?? [])
+        c.projects = Set(v["projects"]?.array?.compactMap(\.string) ?? [])
         if let r = v["review"]?.array?.compactMap(\.string) { c.review = r }
         return (c, v["tried"]?.double ?? c.at)
     }
@@ -45,6 +48,7 @@ public struct JiraCache: Sendable, Equatable {
                 .init($0.key, .object([.init("s", .string($0.summary)), .init("st", .string($0.status)), .init("c", .string($0.statusCategory))]))
             })),
             .init("mine", .array(mine.sorted().map(JValue.string))), .init("logged", .array(logged.sorted().map(JValue.string))),
+            .init("projects", .array(projects.sorted().map(JValue.string))),
             .init("review", .array(review.map(JValue.string))),
         ])
         try store.db.run("INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
@@ -69,6 +73,8 @@ public struct JiraCache: Sendable, Equatable {
         }
         // Your worklogs only: the search also finds issues where you logged long ago and someone else this week.
         c.logged = Set(try jira.myWorklogs(from: now - 7 * 86400, to: now).map(\.issueKey))
+        // Projects change rarely: a failed read keeps the last one.
+        c.projects = (try? Set(jira.projects(action: nil).map(\.key))) ?? old.projects
         try store.db.transaction {
             for t in try tasks.list() {
                 guard let k = t.jiraKey, let i = c.issues[k], old.issues[k]?.status != i.status else { continue }
