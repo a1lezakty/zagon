@@ -221,10 +221,13 @@ enum Snapshots {
             state.toast = Toast(text: state.f.t("connect.doneNoMCP"))
             ok = write(MainPanel().environmentObject(state), width: 400, "main-nomcp-\(lang.rawValue)", dir) && ok
             state.toast = nil
-            state.jira = nil
+            // This Mac's plan without its Jira: the note and Connect Jira under it.
+            let local = state.hasLocalCLI, source = state.taskSource
+            state.hasLocalCLI = true; state.taskSource = .local; state.jira = nil
             state.screen = .worklog
             root = WindowRoot().environmentObject(state).fixedSize(horizontal: false, vertical: true)
             ok = write(root, width: 1280, "worklog-nojira-\(lang.rawValue)", dir) && ok
+            state.hasLocalCLI = local; state.taskSource = source
             state.cli = connected; state.jira = jira; state.notifyDenied = false; state.sampleHostErrors = [:]; state.editors = editors
         }
         return ok
