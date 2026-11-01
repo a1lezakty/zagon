@@ -198,8 +198,6 @@ jobs:
           path: assets/
           if-no-files-found: error
 
-  # Installed copies read releases/latest: zagon update and install.sh take SHA256SUMS and the binary, Zagon.app takes
-  # appcast.xml. So the release is published (not a draft or prerelease) and checked to be `latest` with every file.
   # Signed build provenance (Sigstore, stored by GitHub) for every release file: gh attestation verify <file> --repo
   # a1lezakty/zagon. Tags only: a manual run builds any branch, and its attestations would verify just the same for
   # files that were never released. Before the release, so no file is published without one.
@@ -220,6 +218,8 @@ jobs:
         with:
           subject-path: assets/*
 
+  # Installed copies read releases/latest: zagon update and install.sh take SHA256SUMS and the binary, Zagon.app takes
+  # appcast.xml. So the release is published (not a draft or prerelease) and checked to be `latest` with every file.
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [version, notes, bundle, attest]
