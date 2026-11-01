@@ -43,14 +43,18 @@ final class Child {
         }
         #if canImport(Darwin)
         var fa: posix_spawn_file_actions_t?, attr: posix_spawnattr_t?
-        let flags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT
+        let flags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT
         #else
         var fa = posix_spawn_file_actions_t(), attr = posix_spawnattr_t()
-        let flags = POSIX_SPAWN_SETPGROUP
+        let flags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK
         #endif
         posix_spawn_file_actions_init(&fa)
         posix_spawnattr_init(&attr)
         defer { posix_spawn_file_actions_destroy(&fa); posix_spawnattr_destroy(&attr) }
+        // No signal blocked: the spawning thread may be a dispatch worker with most of them blocked, and a mock
+        // started from it would ignore SIGTERM.
+        var none = sigset_t()
+        posix_spawnattr_setsigmask(&attr, &none)
         posix_spawnattr_setflags(&attr, Int16(flags))
         if stdin { posix_spawn_file_actions_adddup2(&fa, i[0], 0) } else { posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0) }
         if stdout { posix_spawn_file_actions_adddup2(&fa, o[1], 1) } else { posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0) }
