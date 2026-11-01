@@ -54,9 +54,10 @@ Without `-a` (a lightweight tag) the notes are the commit subjects since the pre
 only, and each must be higher than the last (the workflow refuses one that is not above every `v*` tag): Sparkle
 compares the build number (the workflow's run number) and `zagon update` takes whatever `latest` is.
 
-If the run fails, fix the cause and use **Re-run failed jobs**, not "Re-run all jobs": the jobs that passed keep
+If the run fails, fix the cause and use **Re-run failed jobs**, never "Re-run all jobs": the jobs that passed keep
 their files, and the publish step finds a release left by a failed upload (even a draft), uploads again and makes it
-the published `latest`.
+the published `latest`. Re-running all jobs rebuilds every file with other bytes and replaces the published ones:
+an MCP Registry entry already published for that version keeps the old `fileSha256` for good.
 
 ## Try the workflow without releasing
 
@@ -73,7 +74,8 @@ published without one. Manual runs make none: they build any branch, and their a
 same for files that were never released. Check one:
 
 ```sh
-gh attestation verify zagon-linux-x86_64 --repo a1lezakty/zagon
+gh attestation verify zagon-linux-x86_64 --repo a1lezakty/zagon \
+  --signer-workflow a1lezakty/zagon/.github/workflows/release.yml --source-ref refs/tags/v0.1.5
 ```
 
 ## Homebrew
@@ -81,9 +83,10 @@ gh attestation verify zagon-linux-x86_64 --repo a1lezakty/zagon
 The tap is the repository `a1lezakty/homebrew-zagon`: `Formula/zagon.rb` (the CLI: the Linux binaries,
 `zagon-macos-universal` on macOS) and `Casks/zagon.rb` (Zagon.app from `Zagon.dmg`). Their templates are in
 `packaging/homebrew/`; after the release, the `homebrew` job fills in the version and the sums from `SHA256SUMS`
-(`packaging/homebrew/render.sh`) and pushes both files to the tap. Without the tap or the token it is skipped with
-a notice; it runs after the release, so a failure there leaves the release as it is (fix, then **Re-run failed
-jobs**). Change the formula or the cask in the templates, not in the tap: the next release overwrites the tap.
+(`packaging/homebrew/render.sh`) and pushes both files to the tap. Without the secret it is skipped with a notice;
+with the secret set, a tap the token cannot read fails the job (red, so a broken token is seen). A tap that already
+has a newer version is left alone. The job runs after the release, so a failure there leaves the release as it is
+(fix, then **Re-run failed jobs**). Change the formula or the cask in the templates, not in the tap: the next release overwrites the tap.
 
 Set it up once:
 
@@ -91,7 +94,8 @@ Set it up once:
 2. Create a fine-grained personal access token: repository access **only** `a1lezakty/homebrew-zagon`, permission
    Contents: Read and write, nothing else (GITHUB_TOKEN cannot push to another repository). Give it an expiry and
    renew it.
-3. Add it to this repository as the Actions secret `HOMEBREW_TAP_TOKEN`.
+3. Add it to this repository as the Actions secret `HOMEBREW_TAP_TOKEN` (after the tap exists: from then on the job
+   fails while the token cannot read it).
 4. Release, or re-run the `homebrew` job of the last tag run. Then on a Mac and a Linux box:
    `brew install a1lezakty/zagon/zagon`, `brew install --cask a1lezakty/zagon/zagon`, `brew test zagon`.
 

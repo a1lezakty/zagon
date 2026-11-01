@@ -288,6 +288,7 @@ jobs:
         with:
           name: homebrew
           path: tap/
+          overwrite: true  # Re-run failed jobs uploads it again
       - name: Push to the tap
         if: github.event_name == 'push'
         env:
@@ -295,10 +296,17 @@ jobs:
         run: |
           [ -n "$TAP_TOKEN" ] || { echo "::notice::HOMEBREW_TAP_TOKEN is not set: the tap is not updated (docs/RELEASING.md)"; exit 0; }
           code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TAP_TOKEN" "https://api.github.com/repos/$TAP")
-          [ "$code" != 404 ] || { echo "::notice::$TAP does not exist (or the token cannot see it): the tap is not updated"; exit 0; }
-          [ "$code" = 200 ] || { echo "::error::GitHub answered $code for $TAP"; exit 1; }
-          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 -w0)"
+          # a set token means the tap is set up: a 404 is a token without access to it, not "no tap yet"
+          [ "$code" = 200 ] || { echo "::error::GitHub answered $code for $TAP: the token cannot read it (docs/RELEASING.md)"; exit 1; }
+          basic=$(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 -w0)
+          echo "::add-mask::$basic"
+          auth="AUTHORIZATION: basic $basic"
           git -c http.extraheader="$auth" clone -q "https://github.com/$TAP" tap-repo
+          # an older tag finishing after a newer one must not move the tap back
+          have=$(sed -n 's/^  version "\(.*\)"$/\1/p' tap-repo/Formula/zagon.rb 2>/dev/null || true)
+          if [ -n "$have" ] && [ "$have" != "$VERSION" ] && [ "$(printf '%s\n%s\n' "$have" "$VERSION" | sort -V | tail -1)" = "$have" ]; then
+            echo "::notice::$TAP already has zagon $have, newer than $VERSION: not changed"; exit 0
+          fi
           mkdir -p tap-repo/Formula tap-repo/Casks
           cp tap/Formula/zagon.rb tap-repo/Formula/zagon.rb
           cp tap/Casks/zagon.rb tap-repo/Casks/zagon.rb

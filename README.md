@@ -91,8 +91,8 @@ Windows, and its Mac app is not notarized.
   from what Claude Code passes to its status line and from Codex's own files: it never reads OAuth tokens, cookies or
   credential files and calls no usage API.
 - **Numbers, not conversations.** The database keeps numbers, times, projects, branches and session titles. Text goes
-  only into the local archive of transcripts and into short digests for the daily AI summary and the evening task
-  suggestions, run on your own `claude` or `codex` subscription.
+  only into the local archive of transcripts and into short digests for three AI calls (the day summary, the worklog
+  texts, the evening task suggestions), run on your own `claude` or `codex` subscription.
 
 All the details: [Privacy in detail](#privacy-in-detail).
 
@@ -101,16 +101,21 @@ All the details: [Privacy in detail](#privacy-in-detail).
 What to turn off when your employer limits where code and conversations go:
 
 - **Archive.** The service keeps compressed copies of transcripts in `~/.zagon/archive`, also after Claude Code's own
-  cleanup (`cleanupPeriodDays`). Run the service with `zagon daemon --no-archive`: `systemctl --user edit zagon`, then
-  `[Service]`, `ExecStart=` and `ExecStart=<path to zagon> daemon --no-archive`. Delete `~/.zagon/archive` if it was
+  cleanup (`cleanupPeriodDays`). Run the service with `zagon daemon --no-archive`: `systemctl --user edit zagon` (a
+  system unit: `sudo systemctl edit zagon-<user>`), add `[Service]`, `ExecStart=` and
+  `ExecStart=<path to zagon> daemon --no-archive`, then restart the service. Delete `~/.zagon/archive` if it was
   written.
-- **AI calls.** The day summary and the evening task suggestions send titles, project and branch names, edited file
-  names, commit subjects and the first words of your typed messages (secrets redacted) to your Claude or Codex
-  subscription. `[summary] engine = "none"` builds the summary without AI; `[tasks] evening_suggestions = false`
-  stops the evening call.
+- **AI calls.** The day summary, the worklog texts (the service at 23:55, `zagon log plan --refresh`, the Mac app's
+  rebuild) and the evening task suggestions send titles, project and branch names, edited file names, commit subjects
+  and words of your typed messages (secrets redacted) to your Claude or Codex subscription. `[summary] engine = "none"`
+  turns all of them off (summaries and texts are then built without AI); `[tasks] evening_suggestions = false` stops
+  only the evening call. Restart the service after changing either.
 - **Notifications.** Telegram and ntfy messages carry session titles, project names and the day summary. Leave them
   off, or point `[ntfy] url` at your own ntfy server.
-- **Search.** `--no-index-prompts` on `zagon scan` and `zagon daemon` keeps your typed words out of the search index.
+- **Search.** Every command that scans indexes your typed words for search (the words, not the text). To keep them
+  out, pass `--no-index-prompts` everywhere a scan runs: the service (`zagon daemon`, as for the archive), `zagon scan`
+  and the MCP server (`claude mcp add --scope user zagon -- zagon mcp --no-index-prompts`, the same for `codex mcp
+  add`); reports take it too. The Mac app always indexes.
 
 ### Checked with
 
@@ -195,7 +200,8 @@ The macOS app (sample data): a worklog row opened, the menu bar, then the Day, W
   = false` turns the evening call off (`zagon task suggest` still runs it when you ask); `[tasks] style_samples =
   false` leaves the samples out. The service reads these when it starts: restart it after a change.
 - Your typed messages go into a contentless full-text index used for search: the words can be searched, the text
-  itself is not kept. Pass `--no-index-prompts` to `zagon scan` / `zagon daemon` to turn that off.
+  itself is not kept. Pass `--no-index-prompts` to every command that scans (`zagon daemon`, `zagon scan`,
+  `zagon mcp`, the reports) to turn that off; the Mac app always indexes.
 - Data lives in `~/.zagon` (or `$ZAGON_DIR`): `zagon.db`, `spool/`, `archive/`, `logs/`, `config.toml`, `backup/`.
 
 ## Install on a Linux server
@@ -289,9 +295,10 @@ update servers and the Mac together and do not roll back to 0.1.0.
 by the old binary, so it cannot make the copy for you:
 
 ```sh
-systemctl --user stop zagon        # or: sudo systemctl stop zagon-<user>
+systemctl --user stop zagon        # a system unit: sudo systemctl stop zagon-<user>
 mkdir -p ~/zagon-backup && cp -p ~/.zagon/zagon.db* ~/zagon-backup/
-zagon update                       # starts the service again
+zagon update                       # in /usr/local/bin: sudo zagon update
+systemctl --user start zagon       # update restarts only a running service; or: sudo systemctl start zagon-<user>
 ```
 
 To go back to 0.1.4 later: stop the service, move the current `~/.zagon/zagon.db*` files aside, copy the saved ones
@@ -460,7 +467,9 @@ codex mcp add zagon -- zagon mcp
 `zagon-mcp-macos.mcpb` from [Releases](https://github.com/a1lezakty/zagon/releases/latest) (Linux:
 `zagon-mcp-linux-x86_64.mcpb`, `zagon-mcp-linux-aarch64.mcpb`). The bundle carries its own `zagon`, which reads the
 transcripts and `~/.zagon` like `zagon mcp` does; live status and Claude limits still need the hooks and the status
-line (the app's Connect or `zagon install`). Claude Code and Codex load MCP servers when a session starts: the tools show up in
+line (the app's Connect or `zagon install`). It does not update itself: install the new bundle after each update. A
+bundle older than the database stops answering, and a newer one moves the database to its schema before the app or
+service has it, so keep them on the same version. Claude Code and Codex load MCP servers when a session starts: the tools show up in
 sessions started after the registration, so restart the ones you have open (`/mcp` in Claude Code lists them).
 
 Answers are short and carry numbers; a long one, such as a day exported to Markdown, goes to a file in

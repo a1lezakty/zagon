@@ -5,7 +5,8 @@
 Report it privately through GitHub: [Security → Report a vulnerability](https://github.com/a1lezakty/zagon/security/advisories/new)
 (private vulnerability reporting). Please do not open a public issue for it. Say what is affected (version, Linux
 or macOS, CLI or app), how to reproduce it, and what an attacker gains. You get an answer in the advisory; the fix
-ships in a new release, and the advisory is published with it.
+ships in a new release, and the advisory is published with it. If that form is not available, open an issue that
+only asks for a private contact, with no details.
 
 ## Supported versions
 
@@ -26,11 +27,13 @@ Every release has `SHA256SUMS`, and from 0.1.5 on a signed build provenance atte
 
 ```sh
 sha256sum -c --ignore-missing SHA256SUMS     # in the folder with the downloads; on macOS: shasum -a 256 -c …
-gh attestation verify zagon-linux-x86_64 --repo a1lezakty/zagon
+gh attestation verify zagon-linux-x86_64 --repo a1lezakty/zagon \
+  --signer-workflow a1lezakty/zagon/.github/workflows/release.yml --source-ref refs/tags/v0.1.5
 ```
 
-`gh attestation verify` (GitHub CLI) checks the file's Sigstore-signed provenance: that it was built by
-`.github/workflows/release.yml` of this repository from a `v*` tag. It works for every release file, `Zagon.dmg` and
+`gh attestation verify` (GitHub CLI) checks the file's Sigstore-signed provenance; with `--signer-workflow` and
+`--source-ref` (the release's tag), that it was built by `.github/workflows/release.yml` of this repository from that
+tag. Without them it only proves that some workflow of this repository attested the file. It works for every release file, `Zagon.dmg` and
 the `.mcpb` bundles included. `install.sh` and `zagon update` check the binary against `SHA256SUMS` before they install it.
 
 ## macOS app

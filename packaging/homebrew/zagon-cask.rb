@@ -34,5 +34,8 @@ cask "zagon" do
     Before uninstalling, click Disconnect in Zagon's window (Claude Code and Codex), or run
       /Applications/Zagon.app/Contents/Helpers/zagon uninstall
     so the Claude Code and Codex settings no longer run the zagon inside the app.
+
+    brew uninstall --zap also moves ~/.zagon to the Trash: the database and the transcript archive, which may be
+    the only copy of transcripts Claude Code has already deleted.
   EOS
 end
