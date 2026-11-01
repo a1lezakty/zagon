@@ -11,20 +11,25 @@ import Musl
 import Darwin
 #endif
 
-/// Cursor's agent: sessions and time, no tokens and no limits (Cursor keeps those on its servers, and Zagon reads no
-/// credentials). Two sources:
+/// Cursor's agent: sessions, time and the tokens its hooks report; no limits and no prices (Cursor keeps those on its
+/// servers, and Zagon reads no credentials). Three sources:
 /// - hooks: `spool/<day>.cursor.ndjson`, the lines `zagon hook` writes for Cursor's calls (`HookSpool.cursorLine`):
-///   exact turns, from when the hooks first fired (`ZagonPaths.cursorHooks`);
-/// - transcripts: `~/.cursor/projects/<project>/agent-transcripts/<id>/<id>.jsonl`, for the time before that. They hold
-///   no times; only typed messages with a `<timestamp>` tag (minutes) are placed, and a turn lasts until the next one
-///   (or the file's last write), so this time is approximate.
+///   exact turns and tokens, from when the hooks first fired (`ZagonPaths.cursorHooks`);
+/// - transcripts (Cursor up to 2.x): `~/.cursor/projects/<project>/agent-transcripts/<id>/<id>.jsonl`, for the time
+///   before that. They hold no times; only typed messages with a `<timestamp>` tag (minutes) are placed, and a turn
+///   lasts until the next one (or the file's last write), so this time is approximate;
+/// - conversation headers (Cursor 3 keeps no transcripts): `<data-dir>/cursor/headers.ndjson`, copied from Cursor's
+///   own database by `CursorHeaders.sync`, also only for the time before the hooks, rougher still.
 public enum CursorSource {
     public static func specs(paths: ZagonPaths = ZagonPaths(), root: String? = nil) -> [SourceSpec] {
         let marker = paths.cursorHooks, home = paths.home
         return [
-            SourceSpec(tool: .cursor, root: paths.spool, accepts: isHookFile) { _, _, _ in CursorHookParser() },
+            SourceSpec(tool: .cursor, root: paths.spool, accepts: isHookFile) { _, _, state in CursorHookParser(state: state) },
             SourceSpec(tool: .cursor, root: root ?? home + "/.cursor/projects", accepts: isTranscript) { path, rel, state in
                 CursorTranscriptParser(path: path, relativePath: rel, state: state, hooksSince: hooksSince(marker), home: home)
+            },
+            SourceSpec(tool: .cursor, root: CursorHeaders.dir(paths), accepts: { $0 == CursorHeaders.name }) { _, _, _ in
+                CursorHeadersParser(since: hooksSince(marker))
             },
         ]
     }
@@ -44,9 +49,28 @@ public enum CursorSource {
 }
 
 /// Cursor's lines of the hook spool: a typed prompt starts a turn, tool calls and the end of the answer extend it.
+/// Tokens: `stop` and `afterAgentResponse` both report a generation's (`generation_id`); one generation counts its
+/// largest report per field, so the two (or a repeat) never add up; reports without a generation id add up. They count
+/// under the model `cursor/<model>` (`cursor` without one), which `Pricing` never prices: Cursor's own prices are
+/// unknown. Each report that adds tokens is one request.
+/// ponytail: the largest report of the last `keep` generations of this file; a generation whose reports fall on two
+/// UTC days (two spool files) counts in both.
 struct CursorHookParser: LineParser {
+    struct State: Codable { var gens: [Gen] = [] }
+    /// What a generation counted so far: input, output, cache read, cache write.
+    struct Gen: Codable { var id: String; var n: [Int] }
+    static let keep = 64
+    var st: State
     /// Session, directory and model last reported (one `SessionMeta` per change, not per line).
     var reported: [String?] = []
+
+    init(state: String? = nil) {
+        st = state.flatMap { try? JSONDecoder().decode(State.self, from: Data($0.utf8)) } ?? State()
+    }
+
+    func saveState() -> String? {
+        st.gens.isEmpty ? nil : (try? JSONEncoder().encode(st)).map { String(decoding: $0, as: UTF8.self) }
+    }
 
     mutating func parse(line: UnsafeRawBufferPointer, into out: inout ParseOutput) {
         guard let v = JValue.parse(Array(line)), v["tool"]?.string == "cursor" else { return }
@@ -60,12 +84,24 @@ struct CursorHookParser: LineParser {
         switch event {
         // No text: only the prompt's task keys (`HookSpool.cursorLine`), for task links.
         case "UserPromptSubmit": out.userMessages.append(UserMessage(sessionId: id, ts: ts, text: v["keys"]?.string, cwd: cwd))
-        case "PostToolUse", "Stop", "SubagentStop", "PreCompact": out.events.append(ActivityEvent(sessionId: id, ts: ts, cwd: cwd))
+        case "PostToolUse", "Stop", "SubagentStop", "PreCompact", "afterAgentResponse":
+            out.events.append(ActivityEvent(sessionId: id, ts: ts, cwd: cwd))
         default: break
         }
+        let n = HookSpool.cursorTokens.map { v[$0]?.double.flatMap { $0 >= 0 && $0 < 1e15 ? Int($0) : nil } }
+        guard n.contains(where: { $0 != nil }) else { return }
+        let new = n.map { $0 ?? 0 }
+        var counted = [0, 0, 0, 0]
+        if let g = v["generation_id"]?.string {
+            if let i = st.gens.firstIndex(where: { $0.id == g }) { counted = st.gens.remove(at: i).n }
+            st.gens.append(Gen(id: g, n: zip(new, counted).map { max($0, $1) }))
+            if st.gens.count > Self.keep { st.gens.removeFirst() }
+        }
+        let d = zip(new, counted).map { max(0, $0 - $1) }
+        guard d.contains(where: { $0 > 0 }) else { return }
+        out.usage.append(UsageRecord(sessionId: id, ts: ts, model: model.map { "cursor/" + $0 } ?? "cursor", input: d[0], output: d[1],
+                                     cacheRead: d[2], cacheWrite: d[3], cwd: cwd))
     }
-
-    func saveState() -> String? { nil }
 }
 
 /// One conversation of Cursor's agent. A line is `{"role": "user" | "assistant", "message": {"content": [...]}}` with

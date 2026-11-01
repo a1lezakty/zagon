@@ -12,168 +12,217 @@ struct SettingsScreen: View {
         let f = app.f
         Page {
             Header(f.t("nav.settings"))
-            Card(spacing: 12) {
-                Text(f.t("connect.title")).font(.system(size: 15, weight: .semibold))
-                Text(f.t("connect.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let cli = app.cli {
-                    ForEach(cli.ok, id: \.self) { line in
-                        HStack(spacing: 8) { Dot(color: Z.working, size: 7); Text(line) }
-                    }
-                    ForEach(cli.missing, id: \.self) { line in
-                        HStack(spacing: 8) { Dot(color: Z.bad, size: 7); Text(line) }
-                    }
-                    ForEach(cli.notes, id: \.self) { line in
-                        // Claude's tools left out matter: said in words, not as doctor's line.
-                        let tools = line.hasPrefix("claude: MCP skipped")
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Dot(color: tools ? Z.waiting : Z.faint, size: 7)
-                            Text(tools ? f.t("connect.mcpSkipped") : line).foregroundColor(tools ? Z.text : Z.muted)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                } else if AppState.cliPath == nil {
-                    Text(f.t("connect.onlyApp")).foregroundColor(Z.muted)
-                }
-                HStack(spacing: 8) {
-                    let busy = app.cliBusy, running = app.cliCommand
-                    PillButton(title: busy && running == "install" ? f.t("connect.connecting") : f.t("connect.button"), primary: true,
-                               busy: busy && running == "install") { app.runCLI("install") }
-                    PillButton(title: f.t("connect.remove"), busy: busy && running == "uninstall") { app.runCLI("uninstall") }
-                    PillButton(title: f.t("connect.check"), busy: busy && running == nil) { app.runCLI(nil) }
-                }
-                .disabled(app.cliBusy)
-                if let e = app.cliError, !EditorPanelsCard.ran(app) {
-                    Text(f.t("connect.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            Segmented(items: SettingsTab.allCases.map { f.t("settings.tab." + $0.rawValue) },
+                      selected: SettingsTab.allCases.firstIndex(of: app.settingsTab) ?? 0, height: 30, fontSize: 13) {
+                app.settingsTab = SettingsTab.allCases[$0]
             }
-            .font(.system(size: 13)).foregroundColor(Z.text)
-            .frame(maxWidth: 640, alignment: .leading)
-            EditorPanelsCard()
-            JiraCard()
-            if app.currentTaskSource != nil { WorklogCard() }
-            ZoneCard()
-            Card(spacing: 12) {
-                Text(f.t("settings.view")).font(.system(size: 15, weight: .semibold))
-                HStack(spacing: 12) {
-                    Text(f.t("settings.view.limits")).font(.system(size: 13)).foregroundColor(Z.body).frame(width: 90, alignment: .leading)
-                    Segmented(items: [f.t("settings.view.rings"), f.t("settings.view.pace")], selected: app.pace ? 1 : 0) {
-                        app.pace = $0 == 1
-                    }
-                }
-                CheckRow(title: f.t("settings.view.weekdays"), on: app.paceWeekdays) { app.paceWeekdays.toggle() }
-                if AppState.cliPath != nil {
-                    CheckRow(title: f.t("settings.launch"), on: app.launchAtLogin) { app.setLaunchAtLogin(!app.launchAtLogin) }
-                }
-                HStack(spacing: 12) {
-                    Text(f.t("settings.view.icon")).font(.system(size: 13)).foregroundColor(Z.body).frame(width: 90, alignment: .leading)
-                    Segmented(items: [f.t("settings.view.colored"), f.t("settings.view.mono")], selected: app.monoIcon ? 1 : 0) {
-                        app.monoIcon = $0 == 1
-                    }
-                }
-                Text(f.t("settings.view.note")).font(.system(size: 12)).foregroundColor(Z.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                colors(f)
+            switch app.settingsTab {
+            case .general:
+                appearanceCard(f)
+                viewCard(f)
+                ZoneCard()
+                updatesCard(f)
+                diagCard(f)
+            case .connect:
+                connectCard(f)
+                EditorPanelsCard()
+            case .jira:
+                JiraCard()
+                if app.currentTaskSource != nil { WorklogCard() }
+                summary(f)
+            case .notify:
+                notifyCard(f)
+            case .servers:
+                serversCard(f)
             }
-            .frame(maxWidth: 640, alignment: .leading)
-            Card(spacing: 12) {
-                Text(f.t("settings.notify")).font(.system(size: 15, weight: .semibold))
-                Text(f.t("settings.notify.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                ForEach(NotifySettings.categories, id: \.self) { c in
-                    let on = app.notify.thresholds(c)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(NotifySettings.title(c, f)).font(.system(size: 13, weight: .medium)).foregroundColor(Z.text)
-                        HStack(spacing: 6) {
-                            ForEach(NotifySettings.steps, id: \.self) { v in
-                                Chip(title: "\(v)", selected: on.contains(v), height: 24) {
-                                    app.editNotify { $0.set(c, v, on: !on.contains(v)) }
-                                }
-                            }
-                        }
-                    }
-                }
-                CheckRow(title: f.t("settings.notify.mac"), on: app.macNotify) {
-                    app.macNotify.toggle()
-                    if app.macNotify { app.askNotify() }
-                }
-                if app.macNotify && app.notifyDenied {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(f.t("settings.notify.denied")).font(.system(size: 12)).foregroundColor(Z.bad)
-                            .fixedSize(horizontal: false, vertical: true)
-                        PillButton(title: f.t("settings.notify.openSystem"), height: 28, radius: 8, fontSize: 12) {
-                            MacNotifications.openSettings()
-                        }
-                    }
-                    .padding(.leading, 25)
-                }
-                if app.macNotify {
-                    CheckRow(title: f.t(app.remoteHosts.isEmpty ? "settings.notify.remoteAlone" : "settings.notify.remote"),
-                             on: app.macNotifyRemote) { app.macNotifyRemote.toggle() }
-                        .padding(.leading, 25)
-                }
-                let reset = app.notify.limitReset
-                CheckRow(title: f.t("settings.notify.reset"), on: reset) { app.editNotify { $0.limitReset = !reset } }
-                if let e = app.notifyError {
-                    Text(f.t("settings.notify.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .frame(maxWidth: 640, alignment: .leading)
-            // Allowed or denied in System Settings meanwhile: read again whenever settings show.
-            .onAppear { if !snapshot { app.checkNotify() } }
-            summary(f)
-            Card(spacing: 12) {
-                Text(f.t("settings.servers")).font(.system(size: 15, weight: .semibold))
-                Text(f.t("settings.servers.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                let hosts = app.sshHosts, errors = app.hostErrors, hints = app.hostHints
-                if hosts.isEmpty {
-                    Text(f.t("settings.servers.none")).font(.system(size: 13)).foregroundColor(Z.muted)
-                }
-                ForEach(hosts, id: \.self) { h in
-                    let on = app.remoteHosts.contains(h)
-                    Button { app.setRemote(h, on: !on) } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: on ? "checkmark.square.fill" : "square").font(.system(size: 15))
-                                .foregroundColor(on ? Z.week : Z.muted)
-                            Text(h).font(.system(size: 14)).foregroundColor(Z.text)
-                            if on { Dot(color: app.serverOnline(h) ? Z.working : Z.faint, size: 7) }
-                            if on, let e = errors[h] {
-                                Text(e == Remote.oldZagon ? f.t("servers.oldZagon") : e == Remote.noZagon ? f.t("servers.noZagonShort") : e).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1).truncationMode(.middle)
-                            } else if on, let hint = hints[h] {
-                                Text(f.t(hint)).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1)
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    if on, errors[h] == Remote.noZagon {
-                        CopyButton(title: f.t("servers.copyInstall"), height: 28, radius: 8, fontSize: 12) { Remote.installCommand }
-                            .padding(.leading, 25)
-                    }
-                }
-            }
-            .frame(maxWidth: 640, alignment: .leading)
-            Card(spacing: 12) {
-                Text(f.t("settings.updates")).font(.system(size: 15, weight: .semibold))
-                Text(f.t("settings.updates.version", AppState.version)).font(.system(size: 13)).foregroundColor(Z.secondary)
-                CheckRow(title: f.t("settings.updates.auto"), on: app.autoUpdate) { app.autoUpdate.toggle() }
-                PillButton(title: f.t("main.checkUpdates")) { app.checkForUpdates() }
-            }
-            .frame(maxWidth: 640, alignment: .leading)
-            Card(spacing: 12) {
-                Text(f.t("settings.diag")).font(.system(size: 15, weight: .semibold))
-                Text(f.t("settings.diag.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                PillButton(title: f.t("settings.diag.collect")) { collect(f) }
-            }
-            .frame(maxWidth: 640, alignment: .leading)
         }
     }
+
+    /// Dark, light, or as the system: the window and the panel (the menu bar icon follows the bar itself).
+    func appearanceCard(_ f: Fmt) -> some View {
+        Card(spacing: 12) {
+            Text(f.t("settings.look")).font(.system(size: 15, weight: .semibold))
+            Segmented(items: Appearance.allCases.map { f.t("settings.look." + $0.rawValue) },
+                      selected: Appearance.allCases.firstIndex(of: app.appearance) ?? 0) {
+                app.appearance = Appearance.allCases[$0]
+            }
+        }
+        .frame(maxWidth: 640, alignment: .leading)
+    }
+
+    func connectCard(_ f: Fmt) -> some View {
+        Card(spacing: 12) {
+            Text(f.t("connect.title")).font(.system(size: 15, weight: .semibold))
+            Text(f.t("connect.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let cli = app.cli {
+                ForEach(cli.ok, id: \.self) { line in
+                    HStack(spacing: 8) { Dot(color: Z.working, size: 7); Text(line) }
+                }
+                ForEach(cli.missing, id: \.self) { line in
+                    HStack(spacing: 8) { Dot(color: Z.bad, size: 7); Text(line) }
+                }
+                ForEach(cli.notes, id: \.self) { line in
+                    // Claude's tools left out matter: said in words, not as doctor's line.
+                    let tools = line.hasPrefix("claude: MCP skipped")
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Dot(color: tools ? Z.waiting : Z.faint, size: 7)
+                        Text(tools ? f.t("connect.mcpSkipped") : line).foregroundColor(tools ? Z.text : Z.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            } else if AppState.cliPath == nil {
+                Text(f.t("connect.onlyApp")).foregroundColor(Z.muted)
+            }
+            HStack(spacing: 8) {
+                let busy = app.cliBusy, running = app.cliCommand
+                PillButton(title: busy && running == "install" ? f.t("connect.connecting") : f.t("connect.button"), primary: true,
+                           busy: busy && running == "install") { app.runCLI("install") }
+                PillButton(title: f.t("connect.remove"), busy: busy && running == "uninstall") { app.runCLI("uninstall") }
+                PillButton(title: f.t("connect.check"), busy: busy && running == nil) { app.runCLI(nil) }
+            }
+            .disabled(app.cliBusy)
+            if let e = app.cliError, !EditorPanelsCard.ran(app) {
+                Text(f.t("connect.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .font(.system(size: 13)).foregroundColor(Z.text)
+        .frame(maxWidth: 640, alignment: .leading)
+    }
+
+    func viewCard(_ f: Fmt) -> some View {
+        Card(spacing: 12) {
+            Text(f.t("settings.view")).font(.system(size: 15, weight: .semibold))
+            HStack(spacing: 12) {
+                Text(f.t("settings.view.limits")).font(.system(size: 13)).foregroundColor(Z.body).frame(width: 90, alignment: .leading)
+                Segmented(items: [f.t("settings.view.rings"), f.t("settings.view.pace")], selected: app.pace ? 1 : 0) {
+                    app.pace = $0 == 1
+                }
+            }
+            CheckRow(title: f.t("settings.view.weekdays"), on: app.paceWeekdays) { app.paceWeekdays.toggle() }
+            if AppState.cliPath != nil {
+                CheckRow(title: f.t("settings.launch"), on: app.launchAtLogin) { app.setLaunchAtLogin(!app.launchAtLogin) }
+            }
+            HStack(spacing: 12) {
+                Text(f.t("settings.view.icon")).font(.system(size: 13)).foregroundColor(Z.body).frame(width: 90, alignment: .leading)
+                Segmented(items: [f.t("settings.view.colored"), f.t("settings.view.mono")], selected: app.monoIcon ? 1 : 0) {
+                    app.monoIcon = $0 == 1
+                }
+            }
+            Text(f.t("settings.view.note")).font(.system(size: 12)).foregroundColor(Z.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            colors(f)
+        }
+        .frame(maxWidth: 640, alignment: .leading)
+    }
+
+    func notifyCard(_ f: Fmt) -> some View {
+        Card(spacing: 12) {
+            Text(f.t("settings.notify")).font(.system(size: 15, weight: .semibold))
+            Text(f.t("settings.notify.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(NotifySettings.categories, id: \.self) { c in
+                let on = app.notify.thresholds(c)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(NotifySettings.title(c, f)).font(.system(size: 13, weight: .medium)).foregroundColor(Z.text)
+                    HStack(spacing: 6) {
+                        ForEach(NotifySettings.steps, id: \.self) { v in
+                            Chip(title: "\(v)", selected: on.contains(v), height: 24) {
+                                app.editNotify { $0.set(c, v, on: !on.contains(v)) }
+                            }
+                        }
+                    }
+                }
+            }
+            CheckRow(title: f.t("settings.notify.mac"), on: app.macNotify) {
+                app.macNotify.toggle()
+                if app.macNotify { app.askNotify() }
+            }
+            if app.macNotify && app.notifyDenied {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(f.t("settings.notify.denied")).font(.system(size: 12)).foregroundColor(Z.bad)
+                        .fixedSize(horizontal: false, vertical: true)
+                    PillButton(title: f.t("settings.notify.openSystem"), height: 28, radius: 8, fontSize: 12) {
+                        MacNotifications.openSettings()
+                    }
+                }
+                .padding(.leading, 25)
+            }
+            if app.macNotify {
+                CheckRow(title: f.t(app.remoteHosts.isEmpty ? "settings.notify.remoteAlone" : "settings.notify.remote"),
+                         on: app.macNotifyRemote) { app.macNotifyRemote.toggle() }
+                    .padding(.leading, 25)
+            }
+            let reset = app.notify.limitReset
+            CheckRow(title: f.t("settings.notify.reset"), on: reset) { app.editNotify { $0.limitReset = !reset } }
+            if let e = app.notifyError {
+                Text(f.t("settings.notify.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: 640, alignment: .leading)
+        // Allowed or denied in System Settings meanwhile: read again whenever settings show.
+        .onAppear { if !snapshot { app.checkNotify() } }
+    }
+
+    func serversCard(_ f: Fmt) -> some View {
+        Card(spacing: 12) {
+            Text(f.t("settings.servers")).font(.system(size: 15, weight: .semibold))
+            Text(f.t("settings.servers.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            let hosts = app.sshHosts, errors = app.hostErrors, hints = app.hostHints
+            if hosts.isEmpty {
+                Text(f.t("settings.servers.none")).font(.system(size: 13)).foregroundColor(Z.muted)
+            }
+            ForEach(hosts, id: \.self) { h in
+                let on = app.remoteHosts.contains(h)
+                Button { app.setRemote(h, on: !on) } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: on ? "checkmark.square.fill" : "square").font(.system(size: 15))
+                            .foregroundColor(on ? Z.week : Z.muted)
+                        Text(h).font(.system(size: 14)).foregroundColor(Z.text)
+                        if on { Dot(color: app.serverOnline(h) ? Z.working : Z.faint, size: 7) }
+                        if on, let e = errors[h] {
+                            Text(e == Remote.oldZagon ? f.t("servers.oldZagon") : e == Remote.noZagon ? f.t("servers.noZagonShort") : e).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1).truncationMode(.middle)
+                        } else if on, let hint = hints[h] {
+                            Text(f.t(hint)).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if on, errors[h] == Remote.noZagon {
+                    CopyButton(title: f.t("servers.copyInstall"), height: 28, radius: 8, fontSize: 12) { Remote.installCommand }
+                        .padding(.leading, 25)
+                }
+            }
+        }
+        .frame(maxWidth: 640, alignment: .leading)
+    }
+
+    func updatesCard(_ f: Fmt) -> some View {
+        Card(spacing: 12) {
+            Text(f.t("settings.updates")).font(.system(size: 15, weight: .semibold))
+            Text(f.t("settings.updates.version", AppState.version)).font(.system(size: 13)).foregroundColor(Z.secondary)
+            CheckRow(title: f.t("settings.updates.auto"), on: app.autoUpdate) { app.autoUpdate.toggle() }
+            PillButton(title: f.t("main.checkUpdates")) { app.checkForUpdates() }
+        }
+        .frame(maxWidth: 640, alignment: .leading)
+    }
+
+    func diagCard(_ f: Fmt) -> some View {
+        Card(spacing: 12) {
+            Text(f.t("settings.diag")).font(.system(size: 15, weight: .semibold))
+            Text(f.t("settings.diag.note")).font(.system(size: 13)).foregroundColor(Z.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            PillButton(title: f.t("settings.diag.collect")) { collect(f) }
+        }
+        .frame(maxWidth: 640, alignment: .leading)
+    }
+
 
     /// When the services of the checked servers write the day summary (the Mac has none): the servers' time when they
     /// answered, else this Mac's config.toml for the switch and "as on the server" for the time.
@@ -233,7 +282,8 @@ struct SettingsScreen: View {
                 }
             }
             HStack(alignment: .top, spacing: 12) {
-                Text(f.t("settings.colors.preview")).font(.system(size: 13)).foregroundColor(Z.body).frame(width: 90, alignment: .leading)
+                Text(f.t("settings.colors.preview")).font(.system(size: 13)).foregroundColor(Z.body).lineLimit(1).minimumScaleFactor(0.75)
+                    .frame(width: 90, alignment: .leading)
                 ColorPreview(claude: app.colors(.claude), codex: app.colors(.codex), colored: !app.monoIcon, f: f)
             }
             HStack(spacing: 12) {
