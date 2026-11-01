@@ -169,6 +169,74 @@ extension Installer {
         }
     }
 
+    // MARK: Codex hook trust
+
+    /// Codex runs a hook only once the user trusted it in `/hooks`: `[hooks.state."<hooks.json>:<event>:<group>:<hook>"]
+    /// trusted_hash` in config.toml, the sha256 of the entry as it was then (`trustInput`), so a changed entry (another
+    /// zagon path) is skipped until trusted again. Our entries that have no trust (`untrusted`) or whose trust is for
+    /// another text (`changed`, only checked with sha256sum or shasum on PATH); nil without our entries.
+    func codexTrust() -> (untrusted: [String], changed: [String], all: Int)? {
+        guard let b = Sys.readFile(codexHooks), let doc = try? load(b) else { return nil }
+        let cfg = Sys.readFile(codexConfig).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        let files = [codexHooks] + (Sys.realPath(codexHooks).map { $0 == codexHooks ? [] : [$0] } ?? [])
+        var untrusted: [String] = [], changed: [String] = [], all = 0
+        for e in Self.codexEvents {
+            for (gi, g) in (doc["hooks"]?[e]?.array ?? []).enumerated() {
+                for (hi, h) in (g["hooks"]?.array ?? []).enumerated() {
+                    guard let c = h["command"]?.string, isOurs(c, "hook codex \(e)") else { continue }
+                    all += 1
+                    let key = ":\(Self.snake(e)):\(gi):\(hi)"
+                    guard let have = files.lazy.compactMap({ TOMLLite.string(in: cfg, section: "hooks.state.\"\($0 + key)\"", key: "trusted_hash") }).first else {
+                        untrusted.append(e); continue
+                    }
+                    // Without an explicit timeout Codex hashes its default: 600 s, 1 s for Interrupt and SessionEnd (0.166).
+                    let timeouts = h["timeout"]?.double.map { [Int($0)] } ?? [600, 1]
+                    let want = timeouts.compactMap { sha256(Self.trustInput(event: e, command: c, timeout: $0, matcher: g["matcher"]?.string)) }
+                    if !want.isEmpty && !want.contains(where: { "sha256:" + $0 == have }) { changed.append(e) }
+                }
+            }
+        }
+        return all == 0 ? nil : (untrusted, changed, all)
+    }
+
+    /// The text Codex hashes for a hook's trust: the event and the matcher group in canonical JSON (keys sorted).
+    static func trustInput(event: String, command: String, timeout: Int, matcher: String?) -> String {
+        var s = "{\"event_name\":"
+        JValue.quote(snake(event), into: &s)
+        s += ",\"hooks\":[{\"async\":false,\"command\":"
+        JValue.quote(command, into: &s)
+        s += ",\"timeout\":\(timeout),\"type\":\"command\"}]"
+        if let matcher { s += ",\"matcher\":"; JValue.quote(matcher, into: &s) }
+        return s + "}"
+    }
+
+    /// `PermissionRequest` → `permission_request`.
+    static func snake(_ s: String) -> String {
+        s.enumerated().map { i, c in c.isUppercase ? (i > 0 ? "_" : "") + c.lowercased() : String(c) }.joined()
+    }
+
+    /// Lowercase hex sha256 through sha256sum (or shasum -a 256) on PATH; nil without either.
+    func sha256(_ text: String) -> String? {
+        guard let argv = Sys.which("sha256sum", path: o.searchPath).map({ [$0] })
+                ?? Sys.which("shasum", path: o.searchPath).map({ [$0, "-a", "256"] }) else { return nil }
+        let r = Sys.capture(argv, stdin: Array(text.utf8), timeout: 10)
+        guard r.status == 0, let h = String(decoding: r.out, as: UTF8.self).split(separator: " ").first, h.count == 64 else { return nil }
+        return String(h)
+    }
+
+    /// The warning about trust, nil when Codex runs all of our hooks.
+    func codexTrustWarning() -> String? {
+        guard let t = codexTrust(), !(t.untrusted.isEmpty && t.changed.isEmpty) else { return nil }
+        let some = t.untrusted.count + t.changed.count < t.all ? " (" + (t.untrusted + t.changed).joined(separator: ", ") + ")" : ""
+        return "codex: hooks " + (t.untrusted.isEmpty ? "changed since they were trusted, Codex skips them" : "not trusted yet")
+            + some + ": open /hooks in codex, press t"
+    }
+
+    func codexTrustCheck(_ add: (String, String) -> Void) {
+        if let w = codexTrustWarning() { add("warn", w) }
+        else if let t = codexTrust() { add("info", "codex: hooks trusted in /hooks (\(t.all))") }
+    }
+
     // MARK: versions
 
     /// The versions of Claude Code and Codex that wrote the newest logs, against the tested ones: a newer major or

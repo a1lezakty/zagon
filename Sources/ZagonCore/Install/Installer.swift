@@ -192,8 +192,12 @@ public struct Installer {
                 try backup("codex-hooks.json", cur)
                 Sys.mkdirs(o.codexDir)
                 guard Sys.writeFile(codexHooks, new!) else { throw InstallError("cannot write \(codexHooks)") }
-                log("codex: hooks installed in \(codexHooks); open /hooks in Codex once to trust them")
-            } else { log("codex: already installed") }
+                // Codex trusts a hook by the hash of its text: a new or changed one runs only once trusted.
+                log("codex: hooks installed in \(codexHooks); Codex runs them once trusted: open /hooks in codex, press t")
+            } else {
+                log("codex: already installed")
+                codexTrustWarning().map(log)
+            }
         }
         if o.mcp && forOther {
             log("mcp: not registered from sudo; run `zagon install` as \(userName) for it")
@@ -849,6 +853,7 @@ public struct Installer {
             let cfg = Sys.readFile(codexConfig).map { String(decoding: $0, as: UTF8.self) } ?? ""
             let off = ["hooks", "codex_hooks"].contains { TOMLLite.raw(in: cfg, section: "features", key: $0) == "false" }
             add(!off, "codex: hooks feature " + (off ? "disabled in config.toml [features]" : "enabled (trust them once in /hooks)"))
+            codexTrustCheck(note)
             codexHooksCheck(codexMeta, note)
         }
         if o.mcp {

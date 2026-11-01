@@ -184,4 +184,51 @@ extension InstallerTests {
         #expect(line(Installer(o).doctor(), "database copies") == "info database copies kept by updates, for a rollback: "
             + "zagon.db.v7 (3 MB, \(Time.dayString(o.now))); remove them when no longer needed")
     }
+
+    /// Codex runs a hook once trusted in /hooks (`[hooks.state.…] trusted_hash`, the sha256 of the entry's text).
+    @Test func doctorCodexHookTrust() throws {
+        var (home, o) = setUp()
+        o.claude = false; o.searchPath = "/usr/bin:/bin"
+        let calls = Calls()
+        var i = installer(o, calls)
+        var logged: [String] = []
+        i.log = { logged.append($0) }
+        // What Codex 0.166 stored for these entries (timeout: its default, 600 s; 1 s for Interrupt and SessionEnd).
+        if i.sha256("") != nil {
+            #expect(i.sha256(Installer.trustInput(event: "PermissionRequest", command: "/usr/local/bin/zagon hook codex PermissionRequest",
+                                                  timeout: 600, matcher: nil)) == "0f810f52a2df83254934036cba3977cfdfa9bdb1ee86317f3fbbdface4adabc2")
+            #expect(i.sha256(Installer.trustInput(event: "Interrupt", command: "/usr/local/bin/zagon hook codex Interrupt",
+                                                  timeout: 1, matcher: nil)) == "2ce443598cf1c78e70e7421508f25c5f08b3d233116dba95899bb196640a76fe")
+        }
+        #expect(Installer.snake("PermissionRequest") == "permission_request" && Installer.snake("Stop") == "stop")
+
+        try i.install()
+        #expect(logged.contains("codex: hooks installed in \(home)/.codex/hooks.json; Codex runs them once trusted: open /hooks in codex, press t"))
+        #expect(line(i.doctor(), "trusted") == "warn codex: hooks not trusted yet: open /hooks in codex, press t")
+
+        // Trusted in /hooks: Codex writes a hash per entry; ours for Stop is the second group (the user's own is first).
+        guard i.sha256("") != nil else { return }
+        let hooks = home + "/.codex/hooks.json"
+        func state(_ e: String, _ group: Int, _ command: String) -> String {
+            "\n[hooks.state.\"\(hooks):\(Installer.snake(e)):\(group):0\"]\ntrusted_hash = \"sha256:"
+                + i.sha256(Installer.trustInput(event: e, command: command, timeout: 600, matcher: nil))! + "\"\n"
+        }
+        let base = String(decoding: Sys.readFile(home + "/.codex/config.toml")!, as: UTF8.self)
+        let all = Installer.codexEvents.map { state($0, $0 == "Stop" ? 1 : 0, "\(home)/bin/zagon hook codex \($0)") }
+        Sys.writeFile(home + "/.codex/config.toml", Array((base + all.joined()).utf8))
+        #expect(line(i.doctor(), "trusted") == "info codex: hooks trusted in /hooks (7)")
+        logged = []
+        try i.install()
+        #expect(logged.contains("codex: already installed") && !logged.contains { $0.contains("press t") })
+
+        // Trusted for another text (a moved binary), or not for one event.
+        let moved = all.map { $0.contains(":stop:") ? state("Stop", 1, "/old/zagon hook codex Stop") : $0 }
+        Sys.writeFile(home + "/.codex/config.toml", Array((base + moved.joined()).utf8))
+        #expect(line(i.doctor(), "trusted") == "warn codex: hooks changed since they were trusted, Codex skips them (Stop): open /hooks in codex, press t")
+        Sys.writeFile(home + "/.codex/config.toml", Array((base + all.filter { !$0.contains(":interrupt:") }.joined()).utf8))
+        #expect(line(i.doctor(), "trusted") == "warn codex: hooks not trusted yet (Interrupt): open /hooks in codex, press t")
+        logged = []
+        try i.install()
+        #expect(logged.contains("codex: hooks not trusted yet (Interrupt): open /hooks in codex, press t"))
+    }
 }
