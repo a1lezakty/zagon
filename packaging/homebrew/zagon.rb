@@ -2,21 +2,27 @@
 class Zagon < Formula
   desc "Tracker of Claude Code and Codex CLI sessions: limits, time, tokens, MCP server"
   homepage "https://github.com/a1lezakty/zagon"
-  version "@VERSION@"
   license "MIT"
 
+  # One universal binary for both Mac CPUs (`url` is not allowed in on_macos itself).
   on_macos do
-    url "https://github.com/a1lezakty/zagon/releases/download/v#{version}/zagon-macos-universal"
-    sha256 "@SHA256:zagon-macos-universal@"
     depends_on macos: :ventura
+    on_arm do
+      url "https://github.com/a1lezakty/zagon/releases/download/v@VERSION@/zagon-macos-universal"
+      sha256 "@SHA256:zagon-macos-universal@"
+    end
+    on_intel do
+      url "https://github.com/a1lezakty/zagon/releases/download/v@VERSION@/zagon-macos-universal"
+      sha256 "@SHA256:zagon-macos-universal@"
+    end
   end
   on_linux do
     on_intel do
-      url "https://github.com/a1lezakty/zagon/releases/download/v#{version}/zagon-linux-x86_64"
+      url "https://github.com/a1lezakty/zagon/releases/download/v@VERSION@/zagon-linux-x86_64"
       sha256 "@SHA256:zagon-linux-x86_64@"
     end
     on_arm do
-      url "https://github.com/a1lezakty/zagon/releases/download/v#{version}/zagon-linux-aarch64"
+      url "https://github.com/a1lezakty/zagon/releases/download/v@VERSION@/zagon-linux-aarch64"
       sha256 "@SHA256:zagon-linux-aarch64@"
     end
   end

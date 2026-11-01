@@ -9,7 +9,7 @@ cask "zagon" do
   homepage "https://github.com/a1lezakty/zagon"
 
   auto_updates true
-  depends_on macos: ">= :ventura"
+  depends_on macos: :ventura
 
   app "Zagon.app"
 
