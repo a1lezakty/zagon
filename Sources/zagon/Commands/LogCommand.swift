@@ -5,7 +5,7 @@ import ZagonCore
 struct LogCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "log", abstract: "Worklog plan for a day; writes to Jira only on commit with confirmation.",
-        subcommands: [Plan.self, Commit.self, Skip.self, ReconcileRange.self, Text.self, Exclude.self, Config.self, AtEnd.self])
+        subcommands: [Plan.self, Commit.self, Skip.self, ReconcileRange.self, Text.self, Exclude.self, Config.self, AtEnd.self, Export.self])
 
     static func day(_ d: String?) throws -> String {
         let day = d ?? Time.dayString(Time.now())
@@ -159,6 +159,33 @@ struct LogCommand: ParsableCommand {
                     let r = try w.rebuildText(row: row, day: try LogCommand.rowDay(store, row), summary: summary, shorten: shorten)
                     if report.json { try emit(r) } else { print(TaskText.rows([r]) + (summary ? "\n" + (r.summary ?? "") : "")) }
                 }
+            }
+        }
+    }
+
+    struct Export: ParsableCommand {
+        enum Format: String, ExpressibleByArgument { case csv, toggl }
+        static let configuration = CommandConfiguration(
+            abstract: "Hours for invoices: the plan's rows and your worklogs in Jira as CSV, or as Toggl Track's import CSV.",
+            discussion: "Each day is planned again as `log plan` plans it (no AI); days are cut in the worklog zone ([worklog] tz). "
+                + "csv: date,start,end,hours,task,title,text,state (planned: not in Jira yet, logged: in Jira).")
+        @Option(help: "First day, YYYY-MM-DD.") var from: String
+        @Option(help: "Last day, YYYY-MM-DD, default today.") var to: String?
+        @Option(help: "csv | toggl") var format: Format = .csv
+        @Option(help: "toggl: your Toggl Track login (default: [jira] email).") var email: String?
+        @Option(help: "user: your time | sessions: wall-clock time any session worked (default).") var time: TaskTime.Base?
+        @Flag(help: "Skip the incremental scan before exporting.") var noScan = false
+        @OptionGroup var common: Common
+        func run() throws {
+            let login = email ?? JiraConfig.load(configText: common.configText)?.email
+            if format == .toggl && (login ?? "").isEmpty { throw ValidationError("toggl needs --email (your Toggl Track login)") }
+            let store = try common.open()
+            if !noScan { try common.scan(store) }
+            let w = try common.worklog(store, base: time)
+            try Settings.inZone(w.config.tz) {
+                let (lines, err) = try w.hours(from: try LogCommand.day(from), to: try LogCommand.day(to))
+                if let err { warn((err.hasPrefix("jira") ? "" : "jira: ") + err + ": worklogs written in Jira by hand are missing, the plans are as last made") }
+                print(format == .csv ? HoursText.csv(lines) : HoursText.toggl(lines, email: login!), terminator: "")
             }
         }
     }

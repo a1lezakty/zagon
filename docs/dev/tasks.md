@@ -173,6 +173,18 @@ may itself miss sessions deleted before Zagon read them); earlier days are not r
 `jira_before_coverage_sec`. A task's day with under a minute of work and no worklog is left out. Totals: `session_sec - jira_sec ==
 unlogged_sec - jira_only_sec`. Markdown, CSV (a line per task and day, minutes) and JSON come from `ReconcileText`.
 
+## Hours export (`DayWorklog.hours`, Worklog/HoursExport.swift)
+
+`zagon log export --from --to [--format csv|toggl] [--email]`: hours for invoices, a line per planned row and per
+worklog in Jira, days cut in the worklog zone. Links are refreshed once for the range and Jira is read once for it
+(the reconcile search, `also` = Zagon's logged issues and the tasks worked); each day is planned again against it as
+`log plan` plans it (no AI, no Jira write). With Jira read, written time comes from Jira (Zagon's own worklogs and
+those by hand; excluded tasks left out), else from Zagon's logged rows. Jira set up but failing: the plans stay as
+last made (a plan without Jira would lie over worklogs it did not see). `csv`: `date,start,end,hours,task,title,text,state`
+(hours with two decimals; state `planned` | `logged` | `writing`). `toggl`: Toggl Track's CSV import
+(https://support.toggl.com/toggl-track-csv-import-guide): Email, Start Date, Start Time, Duration (HH:MM:SS),
+Description (key and text on one line), Project (the Jira project); Email is `--email`, else `[jira] email`.
+
 ## Suggestions (`TaskSuggester`, Tasks/Suggest.swift)
 
 For work no key linked. Stretches: per session, runs of working time no link covers (pauses up to `idle_gap` join,
@@ -231,6 +243,6 @@ plan message has to be combined with it.
 ## CLI
 
 `zagon task add|list [--all]|show|todo|note|done|status|link|import|suggest|drafts|accept|reject|jira-projects`, `zagon log plan [day]`, `zagon log commit [day] [--yes]`,
-`zagon log skip <id…>`, `zagon log reconcile --from <day> [--to <day>] [--json|--md|--csv]`. `log plan --json` carries `commit_digest` (FNV-1a 64 of `jira_key|start|end|seconds|text`
+`zagon log skip <id…>`, `zagon log reconcile --from <day> [--to <day>] [--json|--md|--csv]`, `zagon log export --from <day> [--to <day>] [--format csv|toggl]`. `log plan --json` carries `commit_digest` (FNV-1a 64 of `jira_key|start|end|seconds|text`
 of the planned rows with a Jira key, by start); `log commit --yes --expect <digest>` re-plans and writes only if the
 rows to write give the same digest, else writes nothing and exits 3 ("plan changed"). Days are local (`TZ`).
