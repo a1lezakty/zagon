@@ -32,7 +32,10 @@ final class AppState: ObservableObject {
     }
     /// The system is in Dark Mode. The panel is given its scheme explicitly: a SwiftUI scheme going back to nil does
     /// not always reach the panel's window (the main window takes `NSWindow.appearance`, nil follows the system).
-    @Published var systemDark = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    @Published var systemDark = AppState.systemIsDark
+    /// The system's own setting, which nothing in the app can override (unlike `NSApp.effectiveAppearance`, which may
+    /// lag behind the change notification or take a scheme forced on a window).
+    static var systemIsDark: Bool { UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark" }
     var panelScheme: ColorScheme { appearance.scheme ?? (systemDark ? .dark : .light) }
     @Published var appearance = Appearance.system {
         didSet {
@@ -311,12 +314,10 @@ final class AppState: ObservableObject {
             state.zoneID = d.string(forKey: "timeZone").flatMap { TimeZone(identifier: $0) == nil ? nil : $0 }
             state.settingsTab = d.string(forKey: "settingsTab").flatMap(SettingsTab.init(rawValue:)) ?? .general
             state.appearance = d.string(forKey: "appearance").flatMap(Appearance.init(rawValue:)) ?? .system
-            // The system switched Dark / Light (by hand or on schedule): the panel follows when "As the system".
+            // The system switched Dark / Light (by hand or on schedule): the panel follows with "Match system".
             DistributedNotificationCenter.default().addObserver(forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
                                                                 object: nil, queue: .main) { [weak state] _ in
-                Task { @MainActor in
-                    state?.systemDark = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                }
+                MainActor.assumeIsolated { state?.systemDark = AppState.systemIsDark }
             }
             // Open at login: on by default the first time Zagon runs from Applications (it can be turned off in settings).
             if cliPath != nil, Bundle.main.bundlePath.hasPrefix("/Applications/"), !d.bool(forKey: "launchAtLoginSet") {
