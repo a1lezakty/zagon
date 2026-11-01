@@ -39,6 +39,9 @@ curl -fsSLO https://github.com/a1lezakty/zagon/releases/latest/download/zagon-li
 chmod +x zagon-linux-x86_64 && ./zagon-linux-x86_64 week
 ```
 
+On a Mac the same works with `zagon-macos-universal`. Every release file has a checksum and a signed build
+provenance: [how to verify a download](SECURITY.md#verify-a-download).
+
 Without `install` you get tokens, time, projects and tasks, but no live status (working / waiting for you), no Claude
 limits and no service: those come from the hooks and the status line.
 
@@ -444,7 +447,11 @@ claude mcp add --scope user zagon -- zagon mcp
 codex mcp add zagon -- zagon mcp
 ```
 
-`zagon install` does the same. Claude Code and Codex load MCP servers when a session starts: the tools show up in
+`zagon install` does the same. For Claude Desktop and other clients that take MCP bundles (experimental): open
+`zagon-mcp-macos.mcpb` from [Releases](https://github.com/a1lezakty/zagon/releases/latest) (Linux:
+`zagon-mcp-linux-x86_64.mcpb`, `zagon-mcp-linux-aarch64.mcpb`). The bundle carries its own `zagon`, which reads the
+transcripts and `~/.zagon` like `zagon mcp` does; live status and Claude limits still need the hooks and the status
+line (the app's Connect or `zagon install`). Claude Code and Codex load MCP servers when a session starts: the tools show up in
 sessions started after the registration, so restart the ones you have open (`/mcp` in Claude Code lists them).
 
 Answers are short and carry numbers; a long one, such as a day exported to Markdown, goes to a file in
