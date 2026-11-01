@@ -145,4 +145,21 @@ extension InstallerTests {
         Sys.append(o.paths.dir + "/logs/daemon.log", Array("\(LogFile.iso(o.now - 300)) notify: no channel accepted waiting:s1, will retry\n".utf8))
         #expect(line(Installer(o).doctor(), "notify:") == "warn notify: telegram, ntfy; the last message was not accepted 5 min ago (see daemon.log)")
     }
+
+    @Test func doctorArchive() throws {
+        var (home, o) = setUp()
+        o.managedSettingsDir = home + "/managed"
+        let dir = home + "/.zagon/archive"
+        #expect(line(Installer(o).doctor(), "archive:") == "info archive: \(dir) keeps copies of Claude Code transcripts and Codex rollouts"
+            + " with no time limit (no cleanupPeriodDays in Claude Code's managed settings; zagon daemon --no-archive turns it off)")
+        Sys.mkdirs(o.managedSettingsDir)
+        Sys.writeFile(o.managedSettingsDir + "/managed-settings.json", Array("{\"cleanupPeriodDays\": 14}".utf8))
+        #expect(line(Installer(o).doctor(), "archive:") == "info archive: \(dir) keeps copies of Claude Code transcripts for 14 days"
+            + " (cleanupPeriodDays 14 in \(home)/managed/managed-settings.json), of Codex rollouts with no time limit")
+        Sys.writeFile(home + "/.claude/remote-settings.json", Array("{\"cleanupPeriodDays\": 0}".utf8))
+        #expect(line(Installer(o).doctor(), "archive:")?.hasPrefix("info archive: \(dir) keeps no copies of Claude Code transcripts (cleanupPeriodDays 0 in") == true)
+        Sys.mkdirs(o.userUnitDir)
+        Sys.writeFile(o.userUnitDir + "/zagon.service", Array("[Service]\nExecStart=/z daemon --no-archive\n".utf8))
+        #expect(line(Installer(o).doctor(), "archive:") == "info archive: off (--no-archive in the service unit)")
+    }
 }

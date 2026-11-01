@@ -76,6 +76,8 @@ public struct Installer {
         public var now: Double
         /// Running as root: with no user manager the service goes to the system unit.
         public var root = geteuid() == 0
+        /// Claude Code's managed settings (an organization's `cleanupPeriodDays` bounds the archive).
+        public var managedSettingsDir = Archive.managedSettingsDir
 
         /// `user`: its home replaces `$HOME` for every path.
         public init(paths: ZagonPaths? = nil, user: Account? = nil, zagon: String = Sys.executablePath()) {
@@ -863,6 +865,7 @@ public struct Installer {
         }
         notifyCheck(log, note)
         versionChecks(note)
+        archiveCheck(note)
         return out
     }
 

@@ -199,6 +199,25 @@ extension Installer {
         return n(b).lexicographicallyPrecedes(n(a))
     }
 
+    // MARK: archive
+
+    /// How long the archive keeps copies: bounded for Claude Code by an organization's `cleanupPeriodDays`.
+    func archiveCheck(_ add: (String, String) -> Void) {
+        let dir = o.paths.dir + "/archive"
+        if [userUnit, systemUnit].contains(where: { Sys.readFile($0).map { String(decoding: $0, as: UTF8.self).contains("--no-archive") } ?? false }) {
+            add("info", "archive: off (--no-archive in the service unit)")
+            return
+        }
+        let r = Archive.retention(managedDir: o.managedSettingsDir, remoteSettings: o.claudeDir + "/remote-settings.json")
+        guard let days = r.days, let src = r.source else {
+            add("info", "archive: \(dir) keeps copies of Claude Code transcripts and Codex rollouts with no time limit "
+                + "(no cleanupPeriodDays in Claude Code's managed settings; zagon daemon --no-archive turns it off)")
+            return
+        }
+        add("info", "archive: \(dir) keeps " + (days == 0 ? "no copies of Claude Code transcripts" : "copies of Claude Code transcripts for \(days) days")
+            + " (cleanupPeriodDays \(days) in \(src)), of Codex rollouts with no time limit")
+    }
+
     // MARK: files
 
     /// The first line of a file (read whole: a rollout's first line, `session_meta`, can be long).
