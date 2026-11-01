@@ -300,7 +300,7 @@ struct CodexArchiveScenario {
         _ = try Archive(store: store, dir: sc.codexHome).compress(sc.live, size: Sys.fileSize(sc.live)!, to: sc.live + ".zst")
         try FileManager.default.removeItem(atPath: sc.live)
         let st = try ingest.scan()
-        #expect(st.resets == 0 && st.moves == 1)
+        #expect(st.resets == 0 && st.moves == 0)
         #expect(try tokens(store) == sc.tokens)
 
         let fresh = try Store(path: ":memory:")
@@ -355,7 +355,7 @@ struct CodexArchiveScenario {
         print("compressedCrossCheck: \(packed) rollouts; input, output, cache_read, requests, tool calls, sessions: before \(before), "
               + "after \(after), fresh \(only); resets \(st.resets), moves \(st.moves), read \(st.filesRead)")
         #expect(after == before && only == before)
-        #expect(st.resets == 0 && st.moves == packed)
+        #expect(st.resets == 0 && st.moves == 0)
     }
 }
 

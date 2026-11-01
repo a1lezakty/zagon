@@ -121,4 +121,25 @@ import Testing
         try store.db.run("UPDATE session SET tool = 'codex', status = 'working'")
         #expect(try !ClaudeAgents.active(store: store, host: store.host, now: t0))
     }
+
+    @Test func hookAfterAgentsKeepsThePermissionTool() throws {
+        let s = try Store(path: ":memory:")
+        try s.db.run("INSERT INTO session(id, tool, status, status_at) VALUES(?, 'claude', 'working', ?)", [.text("claude:" + a), .real(t0)])
+        // The poll sees the prompt first (no tool name), then the hook for it comes, a little earlier or later.
+        try ClaudeAgents.apply([.init(sessionId: a, status: "waiting", waitingFor: "permission prompt")], store: s, at: t0 + 10)
+        #expect(try SpoolIngest.setStatus(store: s, id: "claude:" + a, tool: .claude, status: "waiting_permission", at: t0 + 4,
+                                          cwd: nil, detail: "Bash") == false)
+        #expect(try s.db.one("SELECT status, status_at, status_detail FROM session WHERE id = ?", [.text("claude:" + a)]) {
+            [$0.text(0), $0.optReal(1).map { "\($0)" }, $0.text(2)]
+        } == ["waiting_permission", "\(t0 + 10 - ClaudeAgents.lag)", "Bash"])
+    }
+
+    @Test func versionGate() {
+        #expect(ClaudeAgents.supports(version: Array("2.1.316 (Claude Code)\n".utf8)))
+        #expect(ClaudeAgents.supports(version: Array("2.1.145".utf8)))
+        #expect(ClaudeAgents.supports(version: Array("3.0.0 (Claude Code)".utf8)))
+        #expect(!ClaudeAgents.supports(version: Array("2.1.144 (Claude Code)".utf8)))
+        #expect(!ClaudeAgents.supports(version: Array("".utf8)))
+        #expect(!ClaudeAgents.supports(version: Array("command not found".utf8)))
+    }
 }

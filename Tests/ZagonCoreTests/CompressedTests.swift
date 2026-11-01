@@ -61,9 +61,9 @@ import Testing
         append(plain, "s1 1761800120 5 1\ns1 17618")  // written before the compression, not seen yet; a partial line
         try compress(plain)
         let st = try ing.scan()
-        #expect(st.resets == 0 && st.moves == 1)
+        #expect(st.resets == 0)
         #expect(try totals(store) == (305, 31, 3))
-        #expect(try rows(store) == [plain + ".zst"])
+        #expect(try rows(store) == [plain])  // the row keeps the plain name
 
         let again = try ing.scan()
         #expect(again.filesRead == 0)  // a .zst is read once
@@ -83,7 +83,7 @@ import Testing
         // The watcher sees the original go; its .zst, skipped before, is taken over then.
         try FileManager.default.removeItem(atPath: plain)
         try ing.update(paths: [plain])
-        #expect(try rows(store) == [plain + ".zst"])
+        #expect(try ing.isPacked(1))
         #expect(try totals(store) == (100, 10, 1))
     }
 
@@ -122,7 +122,7 @@ import Testing
         let st = try ing.scan()
         #expect(st.resets == 0 && st.moves == 1)
         #expect(try totals(store) == (101, 11, 2))
-        #expect(try rows(store) == [archived + "/r.jsonl.zst"])
+        #expect(try rows(store) == [archived + "/r.jsonl"])
 
         // Unarchived (a rename: same inode) and unpacked to append, both unseen until now.
         try FileManager.default.moveItem(atPath: archived + "/r.jsonl.zst", toPath: plain + ".zst")
@@ -145,6 +145,28 @@ import Testing
         // Our archive keeps copies of plain logs only: a .zst is its own compressed copy.
         let a = Archive(store: store, dir: dir + "/archive")
         #expect(try a.tick(now: Sys.now() + 7200).written == 1)
+    }
+
+    /// A zagon without `.zst` (a 0.1.4 MCP server still running after the update) on the same database: it sees the
+    /// compressed file gone and the unpacked one replaced, so it recounts instead of counting twice.
+    @Test func olderZagonOnTheSameDatabaseNeverDoubles() throws {
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        try write(plain, "s1 1761800000 100 10\n")
+        let store = try Store(path: ":memory:"), ing = ingest(store)
+        let old = Ingest(store: store, sources: [deltaSpec(live), deltaSpec(archived)])  // takes `.jsonl` only
+        try ing.scan()
+        try compress(plain)
+        try ing.scan()
+        try old.scan()
+        #expect(try totals(store) == (100, 10, 1))
+        try unpack(plain + ".zst")
+        append(plain, "s1 1761800060 7 2\n")
+        let o = try old.scan()
+        #expect(o.resets == 1)
+        #expect(try totals(store) == (107, 12, 2))
+        try ing.scan()
+        #expect(try totals(store) == (107, 12, 2))
+        #expect(try !ing.isPacked(1))
     }
 
     @Test func damagedCompressedFileIsSkipped() throws {

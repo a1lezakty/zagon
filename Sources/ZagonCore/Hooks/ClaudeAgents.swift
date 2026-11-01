@@ -25,6 +25,13 @@ public enum ClaudeAgents {
         }
     }
 
+    /// `claude --version` (`2.1.316 (Claude Code)`) is 2.1.145 or later, the first with `claude agents --json`.
+    public static func supports(version out: [UInt8]) -> Bool {
+        let v = String(decoding: out, as: UTF8.self).split(whereSeparator: { $0 == " " || $0 == "\n" }).first
+            .map { $0.split(separator: ".").compactMap { Int($0) } } ?? []
+        return v.count == 3 && !v.lexicographicallyPrecedes([2, 1, 145])
+    }
+
     /// Our status for an entry; nil = says nothing new (keep what hooks set).
     public static func status(_ e: Entry) -> String? {
         switch e.status {

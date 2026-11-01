@@ -54,7 +54,8 @@ public enum Handoff {
         }
         if tool != .claude {
             for root in ["sessions", "archived_sessions"] {
-                if let rel = Ingest.walk(codexHome + "/" + root).first(where: { CodexSource.isRollout($0) && CodexParser.idFromName($0) == id }) {
+                let found = Ingest.walk(codexHome + "/" + root).filter { CodexSource.isRollout($0) && CodexParser.idFromName($0) == id }
+                if let rel = found.first(where: { !$0.hasSuffix(".zst") }) ?? found.first {  // the plain one while both exist
                     return (.codex, id, codexHome + "/" + root + "/" + rel)
                 }
             }
@@ -97,7 +98,9 @@ public enum Handoff {
 
     /// `session_meta.cwd` from the first line of a rollout (read at most 1 MB).
     static func codexCwd(_ path: String) -> String? {
-        if path.hasSuffix(".zst") { return Archive.readLog(path).flatMap { JValue.parse(Array($0.prefix { $0 != 0x0A }))?["payload"]?["cwd"]?.string } }
+        if path.hasSuffix(".zst") {
+            return Archive.readLog(path, limit: 1 << 20).flatMap { JValue.parse(Array($0.prefix { $0 != 0x0A }))?["payload"]?["cwd"]?.string }
+        }
         let fd = open(path, O_RDONLY | O_CLOEXEC)
         guard fd >= 0 else { return nil }
         defer { close(fd) }

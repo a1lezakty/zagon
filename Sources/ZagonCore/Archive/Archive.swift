@@ -64,8 +64,7 @@ public struct Archive {
         }
         var out = Stats()
         for (sid, s) in sessions.sorted(by: { $0.key < $1.key }) {
-            // A Codex rollout compressed in place keeps its own copy (and our copy of its plain form stays as it is).
-            let live = s.files.filter { $0.mtime != nil && !$0.path.hasSuffix(".zst") }
+            let live = s.files.filter { $0.mtime != nil }
             guard !live.isEmpty, live.allSatisfy({ now - $0.mtime! >= idle }), (s.lastAt ?? 0) <= now - idle else { continue }
             let base = s.archivePath.map { String($0.dropLast(".jsonl.zst".count)) } ?? defaultBase(sid, tool: s.tool,
                 at: s.started ?? live.compactMap(\.mtime).min()!)
@@ -250,11 +249,17 @@ public struct Archive {
         return out
     }
 
-    /// A log's bytes; one compressed in place (a Codex `.jsonl.zst`) unpacked.
-    public static func readLog(_ path: String) -> [UInt8]? {
-        guard path.hasSuffix(".zst") else { return Sys.readFile(path) }
+    /// A log's bytes, at most about `limit`; one compressed in place (a Codex `<name>.zst`, also when asked for `<name>`,
+    /// as `source_file` keeps it) unpacked.
+    public static func readLog(_ path: String, limit: Int = .max) -> [UInt8]? {
+        let zst = path.hasSuffix(".zst") ? path : !Sys.exists(path) && Sys.exists(path + ".zst") ? path + ".zst" : nil
+        guard let zst else { return Sys.readFile(path) }
+        struct Enough: Error {}
         var out: [UInt8] = []
-        do { try decompress(path) { out.append(contentsOf: $0) } } catch { return nil }
+        do {
+            try decompress(zst) { out.append(contentsOf: $0); if out.count >= limit { throw Enough() } }
+        } catch is Enough {
+        } catch { return nil }
         return out
     }
 
@@ -262,7 +267,9 @@ public struct Archive {
     public func stats() throws -> Stats {
         var s = Stats()
         var originals = Set<String>()
-        try store.db.query("SELECT path FROM source_file") { if let p = $0.text(0), Sys.exists(p) { originals.insert(p) } }
+        try store.db.query("SELECT path FROM source_file") {
+            if let p = $0.text(0), Sys.exists(p) || Sys.exists(p + ".zst") { originals.insert(p) }
+        }
         var mains: [String: String] = [:]  // copy -> original
         try store.db.query("""
             SELECT s.archive_path, f.path FROM session s LEFT JOIN source_file f ON f.session_id = s.id AND f.agent = ''

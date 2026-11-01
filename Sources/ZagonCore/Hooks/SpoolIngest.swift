@@ -110,9 +110,16 @@ public enum SpoolIngest {
     /// `waiting` interval from when it started. Returns whether anything changed.
     static func setStatus(store: Store, id: String, tool: ToolKind, status: String, at: Timestamp, cwd: String?,
                           detail: String? = nil) throws -> Bool {
-        let row = try store.db.one("SELECT status, status_at FROM session WHERE id = ?", [.text(id)]) { ($0.text(0), $0.optReal(1)) }
+        let row = try store.db.one("SELECT status, status_at, status_detail FROM session WHERE id = ?", [.text(id)]) {
+            ($0.text(0), $0.optReal(1), $0.text(2))
+        }
         if row == nil, let cwd { try store.mergeSession(SessionMeta(id: id, tool: tool, cwd: cwd)) }
-        let (prev, prevAt) = row ?? (nil, nil)
+        let (prev, prevAt, prevDetail) = row ?? (nil, nil, nil)
+        // The same state already set without its detail (`claude agents` saw the prompt before its hook came): keep the tool.
+        if prev == status, let detail, prevDetail == nil {
+            let seq = try store.nextSeq()
+            try store.db.run("UPDATE session SET status_detail = ?, seq = ? WHERE id = ?", [.text(detail), .int(Int64(seq)), .text(id)])
+        }
         if let prevAt, at < prevAt { return false }
         if prev == status { return false }  // keep status_at = when this state began
         if let prev, let prevAt, prev.hasPrefix("waiting") {

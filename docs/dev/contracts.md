@@ -42,13 +42,16 @@ or recounted and tailing goes on from the stored offset. The parser is not calle
 inode) is a new file.
 
 Compressed logs (Codex 0.16x: a rollout cold for 7 days becomes `<name>.jsonl.zst`, the same bytes, and the original is
-deleted; to append Codex unpacks it back to `<name>.jsonl` under a new inode and deletes the `.zst`): a source that
-accepts `<rel>.zst` gets offsets, sizes and tails of the unpacked content (unpacked into an unlinked temporary file
-next to the database). While both forms exist the plain file is read and the `.zst` skipped; a `.zst` already read is
-skipped while its inode and mtime stay. A path without a row also takes over the row of its other form (`<name>` ⇄
-`<name>.zst`) — beside it, or under the same name in any root of the tool once that file is gone — when the bytes
-before its offset match, like a move; nothing is recounted. A `.zst` that cannot be unpacked whole is skipped and
-tried again on the next pass. The archive keeps no copy of a `.zst` (it is one already); `Archive.readLog` and
+deleted; to append Codex unpacks it back to `<name>.jsonl` under a new inode and deletes the `.zst`): for a source that
+accepts `<rel>.zst`, the `source_file` row keeps the plain name `<name>` in both forms, with offsets, sizes and tails of
+the unpacked content (unpacked into an unlinked temporary file next to the database, never leaving less than 256 MB free
+there; a failure is retried when the file changes); `meta packed:file:<id>` marks a row last read from its `.zst`.
+Between the forms a new inode is not a replacement: the bytes before the offset decide, so nothing is recounted. While
+both forms exist the plain file is read and the `.zst` skipped; a `.zst` already read is skipped while its inode and
+mtime stay. Moves between roots work in either form (inode), and a form changed on the way is matched by file name in
+another root when the old file is gone in both forms. A zagon without this (0.1.4) sees a compressed file as gone and an
+unpacked one as replaced, so it recounts rather than double counts. Our archive keeps copies of plain files only (a
+`.zst` is one already: if it is deleted later, its counts stay but handoff and search lose it); `Archive.readLog` and
 `transcript(id)` unpack it for handoff and search.
 
 ## Store (`Sources/ZagonCore/Store/`)
