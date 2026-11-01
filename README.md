@@ -74,8 +74,6 @@ The macOS app (sample data): the menu bar, then the Day, Week and Calendar windo
   worklog text in Jira unless you set one by hand. A week,
   a month or a range is one more call over the days' summaries. With `[summary] engine = "none"` the summary is
   built without AI; `[summary] time = ""` (or `zagon summary --at off`) stops the service writing it at all.
-  When the engine answers about billing, credits, extra usage or the plan's usage limit, or a call was paid as extra
-  usage, Zagon makes no more AI calls that day: summaries are built without AI and say why.
 - Evening task suggestions are a second AI call a day, the same way and on the same engine, at `[notify] worklog_at`
   (19:00) when the service sends notifications. It gets the day's stretches of work no task key linked: project,
   folder, session title, the first 100 characters of up to three typed messages (secrets redacted), edited file
@@ -165,9 +163,7 @@ zagon update            # replace the binary and restart the service
 
 `zagon update` downloads the latest release for your CPU, checks it against `SHA256SUMS`, and only then replaces
 its own binary (atomically, in the same directory). The old binary stays next to it as `zagon.prev`: move it back to
-roll back (not across a database schema change: the older binary refuses a newer database). Before replacing, it
-says when the new version will move the database to a newer schema, and stops when the new version cannot open the
-database. Running services are restarted. If the binary is in `/usr/local/bin`, run `sudo zagon update` (behind a
+roll back (not across a database schema change: the older binary refuses a newer database). Running services are restarted. If the binary is in `/usr/local/bin`, run `sudo zagon update` (behind a
 proxy: `sudo -E zagon update`, since sudo drops the proxy variables). On macOS the app updates itself, the `zagon`
 inside it included.
 

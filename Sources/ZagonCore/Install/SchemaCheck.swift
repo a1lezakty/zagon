@@ -26,6 +26,6 @@ public enum SchemaCheck {
         }
         guard have < reads else { return ([], false) }
         return (["database \(db): schema v\(have) -> v\(reads) when zagon \(new) starts; \(Sys.basename(exe)).prev (\(old)) "
-                 + "will not open it afterwards: copy \(db) first to keep a way back"], false)
+                 + "will not open it afterwards: rolling back then needs a copy of \(db) made before this update"], false)
     }
 }

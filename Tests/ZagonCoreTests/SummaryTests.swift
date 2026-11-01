@@ -209,7 +209,8 @@ import Testing
         #expect(s.complete("x")?.text == "ok")
         // The kind may come only from claude's error codes.
         #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"type\":\"result\",\"is_error\":true,\"result\":\"Request refused\",\"api_error\":\"usage_limit_reached\"}'\nexit 1\n"))
-        #expect(s.complete("x") == nil && s.failure.reason == "claude: usage limit — Request refused" + paused)
+        #expect(s.complete("x") == nil && s.failure.reason == "claude: usage limit — Request refused")
+        #expect(s.stopped() == nil)  // a reached limit refuses, it does not charge: the next call is made
         // Extra usage paid for an answer: it is used, the next call is not made.
         Sys.remove(s.stopFile)
         #expect(writeScript(bin + "/claude", """
@@ -225,7 +226,7 @@ import Testing
         s.config.summaryEngine = "codex"
         #expect(writeScript(bin + "/codex", "#!/bin/sh\ncat >/dev/null\necho 'ERROR: You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits.' >&2\nexit 1\n"))
         #expect(s.complete("x") == nil
-                && s.failure.reason == "codex: usage limit — You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits." + paused)
+                && s.failure.reason == "codex: usage limit — You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits.")
         for e in ["You're out of extra usage · resets 5pm", "Your org is out of usage · add funds to continue",
                   "Quota exceeded. Check your plan and billing details."] { #expect(DaySummary.billingKind(e) != nil, "\(e)") }
         for e in ["API Error: 500 Internal server error", "unexpected status 401 Unauthorized", "Not logged in · Please run /login",

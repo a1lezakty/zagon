@@ -8,7 +8,7 @@ import Testing
     @Test func notesFromTheNewBinarysAnswer() {
         #expect(SchemaCheck.notes(answer: "schema 6 7\n", db: db, exe: exe, old: "0.1.4", new: "0.1.5") == ([
             "database /data/zagon.db: schema v6 -> v7 when zagon 0.1.5 starts; zagon.prev (0.1.4) will not open it afterwards: "
-                + "copy /data/zagon.db first to keep a way back"], false))
+                + "rolling back then needs a copy of /data/zagon.db made before this update"], false))
         #expect(SchemaCheck.notes(answer: "schema 8 7", db: db, exe: exe, old: "0.1.6", new: "0.1.5") == ([
             "zagon 0.1.5 cannot open /data/zagon.db: its schema v8 is newer than v7 that 0.1.5 reads; nothing replaced"], true))
         // The same schema, a fresh database, or no usable answer: nothing to say.

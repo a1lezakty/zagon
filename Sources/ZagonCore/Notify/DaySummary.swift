@@ -384,7 +384,8 @@ public struct DaySummary {
     /// Keeps and logs why a call failed, never with the prompt: the error claude answered, else the last `ERROR:`
     /// line of the CLI's stderr, else claude's first stderr line; cut to 200 characters. Lines of the prompt are left
     /// out (codex echoes it to stderr, and a Jira text in it may hold an `ERROR:` line). An error about money or the
-    /// plan's limit (`billingKind`, also from claude's error `codes`) says so and stops the AI calls for the day.
+    /// plan's limit (`billingKind`, also from claude's error `codes`) says so; one about money also stops the AI calls
+    /// for the day.
     func failed(_ what: String, _ engine: String, _ status: Int32, _ err: [UInt8], _ answered: String?, prompt: String,
                 codes: [String] = []) {
         let lines = String(decoding: err, as: UTF8.self).split(separator: "\n").map { String($0.trimmingSpaces) }
@@ -395,9 +396,10 @@ public struct DaySummary {
         var reason = status == 124 ? "no answer in \(Int(config.summaryTimeout)) s"
             : line.map { $0.count > 200 ? String($0.prefix(199)) + "…" : $0 } ?? (status == 0 ? "an empty answer" : "exit \(status)")
         let kind = status == 124 ? nil : DaySummary.billingKind(([line ?? ""] + codes).joined(separator: " "))
-        if let kind { reason = "\(kind) — " + reason + DaySummary.paused }
+        // A reached limit only refuses (the next call may find it reset); billing may charge: no more calls today.
+        if let kind { reason = "\(kind) — " + reason + (kind == "billing" ? DaySummary.paused : "") }
         failure.reason = "\(engine): " + reason
-        if kind != nil { stop(failure.reason!) }
+        if kind == "billing" { stop(failure.reason!) }
         log("\(what): \(engine) failed (\(status)): \(reason)")
     }
 
@@ -415,7 +417,7 @@ public struct DaySummary {
     }
 
     static let paused = " (no AI calls until tomorrow)"
-    /// `<local day>\n<reason>`: after a billing or usage-limit answer, or a call paid as extra usage, no AI call is made
+    /// `<local day>\n<reason>`: after a billing answer, or a call paid as extra usage, no AI call is made
     /// for the rest of the day (by any zagon process) with the engine the reason names, so a subscription is never
     /// charged extra and the log does not repeat the refusal.
     var stopFile: String { paths.dir + "/run/ai-stop" }
