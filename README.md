@@ -12,8 +12,8 @@ typed or a commit links that work to the task. It plans the day's worklogs with 
 period with what is already in Jira, and writes to Jira only after you confirm. Around that: subscription limits,
 which sessions are waiting for you, tokens and $ per day and project, a daily "what was done" summary, alerts in
 Telegram or ntfy, context handoff between sessions, and an MCP server, so Claude or Codex can answer from the same
-data. The data stays on your machine: only the AI calls on your own subscription and what you turn on (Jira,
-notifications, updates) use the network ([Privacy](#privacy)).
+data. The data stays on your machine: only the AI calls on your own subscription, Jira and notifications when you
+set them up, and update checks use the network ([Privacy](#privacy)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/worklog.png">
@@ -100,9 +100,9 @@ or the other editors' own agents, has no GUI on Linux or Windows, and its Mac ap
   `claude` or `codex`), a notification channel (Telegram or ntfy) and Jira when you set them up, and updates from
   GitHub (`zagon update` when you run it; the Mac app checks once a day unless you turn that off).
 - **Files, not accounts.** Zagon reads the transcripts in `~/.claude/projects`, Codex's session files and, for
-  Cursor's agent, its hooks, earlier chats and its list of conversations in Cursor's `state.vscdb` (ids, times and
-  titles only). Limits come from what Claude Code passes to its status line and from Codex's own files: it never
-  reads OAuth tokens, cookies or credential files and calls no usage API.
+  Cursor's agent, its hooks, earlier chats and its list of conversations in Cursor's `state.vscdb` (ids, folders,
+  times and titles only). Limits come from what Claude Code passes to its status line and from Codex's own files: it
+  never reads OAuth tokens, cookies or credential files and calls no usage API.
 - **Numbers, not conversations.** The database keeps numbers, times, projects, branches and session titles (for an
   old Cursor chat, the first line you typed in it). Text goes
   only into the local archive of transcripts and into short digests for three AI calls (the day summary, the worklog
@@ -131,8 +131,9 @@ What to turn off when your employer limits where code and conversations go:
   off, or point `[ntfy] url` at your own ntfy server.
 - **Cursor.** Zagon reads Cursor's old chats and its list of conversations whenever they exist; there is no switch
   for that in Zagon. A chat read from an old transcript is titled by the first line you typed there, and that title
-  goes where titles go (the database, notifications, AI digests). To keep Cursor's agent out from now on, turn off
-  Third-Party Imports in Cursor (Settings → Agents): Cursor then stops running Zagon's hooks.
+  goes where titles go (the database, notifications, AI digests). Turning off Third-Party Imports in Cursor
+  (Settings → Agents) stops only its hooks: Cursor 3's list of conversations (ids, folders, times and titles) is
+  still read.
 - **Search.** Every command that scans indexes your typed words for search (the words, not the text). To keep them
   out, pass `--no-index-prompts` everywhere a scan runs: the service (`zagon daemon`, as for the archive), `zagon scan`
   and the MCP server (`claude mcp add --scope user zagon -- zagon mcp --no-index-prompts`, the same for `codex mcp
@@ -259,7 +260,7 @@ opened, the menu bar, then the Day, Week and Calendar windows.
   itself is not kept. Pass `--no-index-prompts` to every command that scans (`zagon daemon`, `zagon scan`,
   `zagon mcp`, the reports) to turn that off; the Mac app always indexes.
 - Data lives in `~/.zagon` (or `$ZAGON_DIR`): `zagon.db`, `spool/`, `archive/`, `logs/`, `config.toml`, `backup/`,
-  `exports/`, `cursor/`, `cursor-hooks` (when Cursor's hooks first fired); `jira-token` and `telegram-token` (mode
+  `exports/`, `run/`, `cursor/`, `cursor-hooks` (when Cursor's hooks first fired); `jira-token` and `telegram-token` (mode
   0600) when `zagon setup jira` / `zagon notify setup` saved them; `zagon.db.v<N>` copies that `zagon update` keeps
   before a schema change.
 

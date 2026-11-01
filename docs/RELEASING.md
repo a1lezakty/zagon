@@ -85,7 +85,8 @@ The tap is the repository `a1lezakty/homebrew-zagon`: `Formula/zagon.rb` (the CL
 `packaging/homebrew/`; after the release, the `homebrew` job fills in the version and the sums from `SHA256SUMS`
 (`packaging/homebrew/render.sh`) and pushes both files to the tap. Without the secret it is skipped with a notice;
 with the secret set, a tap the token cannot read fails the job (red, so a broken token is seen). A run by hand
-(workflow_dispatch) pushes nothing but checks that the token can push (`git push --dry-run`). A tap that already
+(workflow_dispatch) pushes nothing but, when the tap would change, checks that the token can push
+(`git push --dry-run`). A tap that already
 has a newer version is left alone. The job runs after the release, so a failure there leaves the release as it is
 (fix, then **Re-run failed jobs**). Change the formula or the cask in the templates, not in the tap: the next release overwrites the tap.
 

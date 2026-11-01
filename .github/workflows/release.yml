@@ -261,9 +261,10 @@ jobs:
           echo "::error::releases/latest is not $GITHUB_REF_NAME with appcast.xml and SHA256SUMS"; exit 1
 
   # Formula/zagon.rb and Casks/zagon.rb in the tap a1lezakty/homebrew-zagon, from packaging/homebrew/ and SHA256SUMS.
-  # After the release, so a failure here leaves it published; Re-run failed jobs pushes again. A manual run only shows
-  # the files (artifact homebrew). Without the tap or the secret HOMEBREW_TAP_TOKEN (a fine-grained token with
-  # Contents: write on the tap alone; GITHUB_TOKEN cannot push to another repository) the job is skipped with a notice.
+  # After the release, so a failure here leaves it published; Re-run failed jobs pushes again. A manual run shows the
+  # files (artifact homebrew) and checks that the token can push, pushing nothing. Without the secret HOMEBREW_TAP_TOKEN
+  # (a fine-grained token with Contents: write on the tap alone; GITHUB_TOKEN cannot push to another repository) the
+  # push is skipped with a notice; a tap the token cannot read or push to fails the job.
   homebrew:
     if: ${{ !cancelled() && needs.bundle.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.release.result == 'success') }}
     needs: [version, bundle, release]
