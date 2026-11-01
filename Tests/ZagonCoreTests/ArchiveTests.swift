@@ -36,7 +36,15 @@ import Testing
         let store = try Store(path: ":memory:")
         try Ingest(store: store, sources: [ClaudeSource.spec(root: root)]).scan()
         for p in [main, agent] { try setMtime(p, Sys.now() - 7200) }
-        return (Archive(store: store, dir: dir + "/archive"), root, main, agent)
+        var a = Archive(store: store, dir: dir + "/archive")
+        a.managedDir = dir + "/managed"; a.remoteSettings = dir + "/remote-settings.json"  // no policy
+        return (a, root, main, agent)
+    }
+
+    /// An organization's `cleanupPeriodDays` in the managed settings file.
+    func policy(_ a: Archive, _ days: String) {
+        Sys.mkdirs(a.managedDir)
+        Sys.writeFile(a.managedDir + "/managed-settings.json", Array(#"{"cleanupPeriodDays": \#(days)}"#.utf8))
     }
 
     @Test func roundTripByteForByte() throws {
@@ -140,5 +148,73 @@ import Testing
         #expect(try a.transcript("claude:s1") == original)
         #expect(try a.stats().orphans == 1)
         #expect(try a.resolve("s1") == "claude:s1" && a.resolve("claude:s1") == "claude:s1" && a.resolve("zz") == nil)
+    }
+
+    @Test func retentionComesFromManagedSettingsOnly() throws {
+        let d = tempDir(), m = d + "/managed", remote = d + "/remote-settings.json"
+        func r() -> (Int?, String?) { let x = Archive.retention(managedDir: m, remoteSettings: remote); return (x.days, x.source) }
+        #expect(r() == (nil, nil))
+        Sys.mkdirs(m + "/managed-settings.d")
+        Sys.writeFile(m + "/managed-settings.json", Array(#"{"model": "x", "cleanupPeriodDays": 30}"#.utf8))
+        #expect(r() == (30, m + "/managed-settings.json"))
+        Sys.writeFile(m + "/managed-settings.d/20-retention.json", Array(#"{"cleanupPeriodDays": 7}"#.utf8))
+        Sys.writeFile(m + "/managed-settings.d/10-other.json", Array(#"{"cleanupPeriodDays": 9}"#.utf8))
+        Sys.writeFile(m + "/managed-settings.d/.30-hidden.json", Array(#"{"cleanupPeriodDays": 1}"#.utf8))
+        Sys.writeFile(m + "/managed-settings.d/40-notes.txt", Array(#"{"cleanupPeriodDays": 2}"#.utf8))
+        #expect(r() == (7, m + "/managed-settings.d/20-retention.json"))  // the last .json in name order
+        for bad in ["-1", "7.5", "\"7\"", "null"] {
+            Sys.writeFile(m + "/managed-settings.d/20-retention.json", Array(#"{"cleanupPeriodDays": \#(bad)}"#.utf8))
+            #expect(r() == (9, m + "/managed-settings.d/10-other.json"))
+        }
+        Sys.writeFile(m + "/managed-settings.d/20-retention.json", Array(#"{"cleanupPeriodDays": 0}"#.utf8))
+        #expect(r() == (0, m + "/managed-settings.d/20-retention.json"))
+        Sys.writeFile(remote, Array(#"{"cleanupPeriodDays": 14}"#.utf8))
+        #expect(r() == (14, remote))  // server-managed settings win
+        Sys.writeFile(remote, Array("{}".utf8))
+        #expect(r().0 == 0)
+    }
+
+    @Test func retentionRemovesOldCopiesAndTheirPointers() throws {
+        var (a, _, main, agent) = try setUp()
+        a.idle = 0
+        policy(a, "30")
+        #expect(try a.tick().written == 2)  // two hours old: kept
+        let copy = a.dir + "/claude/2026-10/s1.jsonl.zst"
+        #expect(Sys.exists(copy))
+        for p in [main, agent] { try setMtime(p, Sys.now() - 3 * 86400) }
+        policy(a, "5")
+        var s = try a.tick()
+        #expect(s.removed == 0 && s.written == 0)  // three days: still within five
+
+        policy(a, "2")
+        s = try a.tick()
+        #expect(s.removed == 2 && s.written == 0)
+        #expect(!Sys.exists(a.dir + "/claude"))  // empty folders go too
+        #expect(try a.store.db.one("SELECT count(*) FROM meta WHERE key LIKE 'archive:file:%'") { $0.int(0) } == 0)
+        #expect(try a.store.db.one("SELECT archive_path FROM session WHERE id = 'claude:s1'") { $0.text(0) } == .some(nil))
+        #expect(try a.transcript("claude:s1") == Sys.readFile(main))  // the original is still there
+        #expect(try a.tick() == Archive.Stats())                       // not copied again
+
+        // A gone original, last seen three days ago: its copy goes, nothing points at it.
+        policy(a, "30")
+        #expect(try a.tick().written == 2)
+        unlink(main); unlink(agent)
+        try a.store.db.run("UPDATE source_file SET mtime = ?", [.real(Sys.now() - 3 * 86400)])
+        #expect(try a.tick().written == 0)
+        #expect(try a.transcript("claude:s1") != nil)
+        policy(a, "2")
+        #expect(try a.tick().removed == 2)
+        #expect(try a.transcript("claude:s1") == nil)
+        #expect(try a.stats() == Archive.Stats())
+    }
+
+    @Test func retentionZeroKeepsNothing() throws {
+        var (a, _, _, _) = try setUp()
+        a.idle = 0
+        #expect(try a.tick().written == 2)  // no policy: copied
+        policy(a, "0")
+        #expect(try a.tick().removed == 2)
+        #expect(try a.tick() == Archive.Stats())
+        #expect(!Sys.exists(a.dir + "/claude"))
     }
 }

@@ -338,6 +338,7 @@ extension Daemon {
                         log("archive: \(s.written) files written, \(s.rawBytes >> 20) MB -> \(s.packedBytes >> 20) MB, "
                             + "\(Int((Time.monotonic() - t0) * 1000)) ms")
                     }
+                    if s.removed > 0 { let r = Archive.retention(); log("archive: \(s.removed) copies removed, cleanupPeriodDays \(r.days.map(String.init) ?? "?") in \(r.source ?? "?")") }
                 } catch { log("archive: error: \(error)") }
                 // zstd contexts and buffers of the pass are freed, but the allocator keeps them for this thread.
                 store.db.releaseMemory(); z_release_memory()
