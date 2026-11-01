@@ -266,6 +266,15 @@ newer ones; a repeated status keeps the time it began.
 | `Stop`; Codex `Interrupt`; Claude `Notification` with `idle_prompt`; `SessionStart` (not `compact`) | `waiting_input` |
 | `SessionEnd` | `ended` |
 
+A second source on Linux: the daemon runs `claude agents --json` (Claude Code 2.1.145+; `claude` from PATH and the
+CLI's install places) every 30 s while a Claude session of this host not `ended` was seen in the last 30 minutes, and
+applies it through the same `setStatus` (`ClaudeAgents`), dated 5 s before the call so a hook not yet ingested still
+wins: `busy` → `working`; `waiting` for a permission prompt, sandbox / worker request or input needed →
+`waiting_permission`, other `waiting` and `idle` → `waiting_input` (`idle` of a background session still `working`:
+no change); an exited background session `done` → `waiting_input`, `blocked` → `waiting_permission`, `failed` /
+`stopped` → `ended` (never reopens an `ended` one). Only sessions already in the database; one missing from the list is
+left alone. A Claude Code without the command (non-zero exit, not a JSON array) is asked again an hour later.
+
 The status line wrapper adds `limits` lines (`five_hour` / `seven_day`) only when the reading changed or a minute
 passed for that session (the last one is kept in `spool/.limits-<session>`, removed with spool days); Claude Code
 redraws the status line every few seconds and each spool line wakes the daemon. They become `limit_snapshot` rows (an

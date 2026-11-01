@@ -347,6 +347,38 @@ extension Daemon {
     }
 }
 
+extension Daemon {
+    /// Live statuses from `claude agents --json` (`ClaudeAgents`) every `every` seconds, but only while a Claude
+    /// session of `host` was seen in the last 30 minutes (~0.3 s CPU a call; none when idle). A Claude Code without
+    /// the command (a non-zero exit, not a JSON array) is asked again an hour later; hooks alone meanwhile.
+    public static func startClaudeAgents(dbPath: String, home: String, host: String, every: UInt32 = 30,
+                                         log: @escaping @Sendable (String) -> Void) {
+        startThread {
+            z_background_thread()
+            let store: Store
+            do { store = try Store(path: dbPath) } catch { log("agents: cannot open the database: \(error)"); return }
+            try? store.db.exec("PRAGMA cache_size=-256")
+            var on: Bool?, retryAt = 0.0
+            while true {
+                sleep(every)
+                guard Time.monotonic() >= retryAt, (try? ClaudeAgents.active(store: store, host: host, now: Sys.now())) == true,
+                      let claude = Sys.which("claude", path: DaySummary.cliPath(home: home)) else { continue }
+                let at = Sys.now()
+                let r = Sys.capture([claude, "agents", "--json"], timeout: 10, env: HookSpool.internalEnv)
+                if r.status == 0, let entries = ClaudeAgents.parse(r.out) {
+                    if on != true { log("agents: second status source on"); on = true }
+                    do { _ = try store.db.transaction { try ClaudeAgents.apply(entries, store: store, at: at) } }
+                    catch { log("agents: error: \(error)") }
+                } else {
+                    if on != false { log("agents: `claude agents --json` unsupported (exit \(r.status)), hooks only; retry in 1 h"); on = false }
+                    retryAt = Time.monotonic() + 3600
+                }
+                store.db.releaseMemory(); z_release_memory()
+            }
+        }
+    }
+}
+
 final class ThreadBody: Sendable {
     let run: @Sendable () -> Void
     init(_ run: @escaping @Sendable () -> Void) { self.run = run }
