@@ -52,7 +52,7 @@ public enum Remote {
     public static let oldZagon = "zagon there is older than this app (no usage in its export): reinstall it (install.sh); its days stay empty until then"
 
     /// The error of a server where ssh works but zagon is not found (shown translated, with `installCommand`).
-    public static let noZagon = "zagon is not installed there (command not found)"
+    public static let noZagon = "zagon not found there (not installed, or not on the PATH of ssh commands)"
     /// install.sh as README gives it, with the service.
     public static let installCommand = "curl -fsSL https://raw.githubusercontent.com/a1lezakty/zagon/main/install.sh | sh -s -- --enable-service"
 

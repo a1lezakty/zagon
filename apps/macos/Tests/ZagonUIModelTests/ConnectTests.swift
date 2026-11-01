@@ -78,5 +78,7 @@ final class ConnectTests: XCTestCase {
         XCTAssertEqual(EditorPanelsVM.panelCheck(run: nil, reading: reading, f), f.t("editors.notSeen"))
         XCTAssertEqual(EditorPanelsVM.panelCheck(run: run, reading: nil, f), f.t("editors.seenNoReading", "at 04:46"))
         XCTAssertEqual(EditorPanelsVM.panelCheck(run: run, reading: reading, f), f.t("editors.seen", "at 04:46", "Wed 16:26"))
+        let old = Date(timeIntervalSince1970: 1_791_000_000)
+        XCTAssertEqual(EditorPanelsVM.panelCheck(run: run, reading: old, f), f.t("editors.seen", "at 04:46", "Oct 3 04:00"))
     }
 }

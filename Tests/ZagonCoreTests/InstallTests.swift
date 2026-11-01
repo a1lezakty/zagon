@@ -203,7 +203,7 @@ import Testing
         let (home, o) = setUp()
         let calls = Calls()
         var i = installer(o, calls)
-        #expect(i.doctor().contains { $0.ok && $0.text == "claude: MCP skipped (no claude CLI on PATH)" })
+        #expect(i.doctor().contains { $0.ok && $0.text == "claude: MCP skipped (no claude CLI on PATH or in an editor extension)" })
         let ext = home + "/.cursor/extensions/anthropic.claude-code-"
         for v in ["2.1.300-darwin-arm64", "2.1.99-darwin-arm64"] {
             Sys.mkdirs(ext + v + "/resources/native-binary")
