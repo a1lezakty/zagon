@@ -1,6 +1,6 @@
 # Written by release.yml of github.com/a1lezakty/zagon from packaging/homebrew/ in that repo: edit it there.
 class Zagon < Formula
-  desc "Tracker of Claude Code and Codex CLI sessions: limits, time, tokens, MCP server"
+  desc "Jira worklogs, limits and time from Claude Code and Codex CLI sessions"
   homepage "https://github.com/a1lezakty/zagon"
   # Stated, not scanned: Homebrew reads "86.64" out of the zagon-linux-x86_64 URL.
   version "@VERSION@"

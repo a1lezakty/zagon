@@ -5,7 +5,7 @@ cask "zagon" do
 
   url "https://github.com/a1lezakty/zagon/releases/download/v#{version}/Zagon.dmg"
   name "Zagon"
-  desc "Menu bar tracker of Claude Code and Codex sessions: limits, time, tokens"
+  desc "Menu bar app for Jira worklogs, limits and time of Claude Code and Codex"
   homepage "https://github.com/a1lezakty/zagon"
 
   auto_updates true
