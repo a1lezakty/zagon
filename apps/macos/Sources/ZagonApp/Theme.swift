@@ -37,9 +37,9 @@ enum Z {
     static let muted = Color(dark: Palette.muted, light: 0x74747C)
     static let track = Color(dark: Palette.track, light: 0xDEDEE4)
     static let week = Color(dark: Palette.week, light: 0x2E6AD6)
-    static let working = Color(dark: Palette.working, light: 0x138A6E)
-    static let waiting = Color(dark: Palette.waiting, light: 0xD8473A)
-    static let good = Color(dark: Palette.good, light: 0x12866A)
+    static let working = Color(dark: Palette.working, light: 0x0F7A61)
+    static let waiting = Color(dark: Palette.waiting, light: 0xC23B2F)
+    static let good = Color(dark: Palette.good, light: 0x0F7A5F)
     static let bad = Color(dark: Palette.bad, light: 0xC2382B)
     static let link = Color(dark: Palette.link, light: 0x2459BF)
     static let selection = Color(dark: Palette.selection, light: 0xD5E3FA)
@@ -78,6 +78,25 @@ enum Z {
     static let hatch = Color(dark: 0x2E2E33, light: 0xE6E6EB)
     static let hatchLine = Color(dark: 0x4A4A52, light: 0xC9C9D0)
     static let before = Color(dark: 0x3A3A40, light: 0xD0D0D7)
+    /// Amber and violet as text and marks (bars and the user's ring colours keep `Palette`'s): deeper on white.
+    static let amber = Color(dark: Palette.fiveHour, light: 0xA86300)
+    static let violet = Color(dark: Palette.violet, light: 0x6A45D1)
+    /// Ink on the series colours (`Palette.series`), which are the same in both appearances.
+    static let onSeries = Color(hex: 0x0E1420)
+
+    /// Chips and tags: their dark fill or ink, with its light counterpart (unknown values stay as they are).
+    static func pair(_ dark: UInt32) -> Color { Color(dark: dark, light: chipLight[dark] ?? dark) }
+    static let chipLight: [UInt32: UInt32] = [
+        0x1E3A33: 0xE1F4EE, 0x5FD9B8: 0x0F7A5F,  // active, match, to Zagon only
+        0x3A2F1A: 0xFCF0D6, 0xF5C46A: 0x8A5A00,  // review
+        0x3A2E1D: 0xFCF0D6, 0xF5B342: 0x8A5A00,  // sessions only
+        0x2A2A2E: 0xEDEDF0, 0xA9A9B0: 0x55555C,  // done, already logged
+        0x1F2E46: 0xE3EDFD, 0x9CC3FF: 0x2459BF,  // planned, to Jira
+        0x3D2423: 0xFCE7E5, 0xFF8C80: 0xB3362A,  // mismatch
+        0x2E2640: 0xEEE8FF, 0xC3A6FF: 0x5B3FC4,  // Jira only
+        0x3A2A1F: 0xFCEBDD, 0xF5B27A: 0x9A4E12,  // Claude tag
+        0x1F2E3A: 0xE1F0FD, 0x8CC8FF: 0x1F5F9A,  // Codex tag
+    ]
     /// Calendar heat levels 0…5 (`Palette.heat` in the dark).
     static let heat: [Color] = zip(Palette.heat, [0xEDEDF1, 0xDCE8FB, 0xBAD2F7, 0x8DB4F0, 0x5B91E6, 0x2E6AD6] as [UInt32])
         .map { Color(dark: $0.0, light: $0.1) }

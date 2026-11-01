@@ -63,7 +63,7 @@ struct ZoneNotes: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(f.t("zone.note"))
             Text(f.t("zone.base"))
-            if !Zones.wholeHours(app.zone, at: app.provider.now) { Text(f.t("zone.approx")).foregroundColor(Color(hex: Palette.fiveHour)) }
+            if !Zones.wholeHours(app.zone, at: app.provider.now) { Text(f.t("zone.approx")).foregroundColor(Z.amber) }
         }
         .font(.system(size: 12)).foregroundColor(Z.muted).fixedSize(horizontal: false, vertical: true)
     }

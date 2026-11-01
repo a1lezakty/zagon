@@ -211,9 +211,9 @@ enum RecStyle {
 
     static func dot(_ k: RecKind) -> Color {
         switch k {
-        case .onlySessions: Color(hex: Palette.fiveHour)
+        case .onlySessions: Z.amber
         case .mismatch: Z.bad
-        case .onlyJira: Color(hex: Palette.violet)
+        case .onlyJira: Z.violet
         case .match: Z.good
         case .zagonOnly, .noTask: Z.secondary
         }
@@ -226,9 +226,9 @@ struct RecChip: View {
     @EnvironmentObject private var app: AppState
     var body: some View {
         let c = RecStyle.chip(kind)
-        Text(app.f.t("rec.k." + kind.rawValue)).font(.system(size: small ? 11 : 12)).foregroundColor(Color(hex: c.fg)).lineLimit(1)
+        Text(app.f.t("rec.k." + kind.rawValue)).font(.system(size: small ? 11 : 12)).foregroundColor(Z.pair(c.fg)).lineLimit(1)
             .padding(.horizontal, small ? 8 : 9).frame(height: small ? 20 : 22)
-            .background(Capsule().fill(Color(hex: c.bg)))
+            .background(Capsule().fill(Z.pair(c.bg)))
     }
 }
 
@@ -302,7 +302,7 @@ struct RecRow: View {
 
     var diffColor: Color {
         guard row.diff != nil else { return Z.faint }
-        return row.sign > 0 ? Color(hex: Palette.fiveHour) : row.sign < 0 ? Color(hex: Palette.violet) : Z.secondary
+        return row.sign > 0 ? Z.amber : row.sign < 0 ? Z.violet : Z.secondary
     }
 }
 
@@ -349,7 +349,7 @@ struct DayDetail: View {
                     if !s.meta.isEmpty { Text(s.meta).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1) }
                 }
                 if d.sessions.isEmpty {
-                    Text(f.t("rec.d.noSessions")).font(.system(size: 12.5)).foregroundColor(Color(hex: Palette.violet))
+                    Text(f.t("rec.d.noSessions")).font(.system(size: 12.5)).foregroundColor(Z.violet)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let done = d.done, !d.sessions.isEmpty {

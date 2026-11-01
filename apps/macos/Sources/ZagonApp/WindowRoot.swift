@@ -26,7 +26,6 @@ struct WindowRoot: View {
         .foregroundColor(Z.text)
         .background(Z.ground)
         .overlay(alignment: .bottom) { ToastView().frame(maxWidth: 560).padding(20) }
-        .preferredColorScheme(app.appearance.scheme)
     }
 }
 

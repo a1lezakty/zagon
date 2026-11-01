@@ -30,6 +30,10 @@ final class AppState: ObservableObject {
     @Published var settingsTab = SettingsTab.general {
         didSet { if persist { UserDefaults.standard.set(settingsTab.rawValue, forKey: "settingsTab") } }
     }
+    /// The system is in Dark Mode. The panel is given its scheme explicitly: a SwiftUI scheme going back to nil does
+    /// not always reach the panel's window (the main window takes `NSWindow.appearance`, nil follows the system).
+    @Published var systemDark = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    var panelScheme: ColorScheme { appearance.scheme ?? (systemDark ? .dark : .light) }
     @Published var appearance = Appearance.system {
         didSet {
             if persist { UserDefaults.standard.set(appearance.rawValue, forKey: "appearance") }
@@ -307,6 +311,13 @@ final class AppState: ObservableObject {
             state.zoneID = d.string(forKey: "timeZone").flatMap { TimeZone(identifier: $0) == nil ? nil : $0 }
             state.settingsTab = d.string(forKey: "settingsTab").flatMap(SettingsTab.init(rawValue:)) ?? .general
             state.appearance = d.string(forKey: "appearance").flatMap(Appearance.init(rawValue:)) ?? .system
+            // The system switched Dark / Light (by hand or on schedule): the panel follows when "As the system".
+            DistributedNotificationCenter.default().addObserver(forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+                                                                object: nil, queue: .main) { [weak state] _ in
+                Task { @MainActor in
+                    state?.systemDark = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                }
+            }
             // Open at login: on by default the first time Zagon runs from Applications (it can be turned off in settings).
             if cliPath != nil, Bundle.main.bundlePath.hasPrefix("/Applications/"), !d.bool(forKey: "launchAtLoginSet") {
                 d.set(true, forKey: "launchAtLoginSet")
@@ -705,7 +716,7 @@ struct ZagonApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MainPanel().environmentObject(state).preferredColorScheme(state.appearance.scheme)
+            MainPanel().environmentObject(state).preferredColorScheme(state.panelScheme)
         } label: {
             // Rebuilt on every AppState change: takes the picture as it is, drawing and reading nothing.
             let icon = state.statusImage

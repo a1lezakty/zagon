@@ -353,7 +353,7 @@ enum Strings {
         "settings.summary.mac": "On this Mac the summary and the worklog texts are rebuilt at the end of the day, at 23:55 in the worklog time zone (Settings → Worklogs): up to one AI call a day, when there was work on tasks. The time here is for a server's service: check a server on the Servers tab to set it. Any day's summary can be written from the Day screen.",
         "settings.tab.general": "General", "settings.tab.connect": "Claude Code and Codex", "settings.tab.jira": "Jira and worklogs",
         "settings.tab.notify": "Notifications", "settings.tab.servers": "Servers",
-        "settings.look": "Appearance", "settings.look.system": "As the system", "settings.look.dark": "Dark", "settings.look.light": "Light",
+        "settings.look": "Appearance", "settings.look.system": "Match system", "settings.look.dark": "Dark", "settings.look.light": "Light",
     ]
 
     static let ru: [String: String] = [
