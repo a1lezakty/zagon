@@ -202,7 +202,7 @@ enum Strings {
         "sum.source": "Based on the sessions of {0}.",
         "sum.leftOut": "Not in the summary: the sessions of {0}:",
         "sum.noteNonePeriod": "Made without AI from the sessions' data on {0} at {1}.",
-        "settings.summary.noServer": "The summary is written at its time by the service on a server; this Mac has none. Check a server above to set the time here. Any day's summary can be written from the Day screen.",
+        "settings.summary.noServer": "The summary is written at its time by the service on a server; this Mac has none. Check a server on the Servers tab to set the time here. Any day's summary can be written from the Day screen.",
         "settings.summary.asServer": "as on the server",
         "sum.aiFailed": "The AI did not answer ({1}): {0}. Written without AI.",
         "sum.aiFailed.kept": "The AI did not answer ({1}): {0}. The earlier summary is shown.",
@@ -352,7 +352,10 @@ enum Strings {
         "handoff.failed": "Session summary not made: {0}",
         "handoff.empty": "{0} sent nothing back: the session summary was not copied.",
         "settings.wl.loading": "Reading the settings ({0})…",
-        "settings.summary.mac": "On this Mac the summary and the worklog texts are rebuilt at the end of the day, at 23:55 in the worklog time zone (Settings → Worklogs): up to one AI call a day, when there was work on tasks. The time here is for a server's service: check a server above to set it. Any day's summary can be written from the Day screen.",
+        "settings.summary.mac": "On this Mac the summary and the worklog texts are rebuilt at the end of the day, at 23:55 in the worklog time zone (Settings → Worklogs): up to one AI call a day, when there was work on tasks. The time here is for a server's service: check a server on the Servers tab to set it. Any day's summary can be written from the Day screen.",
+        "settings.tab.general": "General", "settings.tab.connect": "Claude Code and Codex", "settings.tab.jira": "Jira and worklogs",
+        "settings.tab.notify": "Notifications", "settings.tab.servers": "Servers",
+        "settings.look": "Appearance", "settings.look.system": "Match system", "settings.look.dark": "Dark", "settings.look.light": "Light",
     ]
 
     static let ru: [String: String] = [
@@ -564,7 +567,7 @@ enum Strings {
         "sum.source": "По данным {0}.",
         "sum.leftOut": "Не вошло в сводку — сессии {0}:",
         "sum.noteNonePeriod": "Составлена без ИИ по данным сессий {0} в {1}.",
-        "settings.summary.noServer": "Сводку по времени пишет служба сервера, у мака её нет. Отметь сервер выше — и время можно будет задать здесь. Сводку за любой день можно составить кнопкой на экране «День».",
+        "settings.summary.noServer": "Сводку по времени пишет служба сервера, у мака её нет. Отметь сервер на вкладке «Серверы» — и время можно будет задать здесь. Сводку за любой день можно составить кнопкой на экране «День».",
         "settings.summary.asServer": "как на сервере",
         "sum.aiFailed": "ИИ не ответил ({1}): {0} — сводка составлена без ИИ.",
         "sum.aiFailed.kept": "ИИ не ответил ({1}): {0} — показана прежняя сводка.",
@@ -715,6 +718,9 @@ enum Strings {
         "handoff.failed": "Сводка сессии не собрана: {0}",
         "handoff.empty": "{0} ничего не вернул — сводка сессии не скопирована.",
         "settings.wl.loading": "Читаю настройки ({0})…",
-        "settings.summary.mac": "На этом маке сводка и тексты ворклогов пересобираются в конце дня, в 23:55 по поясу ворклогов (Настройки → Ворклоги): не больше одного вызова ИИ в день, если была работа по задачам. Время здесь — для службы сервера: отметь сервер выше, чтобы его задать. Сводку за любой день можно составить кнопкой на экране «День».",
+        "settings.summary.mac": "На этом маке сводка и тексты ворклогов пересобираются в конце дня, в 23:55 по поясу ворклогов (Настройки → Ворклоги): не больше одного вызова ИИ в день, если была работа по задачам. Время здесь — для службы сервера: отметь сервер на вкладке «Серверы», чтобы его задать. Сводку за любой день можно составить кнопкой на экране «День».",
+        "settings.tab.general": "Общие", "settings.tab.connect": "Claude Code и Codex", "settings.tab.jira": "Jira и ворклоги",
+        "settings.tab.notify": "Уведомления", "settings.tab.servers": "Серверы",
+        "settings.look": "Оформление", "settings.look.system": "Как в системе", "settings.look.dark": "Тёмное", "settings.look.light": "Светлое",
     ]
 }

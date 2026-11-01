@@ -188,7 +188,10 @@ struct JiraConnectHint: View {
     let source: TaskBackend.Source
     var body: some View {
         if source == .local {
-            Button(app.f.t("tasks.jiraConnect")) { app.screen = .settings }
+            Button(app.f.t("tasks.jiraConnect")) {
+                app.settingsTab = .jira
+                app.screen = .settings
+            }
                 .buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundColor(Z.week)
         } else {
             Text(app.f.t("settings.jira.servers")).font(.system(size: 12)).foregroundColor(Z.muted)
