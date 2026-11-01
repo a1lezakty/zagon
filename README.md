@@ -28,6 +28,15 @@ macOS 13 or later: [Zagon.dmg](https://github.com/a1lezakty/zagon/releases/lates
 **Connect Claude Code / Codex** in its window. The app is not notarized, so its first launch needs System Settings →
 Privacy & Security → **Open Anyway** ([steps](#macos-app)).
 
+Homebrew (macOS and Linux), from the tap [a1lezakty/homebrew-zagon](https://github.com/a1lezakty/homebrew-zagon):
+
+```sh
+brew install --cask a1lezakty/zagon/zagon     # Zagon.app
+brew install a1lezakty/zagon/zagon            # the CLI alone; then: zagon install --bin "$(brew --prefix)/opt/zagon/bin/zagon"
+```
+
+Homebrew installs keep up with `brew upgrade` (the app also updates itself), not `zagon update`.
+
 The hooks and the MCP tools reach sessions started after the install: restart the Claude Code and Codex sessions you
 have open. What install changes and how to undo it: [Install on a Linux server](#install-on-a-linux-server).
 
@@ -142,7 +151,7 @@ The macOS app (sample data): a worklog row opened, the menu bar, then the Day, W
 | Task list, worklog plan, Jira (`zagon task`, `zagon log`, MCP `task_*`, `worklog_*`) | works |
 | macOS app: menu bar, Day / Week / Calendar / Tasks windows, servers over SSH, self-updating | works |
 | Release binaries, install script, `zagon update` | works |
-| Homebrew | not yet |
+| Homebrew tap: the CLI formula (macOS, Linux) and the app's cask | works |
 
 ## Privacy in detail
 
