@@ -350,6 +350,7 @@ enum Strings {
         "handoff.copied": "Session summary copied: paste it into a new chat to continue the work there.",
         "handoff.failed": "Session summary not made: {0}",
         "handoff.empty": "{0} sent nothing back: the session summary was not copied.",
+        "settings.wl.loading": "Reading the settings ({0})…",
         "settings.summary.mac": "On this Mac the summary and the worklog texts are rebuilt at the end of the day, at 23:55 in the worklog time zone (Settings → Worklogs): up to one AI call a day, when there was work on tasks. The time here is for a server's service: check a server above to set it. Any day's summary can be written from the Day screen.",
     ]
 
@@ -711,6 +712,7 @@ enum Strings {
         "handoff.copied": "Сводка сессии скопирована: вставь её в новый чат, чтобы продолжить работу там.",
         "handoff.failed": "Сводка сессии не собрана: {0}",
         "handoff.empty": "{0} ничего не вернул — сводка сессии не скопирована.",
+        "settings.wl.loading": "Читаю настройки ({0})…",
         "settings.summary.mac": "На этом маке сводка и тексты ворклогов пересобираются в конце дня, в 23:55 по поясу ворклогов (Настройки → Ворклоги): не больше одного вызова ИИ в день, если была работа по задачам. Время здесь — для службы сервера: отметь сервер выше, чтобы его задать. Сводку за любой день можно составить кнопкой на экране «День».",
     ]
 }

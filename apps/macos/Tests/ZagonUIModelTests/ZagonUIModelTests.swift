@@ -345,7 +345,7 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertEqual(vm.segments.map(\.logged), [true, false, false, false])
         XCTAssertEqual(vm.segments[3].x, 3.0 / 7, accuracy: 1e-9)
         XCTAssertEqual(vm.segments[3].label, "ZAG-1 · 3h 30m")
-        XCTAssertEqual(vm.segments.map(\.label).prefix(3), ["", "PROJ", "PROJ"])
+        XCTAssertEqual(vm.segments.map(\.label).prefix(3), ["", "PROJ-21", "PROJ-12"])
         XCTAssertEqual(vm.commitTitle, "Log 2 worklogs to Jira · 1h 00m")
         XCTAssertEqual(vm.notes, ["08:00–09:00: 2 sessions ran at once (web-app, API question), the time is split by activity: 30m + 30m.",
                                   "Nothing overlaps the worklogs already in Jira.",
