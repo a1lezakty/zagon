@@ -97,11 +97,14 @@ public struct AIRingsVM: Sendable, Equatable {
     public var fiveLine: String
     public var weekLine: String
     public var weekLeftLine: String
+    /// Whose limits these are ("build-box · work"), only when readings come from more than one source.
+    public var source: String?
     public var spoken: String
     public var spokenLeft: String
 
     init(_ tool: Tool, _ l: AILimits, _ c: RingColors, _ f: Fmt) {
         self.tool = tool
+        source = LimitFrom.label([l.fiveHour, l.week], f)
         five = l.fiveHour.map { RingVM(title: f.t("limit.five"), window: $0, base: c.five, f: f) } ?? .empty(f.t("limit.five"), f)
         week = l.week.map { RingVM(title: f.t("limit.week"), window: $0, base: c.week, f: f) } ?? .empty(f.t("limit.week"), f)
         let known = five.pct != nil
@@ -110,8 +113,9 @@ public struct AIRingsVM: Sendable, Equatable {
         weekLine = f.t("limit.ai.week", week.pct.map { f.pct(Double($0)) } ?? "–")
         weekLeftLine = f.t("limit.ai.week", week.leftPct.map { f.pct(Double($0)) } ?? "–")
         let noFive = " (" + f.t("limit.noFive") + ")"
-        spoken = tool.name + ": " + (weekOnly ? week.spoken + noFive : five.spoken + "; " + week.spoken)
-        spokenLeft = tool.name + ": " + (weekOnly ? week.spokenLeft + noFive : five.spokenLeft + "; " + week.spokenLeft)
+        let name = tool.name + (source.map { " (" + $0 + ")" } ?? "")
+        spoken = name + ": " + (weekOnly ? week.spoken + noFive : five.spoken + "; " + week.spoken)
+        spokenLeft = name + ": " + (weekOnly ? week.spokenLeft + noFive : five.spokenLeft + "; " + week.spokenLeft)
     }
 }
 
@@ -153,6 +157,9 @@ public struct MainVM: Sendable {
     /// Over the rings-in-rings when they show what is left.
     public var limitsHeaderLeft: String
     public var limitsAge: String?
+    /// Next to the header, one AI shown: whose limits the rings or the pace are ("build-box · work"), only when readings
+    /// come from more than one source (both AIs: `AIRingsVM.source`).
+    public var limitsSource: String?
     /// A window has no current reading: the panel says when one comes.
     public var limitsMissing: Bool
     /// Claude was used without a reading (`Limits.claudeHint`): where its limits come from, said instead of when a
@@ -186,19 +193,21 @@ public struct MainVM: Sendable {
         }
         // A worker driven by another session waits for that session, not for you: listed with the idle ones.
         func driven(_ s: LiveSession) -> Bool { s.status == .waitingInput && s.drivenBy != nil }
+        // Cursor's sessions say so: their model names look like Claude's or Codex's.
+        func cursor(_ s: LiveSession, _ detail: String) -> String { s.tool == .cursor ? "Cursor · " + detail : detail }
         waiting = sessions.compactMap {
             switch $0.status {
-            case .waitingPermission: return row($0, f.t("status.permission"))
-            case .waitingInput where !driven($0): return row($0, f.t("status.input"))
+            case .waitingPermission: return row($0, cursor($0, f.t("status.permission")))
+            case .waitingInput where !driven($0): return row($0, cursor($0, f.t("status.input")))
             default: return nil
             }
         }
-        working = sessions.filter { $0.status == .working }.map { row($0, $0.model) }
+        working = sessions.filter { $0.status == .working }.map { row($0, cursor($0, $0.model)) }
         idle = sessions.compactMap {
             if driven($0), let d = $0.drivenBy {
                 return row($0, d.isEmpty ? f.t("status.otherSession") : f.t("status.session", d))
             }
-            return $0.status == .idle ? row($0, $0.model) : nil
+            return $0.status == .idle ? row($0, cursor($0, $0.model)) : nil
         }
         waitingHeader = f.t("sessions.waiting", String(waiting.count)).uppercased()
         workingHeader = f.t("sessions.working", String(working.count)).uppercased()
@@ -221,6 +230,7 @@ public struct MainVM: Sendable {
         limitsHeader = (tools.isEmpty || !ais.isEmpty ? f.t("limit.header.none")
             : f.t("limit.header", tools.map(\.name).joined(separator: " · "))).uppercased()
         limitsHeaderLeft = f.t("limit.header.left").uppercased()
+        limitsSource = ais.isEmpty ? LimitFrom.label(windows, f) : nil
         // A reading over 15 minutes old says so; with both AIs each says its own: "Claude 20m · Codex 6h ago".
         func age(_ ws: [LimitWindow?]) -> Double? {
             ws.compactMap { $0?.readAt }.max().map { f.now.timeIntervalSince($0) }.flatMap { $0 > 900 ? $0 : nil }
@@ -329,6 +339,7 @@ public struct DayVM: Sendable {
             notes.append(Note(color: Palette.week, text: f.t("day.weekDelta", "+" + f.pct(b - a), String(Int(a.rounded())),
                                                              f.pct(b))))
         }
+        if d.cursorSec > 0 { notes.append(Note(color: Palette.muted, text: f.t("day.cursor", f.duration(d.cursorSec)))) }
         limitNotes = notes
         timeline = TimelineVM(day: d.day, lanes: d.lanes, f: f)
         let waits = d.lanes.flatMap { lane in lane.intervals.filter(\.waiting).map { (lane.title, $0) } }
@@ -699,7 +710,7 @@ public struct TasksVM: Sendable {
             done: t.doneByDay.map { (f.dayTitleShortWeekday($0.day), $0.text) },
             sessions: t.sessions.map { s in
                 let days = f.dayRange(s.first, s.last)
-                return TaskSessionVM(tool: s.tool == .codex ? "Codex" : "Claude", codex: s.tool == .codex, title: s.title,
+                return TaskSessionVM(tool: s.tool.name, codex: s.tool == .codex, title: s.title,
                                      meta: [s.host, s.model, days].joined(separator: " · "), time: f.duration(s.sec))
             },
             notes: t.notes)

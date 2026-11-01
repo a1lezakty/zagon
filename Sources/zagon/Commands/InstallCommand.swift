@@ -31,7 +31,7 @@ struct InstallCommand: ParsableCommand {
         commandName: "install", abstract: "Install hooks, status line wrapper, MCP server and (Linux) the service unit; idempotent. On macOS the app is the service.")
 
     @OptionGroup var flags: InstallFlags
-    @Flag(help: "Enable and start the systemd --user service.") var enableService = false
+    @Flag(help: "Enable and start the systemd --user service (as root without a user systemd: the system unit).") var enableService = false
     @Flag(help: "Also write a system unit (needs root: sudo), for hosts without a user systemd.") var systemService = false
 
     func run() throws {

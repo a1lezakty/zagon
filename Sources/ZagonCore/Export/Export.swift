@@ -16,7 +16,8 @@ import Foundation
 ///   that day (rows that vanished are gone). `ExportImport` is the reference client;
 /// - `{"type":"summary","day","engine","text","created","seq"}` per summary kept after `since` (`SummaryDoc` JSON in
 ///   `text`, `day` = its day or `from..to`);
-/// - `{"type":"limit",…}` the latest reading per (tool, window), every time (a handful of rows).
+/// - `{"type":"limit",…}` the latest reading per (tool, window), every time (a handful of rows), with the exporting
+///   store's `host` and `account` (`[limits] account`; left out when not set).
 public enum Export {
     struct Header: Encodable { var type = "export"; var schema: Int; var since: Int; var seq: Int; var version: String? }
     struct SessionLine: Encodable {
@@ -60,11 +61,14 @@ public enum Export {
     struct LimitLine: Encodable {
         var type = "limit"
         var tool: String, window: String, usedPct: Double, resetsAt: Double?, windowMinutes: Int?, ts: Double
+        /// The exporting store's host and `[limits] account` (0.1.5; nil is left out).
+        var host: String, account: String?
     }
 
     /// Writes the lines through `write`; reads one consistent snapshot of the database. `version`: the CLI's
-    /// (`zagon --version`), for the header.
-    public static func run(store: Store, since: Int, version: String? = nil, write: (String) -> Void) throws {
+    /// (`zagon --version`), for the header; `account`: `[limits] account` of config.toml, for the `limit` lines.
+    public static func run(store: Store, since: Int, version: String? = nil, account: String? = nil,
+                           write: (String) -> Void) throws {
         let db = store.db
         let e = JSONEncoder()
         e.keyEncodingStrategy = .convertToSnakeCase
@@ -170,7 +174,7 @@ public enum Export {
 
         for l in try store.latestLimits() {
             try out(LimitLine(tool: l.tool.rawValue, window: l.window, usedPct: l.usedPct, resetsAt: l.resetsAt,
-                              windowMinutes: l.windowMinutes, ts: l.ts))
+                              windowMinutes: l.windowMinutes, ts: l.ts, host: store.host, account: account))
         }
     }
 }

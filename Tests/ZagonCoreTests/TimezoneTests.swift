@@ -74,7 +74,7 @@ import Testing
 
     @Test func mcpToolNeedsConfirm() throws {
         let dir = makeTempDir(), p = ZagonPaths(home: dir, dir: dir + "/z")
-        let tool = try #require(SettingsTools.tools(p).first)
+        let tool = try #require(SettingsTools.tools(p, store: try Store(path: ":memory:")).first)
         #expect(try tool.run(MCPArgs(.object([]))).contains("(system zone), now "))
         #expect(throws: MCPToolError.self) { try tool.run(MCPArgs(["zone": "UTC"])) }
         #expect(throws: MCPToolError.self) { try tool.run(MCPArgs(["zone": "Nowhere/Zone", "confirm": true])) }

@@ -180,6 +180,8 @@ import Testing
         #expect(calls.argv.contains([fb + "/codex", "mcp", "add", "zagon", "--", z, "mcp"]))
         #if os(Linux)
         #expect(calls.argv.contains([fb + "/systemctl", "--user", "enable", "--now", "zagon.service"]))
+        Sys.mkdirs(home + "/.zagon/logs")  // the daemon runs: its health line is fresh
+        Sys.writeFile(home + "/.zagon/logs/daemon.log", Array("\(LogFile.iso(o.now - 60)) health: rss 13.0 MB\n".utf8))
         #else
         #expect(!calls.argv.contains { $0[0] == fb + "/systemctl" })
         #endif

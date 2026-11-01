@@ -124,9 +124,10 @@ public enum TaskText {
     public static func list(_ lines: [TaskListLine], base: TaskTime.Base = .sessions, all: Bool = false, limit: Int = .max,
                             more: String = "task list --all", drafts: (count: Int, how: String) = (0, "task drafts")) -> String {
         func line(_ l: TaskListLine) -> String {
-            "\(pad(l.task.key, 10)) \(pad(l.task.status.rawValue, 11)) \(label(base)) 7d \(pad(Txt.dur(l.weekSec), 7)) "
-                + "\(l.sessions) sessions  \(Txt.oneLine(l.task.title, 70))" + (l.jiraStatus.map { "  · Jira \"\($0)\"" } ?? "")
-                + (l.task.id == 0 ? "  (not a task here yet)" : "")
+            let worked = label(base) + " " + Txt.dur(l.weekSec) + " in 7d", sessions = Txt.count(l.sessions, "session")
+            let jira = l.jiraStatus.map { "  · Jira \"\($0)\"" } ?? "", adopt = l.task.id == 0 ? "  (not a task here yet)" : ""
+            return "\(pad(l.task.key, 10)) \(pad(l.task.status.rawValue, 11)) \(pad(worked, 21)) \(pad(sessions, max(12, sessions.count))) "
+                + "\(Txt.oneLine(l.task.title, 70))\(jira)\(adopt)"
         }
         let worked = lines.filter { $0.worked != false }, rest = lines.filter { $0.worked == false }
         let open = rest.filter { $0.task.status != .done }.count
@@ -183,7 +184,9 @@ public enum TaskText {
         }.joined(separator: "\n")
     }
 
-    public static func plan(_ p: DayPlan, base: TaskTime.Base = .sessions, jiraError: String? = nil) -> String {
+    /// `refresh`: how to build the texts again, when sessions worked after they were built.
+    public static func plan(_ p: DayPlan, base: TaskTime.Base = .sessions, jiraError: String? = nil,
+                            refresh: String = "log plan --refresh") -> String {
         let toJira = p.rows.filter { $0.state == "planned" && $0.jiraKey != nil }.reduce(0) { $0 + $1.seconds }
         var out = ["\(p.day): \(label(base)) \(Txt.dur(p.userSec)) · sessions \(Txt.dur(p.sessionSec))"
                    + (p.jiraSec.map { " · in Jira \(Txt.dur($0))" } ?? " · Jira not connected")
@@ -205,8 +208,9 @@ public enum TaskText {
         let ex = (p.excluded ?? []).filter { $0.seconds > 0 }
         if !ex.isEmpty { out.append("excluded: " + ex.map { "\($0.kind) \($0.name) \(Txt.dur(Double($0.seconds)))" }.joined(separator: ", ")) }
         if let tz = p.tz {
-            out.append("days in \(tz) · texts " + (p.summaryBuiltAt.map { "built \(Txt.clock($0))" } ?? "not built yet")
-                       + ((p.sessionsAfterSummary ?? 0) > 0 ? ", \(p.sessionsAfterSummary!) sessions since (log plan --refresh)" : ""))
+            let built = p.summaryBuiltAt.map { "built \(Txt.clock($0))" } ?? "not built yet"
+            let since = (p.sessionsAfterSummary ?? 0) > 0 ? ", \(p.sessionsAfterSummary!) sessions since (\(refresh))" : ""
+            out.append("days in \(tz) · texts \(built)\(since)")
         }
         for n in p.notes { out.append("note: \(n)") }
         return out.joined(separator: "\n")

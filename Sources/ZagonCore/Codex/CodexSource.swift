@@ -4,7 +4,8 @@ import FoundationEssentials
 import Foundation
 #endif
 
-// Codex CLI rollouts: `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` and `archived_sessions/`.
+// Codex CLI rollouts: `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` and `archived_sessions/`; a cold
+// one may be `….jsonl.zst` instead (the same bytes, one zstd stream; Codex turns it back into `.jsonl` to append).
 // Each line is `{"timestamp": ISO-8601, "type": <item>, "payload": {...}}` (serde: fields in this order, payload
 // tag `type` first), which lets most lines be classified from their first few hundred bytes without a JSON parse.
 
@@ -26,7 +27,7 @@ public enum CodexSource {
 
     @Sendable static func isRollout(_ rel: String) -> Bool {
         let name = rel.split(separator: "/").last ?? ""
-        return name.hasPrefix("rollout-") && name.hasSuffix(".jsonl")
+        return name.hasPrefix("rollout-") && (name.hasSuffix(".jsonl") || name.hasSuffix(".jsonl.zst"))
     }
 }
 
@@ -61,9 +62,10 @@ public struct CodexParser: LineParser {
         }
     }
 
-    /// `rollout-2026-01-08T19-18-57-<uuid>.jsonl` → `<uuid>`.
+    /// `rollout-2026-01-08T19-18-57-<uuid>.jsonl` (or `.jsonl.zst`) → `<uuid>`.
     static func idFromName(_ rel: String) -> String {
-        let name = rel.split(separator: "/").last.map(String.init) ?? rel
+        var name = rel.split(separator: "/").last.map(String.init) ?? rel
+        if name.hasSuffix(".zst") { name.removeLast(4) }
         let base = name.hasSuffix(".jsonl") ? String(name.dropLast(6)) : name
         return base.count >= 36 ? String(base.suffix(36)) : base
     }

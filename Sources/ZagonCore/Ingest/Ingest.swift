@@ -41,6 +41,8 @@ public struct IngestOptions: Sendable {
 
 public struct IngestStats: Sendable, Codable {
     public var filesSeen = 0, filesRead = 0, bytes = 0, lines = 0, badLines = 0, resets = 0, moves = 0, usageRecords = 0
+    /// Records that should have carried usage but did not (`ParseOutput.noUsage`).
+    public var noUsage = 0
     /// Files recounted from their archive copy (the original is gone; schema v5 recount).
     public var fromArchive = 0
     /// v5 recounts that came out with other totals, so the file kept its old rows (see `Ingest.recount`).
@@ -59,13 +61,15 @@ public final class Ingest {
     /// Host written into sessions and `day_agg`: `options.host` or the database's own.
     public let host: String
     let keys: Regex<AnyRegexOutput>?
-    public private(set) var stats = IngestStats()
+    public internal(set) var stats = IngestStats()
     var db: SQLite { store.db }
 
     // Pending derived work, done once in finish().
     var touchedHours = Set<Int>()
     var touchedSessions = Set<String>()
     var userActionsChanged = false
+    /// `.zst` files (path, inode, mtime) this process could not unpack (`unpack`).
+    var unpackFailed = Set<String>()
 
     public init(store: Store, sources: [SourceSpec], options: IngestOptions = IngestOptions()) {
         self.store = store; self.sources = sources; self.options = options
@@ -148,49 +152,88 @@ public final class Ingest {
     }
 
     public func ingest(path: String, relative: String, source: SourceSpec) throws {
+        // `<name>.zst` (Codex compresses cold rollouts) holds the bytes of `<name>`: its row stays under `<name>`, so a
+        // zagon that does not know the form sees the file gone, and on unpacking replaced (a recount, not a double).
+        // Offsets, tails and sizes are those of the unpacked content. While both exist the plain file is the one (Codex
+        // reads it; it may be newer).
+        let packed = path.hasSuffix(".zst")
+        let name = packed ? String(path.dropLast(4)) : path, rel = packed ? String(relative.dropLast(4)) : relative
         var sb = stat()
-        guard stat(path, &sb) == 0, (sb.st_mode & S_IFMT) == S_IFREG else { return }
-        let ino = Int(sb.st_ino), size = Int(sb.st_size)
+        guard stat(path, &sb) == 0, (sb.st_mode & S_IFMT) == S_IFREG else {
+            // Compressed while the plain file was still there (the .zst was skipped then): read it now the original is gone.
+            if !packed, source.accepts(relative + ".zst"), Sys.exists(path + ".zst") {
+                try ingest(path: path + ".zst", relative: relative + ".zst", source: source)
+            }
+            return
+        }
+        if packed, Sys.exists(name) { return }
+        let ino = Int(sb.st_ino)
+        var size = Int(sb.st_size)
         #if canImport(Darwin)
         let mtime = Double(sb.st_mtimespec.tv_sec) + Double(sb.st_mtimespec.tv_nsec) / 1e9
         #else
         let mtime = Double(sb.st_mtim.tv_sec) + Double(sb.st_mtim.tv_nsec) / 1e9
         #endif
-        let fd = open(path, O_RDONLY | O_CLOEXEC)
+        let fd: Int32
+        if packed {
+            // Never appended to (Codex unpacks to append): once read, only another inode or mtime is news.
+            if let k = try loadFile(name), k.inode == ino, k.mtime == mtime { return }
+            let attempt = "\(path) \(ino) \(mtime)"
+            guard !unpackFailed.contains(attempt), let u = unpack(path) else { unpackFailed.insert(attempt); return }
+            fd = u.fd; size = u.size
+        } else {
+            fd = open(path, O_RDONLY | O_CLOEXEC)
+        }
         guard fd >= 0 else { return }
         defer { close(fd) }
 
         try db.transaction {
             var f: FileRow
-            var known = try loadFile(path)
-            if known == nil, let m = try movedFile(tool: source.tool, inode: ino, size: size, fd: fd) {
-                // Renamed or moved between roots of this tool (Codex sessions/ -> archived_sessions/): the same file,
-                // so only the path changes; its contribution stays and tailing continues from the stored offset.
-                try db.run("UPDATE source_file SET path=? WHERE id=?", [.text(path), .int(m.id)])
+            var known = try loadFile(name)
+            let compressible = packed || source.accepts(rel + ".zst")
+            if known == nil, let m = try movedFile(tool: source.tool, inode: ino, size: size, fd: fd)
+                ?? (compressible ? otherRoot(name: name, packed: packed, source: source, size: size, fd: fd) : nil) {
+                // Renamed or moved between roots of this tool (Codex sessions/ -> archived_sessions/), maybe compressed or
+                // unpacked on the way: the same file, so only the path changes; its contribution stays and tailing
+                // continues from the stored offset.
+                try db.run("UPDATE source_file SET path=? WHERE id=?", [.text(name), .int(m.id)])
                 stats.moves += 1
                 known = m
             }
+            var wasPacked = false
             if let row = known {
                 f = row
-                let replaced = f.inode != ino || size < f.offset || !tailMatches(fd, f)
+                wasPacked = try compressible && isPacked(f.id)
+                // Another inode is another file, except across the two forms (the same bytes: Codex compressing or
+                // unpacking) where the bytes before the offset decide.
+                let replaced = (f.inode != ino && !packed && !wasPacked) || size < f.offset || !tailMatches(fd, f)
                 if replaced {
                     try restart(&f)
                     f.resets += 1; stats.resets += 1
                 } else if f.recount {
-                    try recount(&f, fd: fd, path: path, relative: relative, source: source)
-                } else if size == f.offset {
+                    try recount(&f, fd: fd, path: name, relative: rel, source: source)
+                } else if size == f.offset, !packed, !wasPacked {  // a .zst's inode and mtime are saved
                     return
                 }
             } else {
-                try db.run("INSERT INTO source_file(path, tool) VALUES(?, ?)", [.text(path), .text(source.tool.rawValue)])
+                try db.run("INSERT INTO source_file(path, tool) VALUES(?, ?)", [.text(name), .text(source.tool.rawValue)])
                 f = FileRow(id: db.lastInsertRowID)
             }
             f.inode = ino; f.size = size; f.mtime = mtime
-            try read(fd: fd, file: &f, path: path, relative: relative, source: source)
+            try read(fd: fd, file: &f, path: name, relative: rel, source: source)
             // A file quiet for an hour is read once (full pass, catch-up): drop it from the page cache.
             if mtime < Time.now() - 3600 { z_drop_cache(fd) }
             try save(f)
+            if packed != wasPacked {
+                try db.run(packed ? "INSERT OR REPLACE INTO meta(key, value) VALUES(?, 1)" : "DELETE FROM meta WHERE key = ?",
+                           [.text("packed:file:\(f.id)")])
+            }
         }
+    }
+
+    /// The file was last read from its `.zst` (`meta packed:file:<id>`).
+    func isPacked(_ id: Int64) throws -> Bool {
+        try db.one("SELECT 1 FROM meta WHERE key = ?", [.text("packed:file:\(id)")]) { _ in true } ?? false
     }
 
     func save(_ f: FileRow) throws {
@@ -259,7 +302,7 @@ public final class Ingest {
     func recountGone() throws {
         var due: [(id: Int64, path: String)] = []
         try db.query("SELECT id, path FROM source_file WHERE recount = 1") { if let p = $0.text(1) { due.append(($0.int64(0), p)) } }
-        due = due.filter { !Sys.exists($0.path) }
+        due = due.filter { !Sys.exists($0.path) && !Sys.exists($0.path + ".zst") }  // a packed row waits for its .zst
         guard !due.isEmpty else { return }
         // Unpacked next to the database (the copy's protection, not /tmp), read like the original, removed; a copy left
         // by a crash is removed first.
@@ -324,13 +367,68 @@ public final class Ingest {
         try db.query("SELECT path FROM source_file WHERE tool=? AND inode=?", [.text(tool.rawValue), .int(Int64(inode))]) {
             if let p = $0.text(0) { paths.append(p) }
         }
+        func linked(_ p: String) -> Bool { var sb = stat(); return stat(p, &sb) == 0 && Int(sb.st_ino) == inode }
         for old in paths {
-            var sb = stat()
-            if stat(old, &sb) == 0, Int(sb.st_ino) == inode { continue }
+            if linked(old) || linked(old + ".zst") { continue }  // a packed row's file is `<path>.zst`
             if let row = try loadFile(old), size >= row.offset, tailMatches(fd, row) { return row }
         }
         return nil
     }
+
+    /// A known file of this tool with the same name in another root, gone from there and with the same bytes before its
+    /// offset, when the form changed on the way (a new inode, so no `movedFile`): a `.zst` whose plain file was moved
+    /// (or compressed and moved) unseen, or a plain file unpacked from such a `.zst`, then only rows last read packed.
+    func otherRoot(name: String, packed: Bool, source: SourceSpec, size: Int, fd: Int32) throws -> FileRow? {
+        let base = Sys.basename(name)
+        var paths: [String] = []
+        if packed {
+            let like = "%/" + base.replacingOccurrences("\\", "\\\\").replacingOccurrences("%", "\\%").replacingOccurrences("_", "\\_")
+            // ponytail: a scan of this tool's rows (index on tool) per new .zst, O(n²) on a first pass over many; a name
+            // column if that ever shows
+            try db.query("SELECT path FROM source_file WHERE tool = ? AND path LIKE ? ESCAPE '\\'",
+                         [.text(source.tool.rawValue), .text(like)]) { if let p = $0.text(0) { paths.append(p) } }
+        } else {
+            try db.query("""
+                SELECT f.path FROM meta m JOIN source_file f ON f.id = CAST(substr(m.key, 13) AS INTEGER)
+                WHERE m.key >= 'packed:file:' AND m.key < 'packed:file;' AND f.tool = ?
+                """, [.text(source.tool.rawValue)]) { if let p = $0.text(0), Sys.basename(p) == base { paths.append(p) } }
+        }
+        for old in paths where old != name && !Sys.exists(old) && !Sys.exists(old + ".zst") {
+            if let row = try loadFile(old), size >= row.offset, tailMatches(fd, row) { return row }
+        }
+        return nil
+    }
+
+    /// The unpacked content of a `.zst` in a temporary file next to the database, unlinked at once (a crash leaves
+    /// nothing behind); nil when it cannot be read whole: damaged, cut short, or it would leave less than `keepFree` on
+    /// that disk (the database, the spool and Codex's own rollouts live there). A failed attempt is not repeated by this
+    /// process until the file changes (`unpackFailed`).
+    func unpack(_ path: String) -> (fd: Int32, size: Int)? {
+        let dbFile = ((try? db.one("SELECT file FROM pragma_database_list WHERE name = 'main'") { $0.text(0) }) ?? nil) ?? ""
+        // A name of its own per call: two threads (or stores) of one process must not take each other's.
+        let tmp = (dbFile.isEmpty ? (Sys.env("TMPDIR") ?? "/tmp") + "/zagon" : dbFile)
+            + ".unzst-\(getpid())-\(UInt64.random(in: 0...UInt64.max))"
+        let fd = open(tmp, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return nil }
+        unlink(tmp)
+        var vfs = statvfs()
+        let room = fstatvfs(fd, &vfs) == 0 ? Int(vfs.f_bavail) * Int(vfs.f_frsize) - Ingest.keepFree : .max
+        var size = 0
+        do {
+            try Archive.decompress(path) { b in
+                guard size + b.count <= room else { throw ArchiveError("no room to unpack \(path)") }
+                guard Sys.writeAll(fd: fd, Array(b)) else { throw ArchiveError("cannot write \(tmp)") }
+                size += b.count
+            }
+        } catch {
+            close(fd)
+            return nil
+        }
+        return (fd, size)
+    }
+
+    /// Space an unpacked `.zst` must leave free on the database's disk.
+    static let keepFree = 256 << 20
 
     static let tailLength = 64
 
@@ -410,6 +508,7 @@ public final class Ingest {
         f.badLines += out.badLines
         stats.badLines += out.badLines
         stats.usageRecords += out.usage.count
+        stats.noUsage += out.noUsage
         guard !out.isEmpty else { return }
         if f.sessionId == nil {
             f.sessionId = out.usage.first?.sessionId ?? out.events.first?.sessionId ?? out.userMessages.first?.sessionId
@@ -624,7 +723,9 @@ public final class Ingest {
     /// Distinct task keys in a typed message, upper-cased; a match glued to a letter or digit before it is not a key.
     /// A line that also holds a clock range (`09:00–10:15`) gives none: a pasted worklog or plan talks about time
     /// already spent, it does not ask to work on those tasks.
-    func taskKeys(_ text: String) -> [String] {
+    func taskKeys(_ text: String) -> [String] { Self.taskKeys(text, keys) }
+
+    static func taskKeys(_ text: String, _ keys: Regex<AnyRegexOutput>?) -> [String] {
         guard let keys else { return [] }
         var out: [String] = []
         // A block (a paragraph, or a numbered item up to the next) that holds a clock range is a pasted worklog list:
@@ -647,8 +748,8 @@ public final class Ingest {
         return out
     }
 
-    let clockRange = #/\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}/#
-    let itemStart = #/^\s*\d{1,2}[.)]\s/#
+    nonisolated(unsafe) static let clockRange = #/\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}/#
+    nonisolated(unsafe) static let itemStart = #/^\s*\d{1,2}[.)]\s/#
 
     /// The message without what the agent's harness added to it (`<system-reminder>` spans: memory, CLAUDE.md, notes
     /// of the tool); an unclosed span runs to the end.

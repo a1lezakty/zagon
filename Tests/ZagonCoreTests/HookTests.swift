@@ -94,7 +94,8 @@ let hookPayload = Array("""
     }
 
     /// Other editors' agents run the hooks of `~/.claude/settings.json` with their own input (shapes from their docs):
-    /// nothing is recorded and a waiting handoff stays for Claude Code. Claude Code with its config elsewhere
+    /// Cursor's go to `<day>.cursor.ndjson` as tool `cursor` (ids, first workspace root, model; never the prompt or the
+    /// e-mail), the others are dropped, and a waiting handoff stays for Claude Code. Claude Code with its config elsewhere
     /// (`CLAUDE_CONFIG_DIR`) and Codex without a transcript still count.
     @Test func otherAgentsCallsAreIgnored() throws {
         let dir = makeTempDir(), cwd = makeTempDir()
@@ -116,7 +117,19 @@ let hookPayload = Array("""
         feed("SessionStart", #"{"hook_event_name":"SessionStart","session_id":"d-1","prompt_id":"p-1"}"#)
         feed("Stop", #"{"session_id":"t-1","cwd":\#(roots),"hook_event_name":"Stop","workspace_roots":[\#(roots)]}"#)
         feed("UserPromptSubmit", #"{"timestamp":"2026-10-20T10:00:00.000Z","cwd":\#(roots),"session_id":"v-1","hook_event_name":"UserPromptSubmit","transcript_path":"/h/v-1.json","prompt":"x"}"#)
-        #expect(spoolLines(dir).isEmpty)
+        // Cursor: the conversation id (also when sessionStart's session_id differs), no prompt, no e-mail; a payload
+        // without any id is dropped.
+        feed("UserPromptSubmit", #"{"conversation_id":"c-1","generation_id":"g-3","model":"claude-4.5-sonnet","hook_event_name":"beforeSubmitPrompt","cursor_version":"1.7.2","workspace_roots":[\#(roots),"/other"],"user_email":"someone@example.com","transcript_path":null,"prompt":"secret words","attachments":[]}"#)
+        feed("SessionEnd", #"{"session_id":"s-9","hook_event_name":"sessionEnd","cursor_version":"1.7.2","reason":"completed","duration_ms":1}"#)
+        feed("Stop", #"{"hook_event_name":"stop","cursor_version":"1.7.2","workspace_roots":[]}"#)
+        let cursor = spoolLines(dir)
+        #expect(Sys.listDir(dir + "/spool").allSatisfy { $0.hasSuffix(".cursor.ndjson") })
+        #expect(cursor.compactMap { JValue.parse($0) }.map { [$0["tool"]?.string, $0["event"]?.string, $0["session_id"]?.string, $0["cwd"]?.string, $0["model"]?.string] }
+                == [["cursor", "SessionStart", "c-1", cwd, "default"], ["cursor", "Stop", "c-1", cwd, "default"],
+                    ["cursor", "UserPromptSubmit", "c-1", cwd, "claude-4.5-sonnet"], ["cursor", "SessionEnd", "s-9", nil, nil]])
+        #expect(!cursor.joined().contains("secret") && !cursor.joined().contains("example.com"))
+        #expect(Sys.readFile(dir + "/cursor-hooks").map { String(decoding: $0, as: UTF8.self).split(separator: "\n").count } == 1)
+        for n in Sys.listDir(dir + "/spool") { Sys.remove(dir + "/spool/" + n) }
         #expect(Sys.listDir(dir + "/handoffs/pending").count == 1)
         #expect(!Sys.listDir(dir + "/handoffs/pending").contains { $0.hasSuffix(".used") })
 

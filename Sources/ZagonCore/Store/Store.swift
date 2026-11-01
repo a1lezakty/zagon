@@ -94,9 +94,14 @@ public final class Store {
             """, [.text(sessionId), .text(tool.rawValue), .text(status), .real(at), .int(Int64(seq)), .of(detail)])
     }
 
-    public func addLimitSnapshot(_ s: LimitSnapshot) throws {
+    /// `source`: "" = this store's own reading, else the alias it was imported under (`ExportImport`). The newest `ts` of
+    /// each source is kept in `meta` (`limit_src:<tool>:<window>:<source>`) for `Query.limitSources`.
+    public func addLimitSnapshot(_ s: LimitSnapshot, source: String = "") throws {
         try db.run("INSERT OR REPLACE INTO limit_snapshot VALUES(?, ?, ?, ?, ?, ?)",
                    [.text(s.tool.rawValue), .text(s.window), .real(s.usedPct), .of(s.resetsAt), .of(s.windowMinutes), .real(s.ts)])
+        try db.run("""
+            INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2 WHERE ?2 > meta.value
+            """, [.text("limit_src:\(s.tool.rawValue):\(s.window):\(source)"), .real(s.ts)])
     }
 
     /// The current reading per (tool, window), see `Store.latestLimits(_:)`.

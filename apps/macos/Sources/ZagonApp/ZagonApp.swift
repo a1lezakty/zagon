@@ -608,8 +608,11 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Sessions can be handed off here: a server's always, this Mac's when Zagon.app has its CLI.
-    func canHandoff(_ s: SessionRowVM) -> Bool { taskBackend != nil && (s.server != nil || hasLocalCLI) }
+    /// Sessions can be handed off here: a server's always, this Mac's when Zagon.app has its CLI; Claude Code and Codex
+    /// only (`zagon handoff` reads their logs, not Cursor's).
+    func canHandoff(_ s: SessionRowVM) -> Bool {
+        taskBackend != nil && (s.server != nil || hasLocalCLI) && (s.id.hasPrefix("claude:") || s.id.hasPrefix("codex:"))
+    }
 
     /// A server that fails only gets a grey dot; the next attempt comes on schedule.
     private func pullServers(_ p: StoreDataProvider, force: Bool) {
@@ -866,6 +869,9 @@ struct LimitsBlock: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
                     Caps(text: !vm.ais.isEmpty && app.showLeft ? vm.limitsHeaderLeft : vm.limitsHeader)
+                    if let s = vm.limitsSource {
+                        Text(s).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1).truncationMode(.middle)
+                    }
                     Spacer(minLength: 8)
                     if let age = vm.limitsAge {
                         Text(age).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1).minimumScaleFactor(0.85)
@@ -955,6 +961,7 @@ struct LimitsBlock: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(a.tool.name).font(.system(size: 14, weight: .semibold)).foregroundColor(Z.text)
+                if let s = a.source { Text(s).font(.system(size: 12)).foregroundColor(Z.muted) }
                 if !a.weekOnly { windowLine(a.five.color, a.fiveLine) }
                 windowLine(a.week.color, left ? a.weekLeftLine : a.weekLine)
             }
