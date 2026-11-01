@@ -35,7 +35,7 @@ public struct SessionDigest: Sendable {
     /// Reads a whole log (ponytail: in memory; stream it if multi-GB logs show up). Never fails: bad lines are skipped.
     public static func read(tool: ToolKind, id: String, path: String) -> SessionDigest {
         var d = SessionDigest(tool: tool, id: id, path: path)
-        guard let bytes = Sys.readFile(path) else { return d }
+        guard let bytes = Archive.readLog(path) else { return d }
         var claude = ClaudeState(), codex = CodexState()
         var start = 0
         for i in bytes.indices where bytes[i] == 0x0A {

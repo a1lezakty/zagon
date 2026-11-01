@@ -97,6 +97,7 @@ public enum Handoff {
 
     /// `session_meta.cwd` from the first line of a rollout (read at most 1 MB).
     static func codexCwd(_ path: String) -> String? {
+        if path.hasSuffix(".zst") { return Archive.readLog(path).flatMap { JValue.parse(Array($0.prefix { $0 != 0x0A }))?["payload"]?["cwd"]?.string } }
         let fd = open(path, O_RDONLY | O_CLOEXEC)
         guard fd >= 0 else { return nil }
         defer { close(fd) }

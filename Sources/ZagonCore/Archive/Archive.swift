@@ -64,7 +64,8 @@ public struct Archive {
         }
         var out = Stats()
         for (sid, s) in sessions.sorted(by: { $0.key < $1.key }) {
-            let live = s.files.filter { $0.mtime != nil }
+            // A Codex rollout compressed in place keeps its own copy (and our copy of its plain form stays as it is).
+            let live = s.files.filter { $0.mtime != nil && !$0.path.hasSuffix(".zst") }
             guard !live.isEmpty, live.allSatisfy({ now - $0.mtime! >= idle }), (s.lastAt ?? 0) <= now - idle else { continue }
             let base = s.archivePath.map { String($0.dropLast(".jsonl.zst".count)) } ?? defaultBase(sid, tool: s.tool,
                 at: s.started ?? live.compactMap(\.mtime).min()!)
@@ -242,10 +243,18 @@ public struct Archive {
             WHERE s.id = ?
             """, [.text(sessionId)]) { ($0.text(0), $0.text(1)) }
         guard let (path, copy) = row else { return nil }
-        if let path, let b = Sys.readFile(path), copy.flatMap(Archive.contentSize).map({ b.count >= $0 }) ?? true { return b }
+        if let path, let b = Archive.readLog(path), copy.flatMap(Archive.contentSize).map({ b.count >= $0 }) ?? true { return b }
         guard let copy, Sys.exists(copy) else { return nil }
         var out: [UInt8] = []
         try Archive.decompress(copy) { out.append(contentsOf: $0) }
+        return out
+    }
+
+    /// A log's bytes; one compressed in place (a Codex `.jsonl.zst`) unpacked.
+    public static func readLog(_ path: String) -> [UInt8]? {
+        guard path.hasSuffix(".zst") else { return Sys.readFile(path) }
+        var out: [UInt8] = []
+        do { try decompress(path) { out.append(contentsOf: $0) } } catch { return nil }
         return out
     }
 

@@ -149,26 +149,52 @@ public final class Ingest {
 
     public func ingest(path: String, relative: String, source: SourceSpec) throws {
         var sb = stat()
-        guard stat(path, &sb) == 0, (sb.st_mode & S_IFMT) == S_IFREG else { return }
-        let ino = Int(sb.st_ino), size = Int(sb.st_size)
+        guard stat(path, &sb) == 0, (sb.st_mode & S_IFMT) == S_IFREG else {
+            // Compressed while the plain file was still there (the .zst was skipped then): read it now the original is gone.
+            if !path.hasSuffix(".zst"), source.accepts(relative + ".zst"), Sys.exists(path + ".zst") {
+                try ingest(path: path + ".zst", relative: relative + ".zst", source: source)
+            }
+            return
+        }
+        let ino = Int(sb.st_ino)
+        var size = Int(sb.st_size)
         #if canImport(Darwin)
         let mtime = Double(sb.st_mtimespec.tv_sec) + Double(sb.st_mtimespec.tv_nsec) / 1e9
         #else
         let mtime = Double(sb.st_mtim.tv_sec) + Double(sb.st_mtim.tv_nsec) / 1e9
         #endif
-        let fd = open(path, O_RDONLY | O_CLOEXEC)
+        // `<name>.zst` holds the bytes of `<name>` (Codex compresses cold rollouts): offsets, tails and sizes are those
+        // of the unpacked content. While both exist the plain file is the one (Codex reads it; it may be newer).
+        let packed = path.hasSuffix(".zst")
+        let fd: Int32
+        if packed {
+            if Sys.exists(String(path.dropLast(4))) { return }
+            // Never appended to (Codex unpacks to append): once read, only another inode or mtime is news.
+            if let k = try loadFile(path), k.inode == ino, k.mtime == mtime { return }
+            guard let u = unpack(path) else { return }
+            fd = u.fd; size = u.size
+        } else {
+            fd = open(path, O_RDONLY | O_CLOEXEC)
+        }
         guard fd >= 0 else { return }
         defer { close(fd) }
 
         try db.transaction {
             var f: FileRow
-            var known = try loadFile(path)
+            var known = try loadFile(path), adopted = false
             if known == nil, let m = try movedFile(tool: source.tool, inode: ino, size: size, fd: fd) {
                 // Renamed or moved between roots of this tool (Codex sessions/ -> archived_sessions/): the same file,
                 // so only the path changes; its contribution stays and tailing continues from the stored offset.
                 try db.run("UPDATE source_file SET path=? WHERE id=?", [.text(path), .int(m.id)])
                 stats.moves += 1
                 known = m
+            }
+            if known == nil, var m = try otherForm(path: path, relative: relative, source: source, size: size, fd: fd) {
+                // The same bytes under `<name>` ⇄ `<name>.zst` (a new inode): tailing continues from the stored offset.
+                try db.run("UPDATE source_file SET path=? WHERE id=?", [.text(path), .int(m.id)])
+                stats.moves += 1
+                m.inode = ino
+                known = m; adopted = true
             }
             if let row = known {
                 f = row
@@ -178,7 +204,7 @@ public final class Ingest {
                     f.resets += 1; stats.resets += 1
                 } else if f.recount {
                     try recount(&f, fd: fd, path: path, relative: relative, source: source)
-                } else if size == f.offset {
+                } else if size == f.offset, !adopted, !packed {  // a new path or a .zst's inode and mtime are saved
                     return
                 }
             } else {
@@ -330,6 +356,48 @@ public final class Ingest {
             if let row = try loadFile(old), size >= row.offset, tailMatches(fd, row) { return row }
         }
         return nil
+    }
+
+    /// A known file of this source under the other form of this name (`<name>` ⇄ `<name>.zst`), here or in another root
+    /// of the tool (moved while compressed), with the same bytes before its offset. Its file is gone, or is this one's
+    /// other form beside it (Codex unpacking a rollout to append: for a moment both exist). Only for sources that take
+    /// compressed names.
+    func otherForm(path: String, relative: String, source: SourceSpec, size: Int, fd: Int32) throws -> FileRow? {
+        let packed = path.hasSuffix(".zst")
+        guard packed || source.accepts(relative + ".zst") else { return nil }
+        let sibling = packed ? String(path.dropLast(4)) : path + ".zst"
+        let name = Sys.basename(packed ? sibling : path)
+        let like = "%/" + name.replacingOccurrences("\\", "\\\\").replacingOccurrences("%", "\\%").replacingOccurrences("_", "\\_")
+        var paths: [String] = []
+        // ponytail: a scan of this tool's rows (index on tool) per new file; a name column if they reach the 100k
+        try db.query("SELECT path FROM source_file WHERE tool = ? AND (path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')",
+                     [.text(source.tool.rawValue), .text(like), .text(like + ".zst")]) { if let p = $0.text(0) { paths.append(p) } }
+        for old in paths where old != path && (old == sibling || !Sys.exists(old)) {
+            if let row = try loadFile(old), size >= row.offset, tailMatches(fd, row) { return row }
+        }
+        return nil
+    }
+
+    /// The unpacked content of a `.zst` in a temporary file next to the database, unlinked at once (a crash leaves
+    /// nothing behind); nil when it cannot be read whole (damaged, cut short, disk full: tried again next time).
+    func unpack(_ path: String) -> (fd: Int32, size: Int)? {
+        let dbFile = ((try? db.one("SELECT file FROM pragma_database_list WHERE name = 'main'") { $0.text(0) }) ?? nil) ?? ""
+        let tmp = (dbFile.isEmpty ? (Sys.env("TMPDIR") ?? "/tmp") + "/zagon" : dbFile) + ".unzst-\(getpid())"
+        unlink(tmp)
+        let fd = open(tmp, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return nil }
+        unlink(tmp)
+        var size = 0
+        do {
+            try Archive.decompress(path) { b in
+                guard Sys.writeAll(fd: fd, Array(b)) else { throw ArchiveError("cannot write \(tmp)") }
+                size += b.count
+            }
+        } catch {
+            close(fd)
+            return nil
+        }
+        return (fd, size)
     }
 
     static let tailLength = 64

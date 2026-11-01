@@ -173,7 +173,10 @@ private func byModel(_ u: [UsageRecord]) -> [String: Int] { u.reduce(into: [:]) 
         #expect(specs.map(\.root) == ["/h/sessions", "/h/archived_sessions"])
         #expect(specs[0].accepts("2026/10/30/rollout-2026-10-30T10-00-00-x.jsonl"))
         #expect(specs[1].accepts("rollout-2026-10-30T10-00-00-x.jsonl"))
-        #expect(!specs[0].accepts("2026/10/30/rollout-x.jsonl.zst"))
+        #expect(specs[0].accepts("2026/10/30/rollout-x.jsonl.zst"))
+        #expect(!specs[0].accepts("2026/10/30/rollout-compress-x.tmp"))
+        #expect(CodexParser.idFromName("rollout-2026-10-30T10-00-00-019a0000-1111-2222-3333-444455556666.jsonl.zst")
+                == "019a0000-1111-2222-3333-444455556666")
         #expect(!specs[0].accepts("history.jsonl"))
     }
 }
@@ -285,6 +288,74 @@ struct CodexArchiveScenario {
         #expect(try CodexThreads.sync(store: store, codexHome: sc.codexHome) == 1)
         #expect(try tokens(store) == sc.tokens) // not doubled: Codex usage has no messageId to dedup by
         #expect(try store.db.one("SELECT archived FROM session WHERE id = ?", [.text(sc.sessionId)]) { $0.optInt(0) } == 1)
+    }
+
+    /// A real rollout compressed by Codex after it was read, and one only ever seen compressed: the same tokens.
+    @Test func compressedRolloutIsCountedOnce() throws {
+        let sc = try CodexArchiveScenario()
+        defer { sc.remove() }
+        let store = try Store(path: ":memory:")
+        let ingest = Ingest(store: store, sources: CodexSource.specs(codexHome: sc.codexHome))
+        try ingest.scan()
+        _ = try Archive(store: store, dir: sc.codexHome).compress(sc.live, size: Sys.fileSize(sc.live)!, to: sc.live + ".zst")
+        try FileManager.default.removeItem(atPath: sc.live)
+        let st = try ingest.scan()
+        #expect(st.resets == 0 && st.moves == 1)
+        #expect(try tokens(store) == sc.tokens)
+
+        let fresh = try Store(path: ":memory:")
+        try Ingest(store: fresh, sources: CodexSource.specs(codexHome: sc.codexHome)).scan()
+        #expect(try tokens(fresh) == sc.tokens)
+        #expect(try fresh.db.one("SELECT count(*) FROM session WHERE id = ?", [.text(sc.sessionId)]) { $0.int(0) } == 1)
+        // Handoff finds and reads it.
+        let found = Handoff.find(sc.sessionId, claudeDir: "/nonexistent", codexHome: sc.codexHome)
+        #expect(found?.2 == sc.live + ".zst")
+        #expect(SessionDigest.read(tool: .codex, id: "x", path: sc.live + ".zst").cwd != nil)
+    }
+}
+
+/// A real Codex home (read-only) copied to a temp dir: counted, every rollout then compressed as Codex does (the
+/// original deleted), counted again, and counted fresh from the compressed copy only. All three must agree.
+/// `ZAGON_CODEX_HOME=/data/codex swift test --filter compressedCrossCheck`; prints only numbers.
+@Suite struct CodexCompressedCrossCheck {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["ZAGON_CODEX_HOME"] != nil))
+    func compressedCrossCheck() throws {
+        let fm = FileManager.default, src = ProcessInfo.processInfo.environment["ZAGON_CODEX_HOME"]!
+        let home = NSTemporaryDirectory() + "zagon-codex-zst-\(UInt64.random(in: 0...UInt64.max))"
+        defer { try? fm.removeItem(atPath: home) }
+        try fm.createDirectory(atPath: home, withIntermediateDirectories: true)
+        for d in ["sessions", "archived_sessions"] where fm.fileExists(atPath: src + "/" + d) {
+            try fm.copyItem(atPath: src + "/" + d, toPath: home + "/" + d)
+        }
+        func sums(_ s: Store) throws -> [Int] {
+            try s.db.one("""
+                SELECT (SELECT coalesce(sum(input), 0) FROM usage_hour), (SELECT coalesce(sum(output), 0) FROM usage_hour),
+                  (SELECT coalesce(sum(cache_read), 0) FROM usage_hour), (SELECT coalesce(sum(requests), 0) FROM usage_hour),
+                  (SELECT coalesce(sum(n), 0) FROM tool_use), (SELECT count(*) FROM session)
+                """) { r in (0..<6).map { r.int(Int32($0)) } }!
+        }
+        let store = try Store(path: ":memory:")
+        let ingest = Ingest(store: store, sources: CodexSource.specs(codexHome: home))
+        try ingest.scan()
+        let before = try sums(store)
+        var packed = 0
+        for spec in CodexSource.specs(codexHome: home) {
+            for rel in Ingest.walk(spec.root) where rel.hasSuffix(".jsonl") && spec.accepts(rel) {
+                let p = spec.root + "/" + rel
+                _ = try Archive(store: store, dir: home).compress(p, size: Sys.fileSize(p)!, to: p + ".zst")
+                try fm.removeItem(atPath: p)
+                packed += 1
+            }
+        }
+        let st = try ingest.scan()
+        let after = try sums(store)
+        let fresh = try Store(path: ":memory:")
+        try Ingest(store: fresh, sources: CodexSource.specs(codexHome: home)).scan()
+        let only = try sums(fresh)
+        print("compressedCrossCheck: \(packed) rollouts; input, output, cache_read, requests, tool calls, sessions: before \(before), "
+              + "after \(after), fresh \(only); resets \(st.resets), moves \(st.moves), read \(st.filesRead)")
+        #expect(after == before && only == before)
+        #expect(st.resets == 0 && st.moves == packed)
     }
 }
 

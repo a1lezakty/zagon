@@ -41,6 +41,16 @@ or recounted and tailing goes on from the stored offset. The parser is not calle
 "archived" must come from another signal (Codex `threads.archived`), not from seeing the new path. A copy (new
 inode) is a new file.
 
+Compressed logs (Codex 0.16x: a rollout cold for 7 days becomes `<name>.jsonl.zst`, the same bytes, and the original is
+deleted; to append Codex unpacks it back to `<name>.jsonl` under a new inode and deletes the `.zst`): a source that
+accepts `<rel>.zst` gets offsets, sizes and tails of the unpacked content (unpacked into an unlinked temporary file
+next to the database). While both forms exist the plain file is read and the `.zst` skipped; a `.zst` already read is
+skipped while its inode and mtime stay. A path without a row also takes over the row of its other form (`<name>` ⇄
+`<name>.zst`) — beside it, or under the same name in any root of the tool once that file is gone — when the bytes
+before its offset match, like a move; nothing is recounted. A `.zst` that cannot be unpacked whole is skipped and
+tried again on the next pass. The archive keeps no copy of a `.zst` (it is one already); `Archive.readLog` and
+`transcript(id)` unpack it for handoff and search.
+
 ## Store (`Sources/ZagonCore/Store/`)
 
 `Store(path:)` opens SQLite in WAL mode and applies migrations (`PRAGMA user_version`); a database newer than the
