@@ -203,7 +203,7 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
         let writer = try Store(path: paths.dir + "/zagon.db")
         let codex = CodexSource.defaultHome()
         let ingest = Ingest(store: writer, sources: [ClaudeSource.spec(root: paths.home + "/.claude/projects")]
-                            + CodexSource.specs(codexHome: codex))
+                            + CodexSource.specs(codexHome: codex) + CursorSource.specs(paths: paths))
         let p = StoreDataProvider(store: try Store(path: paths.dir + "/zagon.db"), writer: writer, host: ingest.host) {
             if baseZone(paths) {
                 Task { @MainActor in NotificationCenter.default.post(name: .NSSystemTimeZoneDidChange, object: nil) }

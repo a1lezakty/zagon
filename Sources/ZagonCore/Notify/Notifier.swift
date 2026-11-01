@@ -200,7 +200,7 @@ public final class Notifier {
                     : w.t("Ждёт ответа.", "Waits for your reply.")
                 return Message(title: w.t("Ждёт тебя \(w.dur(now - since))", "Waiting for you \(w.dur(now - since))"),
                                text: "\(w.name(s.project, s.title)). \(what)", priority: 4, tags: ["hourglass"],
-                               buttons: [[.init(w.t("Команда подключения", "Resume command"), "resume:\(s.id)")]])
+                               buttons: Self.resume(s.id, w))
             }
         }
     }
@@ -235,10 +235,15 @@ public final class Notifier {
             out.append(Event(key: "done:\(id)", anchor: anchor, at: doneAt, covers: hookAt.map { ["wait:\(id)": $0] } ?? [:]) {
                 Message(title: w.t("Готово: ", "Done: ") + (s.project ?? w.tool(s.tool)),
                         text: "\(w.name(s.project, s.title)) — " + w.t("работала \(w.dur(last.length)).", "worked \(w.dur(last.length))."),
-                        tags: ["white_check_mark"], buttons: [[.init(w.t("Команда подключения", "Resume command"), "resume:\(id)")]])
+                        tags: ["white_check_mark"], buttons: Self.resume(id, w))
             })
         }
         return out
+    }
+
+    /// The "resume command" button; none for Cursor (its conversations are opened in Cursor).
+    static func resume(_ id: String, _ w: Words) -> [[Message.Button]] {
+        id.hasPrefix("cursor:") ? [] : [[.init(w.t("Команда подключения", "Resume command"), "resume:\(id)")]]
     }
 
     /// The session's own work still running: a sub-agent log written in the last minute, or a `run_in_background`

@@ -5,7 +5,9 @@ Stable types other packages build on. Changing a field here is a contract change
 ## Records (`Sources/ZagonCore/Model/`)
 
 All timestamps are `Timestamp` = `Double` seconds since the Unix epoch (UTC). Session ids are `<tool>:<native id>`
-(`claude:174a7d2d-…`, `codex:019a…`).
+(`claude:174a7d2d-…`, `codex:019a…`, `cursor:<conversation id>`). `ToolKind` (0.1.5 added `cursor`) is also the `tool`
+value of sessions, `day_agg` rows and exports; a reader that knows only `claude` / `codex` must skip or show the
+others, not fail.
 
 | Type | Meaning | Notes |
 |---|---|---|
@@ -40,6 +42,21 @@ that tool, e.g. Codex `sessions/` → `archived_sessions/`): same inode, old pat
 or recounted and tailing goes on from the stored offset. The parser is not called for a move without new bytes, so
 "archived" must come from another signal (Codex `threads.archived`), not from seeing the new path. A copy (new
 inode) is a new file.
+
+Cursor's agent (`Cursor/CursorSource.swift`, tool `cursor`): sessions and time only, never tokens or limits (Cursor
+keeps them on its servers; Zagon reads no credentials). Two sources, both `CursorSource.specs`:
+
+- hooks: `spool/<UTC day>.cursor.ndjson` (see Live status from hooks). `UserPromptSubmit` is a typed message (no
+  text), `PostToolUse` / `SubagentStop` / `PreCompact` / `Stop` are agent events, so turns are exact; each line also
+  gives `SessionMeta` (cwd = the first workspace root, model). The daemon passes these files to `Ingest.update` too.
+- transcripts: `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl` (sub-agent logs and old `.txt` are
+  left out). Lines hold no times; a typed message (`<user_query>`, its text for keys and search) is placed only when
+  a `<timestamp>` tag (minutes, `UTC±h[:mm]`) precedes it, and its turn ends a second before the next placed one, the
+  last at the file's mtime (TurnBuilder's `session_gap` still cuts longer gaps): approximate time. Title = the first
+  line of the first typed message (rank 0). The folder is found by matching the slug (`/` and other non-alphanumerics
+  as `-`) against folder entries, never inside folders macOS guards; unknown = no cwd, project = the slug's last part.
+  Only messages more than a minute before `<data-dir>/cursor-hooks` (the first Cursor hook's time, written once by
+  `zagon hook`) count: after that the hooks do, and the two never overlap.
 
 ## Store (`Sources/ZagonCore/Store/`)
 
@@ -265,6 +282,14 @@ newer ones; a repeated status keeps the time it began.
 | `PermissionRequest`; Claude `Notification` with `permission_prompt` | `waiting_permission` |
 | `Stop`; Codex `Interrupt`; Claude `Notification` with `idle_prompt`; `SessionStart` (not `compact`) | `waiting_input` |
 | `SessionEnd` | `ended` |
+
+Cursor's agent runs the hooks of `~/.claude/settings.json` too (Third-Party Imports, on by default; Cursor maps
+`UserPromptSubmit`, `PostToolUse`, `Stop`, `SessionStart`, `SessionEnd`, … to its own events and has no
+`Notification` / `PermissionRequest`). Its input is told by `cursor_version` and goes to
+`spool/<UTC day>.cursor.ndjson` with `tool` = `cursor`, `session_id` = `conversation_id` (else `session_id`), `cwd` =
+the first of `workspace_roots` (else `cwd`), `model`, `tool_name`, `transcript_path` and the Claude event name the hook
+was installed for; never `prompt`, `user_email`, tool input or output. The other editors' agents (Devin, Trae, VS
+Code) are still dropped (`HookSpool.fromOtherAgent`). The field names are from Cursor's docs, not yet seen live.
 
 The status line wrapper adds `limits` lines (`five_hour` / `seven_day`) only when the reading changed or a minute
 passed for that session (the last one is kept in `spool/.limits-<session>`, removed with spool days); Claude Code

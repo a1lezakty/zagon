@@ -75,7 +75,10 @@ public final class Daemon {
         if let lost { try fullPass(reason: lost); return }
         var changed = Set<String>(), spoolChanged = false, threadsChanged = false
         for p in paths {
-            if let d = options.spoolDir, p.hasPrefix(d + "/") { spoolChanged = true }
+            if let d = options.spoolDir, p.hasPrefix(d + "/") {
+                spoolChanged = true
+                if p.hasSuffix(".cursor.ndjson") { changed.insert(p) }  // Cursor's turns: a source too (CursorSource)
+            }
             else if let c = options.codexHome, Sys.dirname(p) == c { threadsChanged = threadsChanged || Sys.basename(p).hasPrefix("state_") }
             else { changed.insert(p) }
         }
