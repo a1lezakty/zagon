@@ -70,9 +70,13 @@ struct UpdateCommand: ParsableCommand {
         for d in Self.dataDirs(exe, user: user) {
             let r = Sys.capture([tmp, "update", "--db-schema", d], timeout: 60)
             guard r.status == 0 else { continue }  // a release without the check
-            let n = SchemaCheck.notes(answer: String(decoding: r.out, as: UTF8.self), db: d + "/zagon.db", exe: exe, old: zagonVersion, new: new)
+            let answer = String(decoding: r.out, as: UTF8.self), db = d + "/zagon.db"
+            let n = SchemaCheck.notes(answer: answer, db: db, exe: exe, old: zagonVersion, new: new)
             if n.stop { throw InstallError(n.lines.joined(separator: "\n")) }
             n.lines.forEach { print($0) }
+            if let v = SchemaCheck.migrates(answer: answer) {
+                print(SchemaCheck.snapshotNote(SchemaCheck.snapshot(db: db, version: v), db: db, exe: exe, old: zagonVersion))
+            }
         }
 
         guard let prev = Installer.keepPrevious(exe) else {

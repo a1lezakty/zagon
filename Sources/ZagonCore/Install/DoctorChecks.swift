@@ -218,6 +218,15 @@ extension Installer {
             + " (cleanupPeriodDays \(days) in \(src)), of Codex rollouts with no time limit")
     }
 
+    /// Copies of the database `zagon update` kept before schema changes: there until the user removes them.
+    func snapshotsCheck(_ add: (String, String) -> Void) {
+        let s = SchemaCheck.snapshots(dataDir: o.paths.dir)
+        guard !s.isEmpty else { return }
+        add("info", "database copies kept by updates, for a rollback: "
+            + s.map { "\($0.name) (\(SchemaCheck.mb(UInt64($0.bytes))) MB, \(Time.dayString($0.mtime)))" }.joined(separator: ", ")
+            + "; remove them when no longer needed")
+    }
+
     // MARK: files
 
     /// The first line of a file (read whole: a rollout's first line, `session_meta`, can be long).

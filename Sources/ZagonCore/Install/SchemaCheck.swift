@@ -1,3 +1,11 @@
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#elseif canImport(Darwin)
+import Darwin
+#endif
+
 /// What a new binary will do to a database, asked before `zagon update` replaces the old one: the new binary runs
 /// `update --db-schema <data dir>` and prints `answer` (its own schema and the database's); the old one turns that
 /// into `notes`. A release without the option answers nothing usable, and the update goes on as before.
@@ -28,4 +36,62 @@ public enum SchemaCheck {
         return (["database \(db): schema v\(have) -> v\(reads) when zagon \(new) starts; \(Sys.basename(exe)).prev (\(old)) "
                  + "will not open it afterwards: rolling back then needs a copy of \(db) made before this update"], false)
     }
+
+    /// The database's schema when the new binary will migrate it (from its `answer`), else nil.
+    public static func migrates(answer: String) -> Int? {
+        let f = answer.split(whereSeparator: { $0 == " " || $0 == "\n" })
+        guard f.count == 3, f[0] == "schema", let have = Int(f[1]), let reads = Int(f[2]), have > 0, have < reads else { return nil }
+        return have
+    }
+
+    /// Before a migration: a copy of `db` as `<db>.v<version>` (VACUUM INTO: a consistent snapshot of the live database,
+    /// its WAL included), owned and moded like the database. One per schema version: a later update from the same
+    /// version replaces it, copies of other versions are left alone. Not made (`problem` says why) when the disk has
+    /// less than twice the database's size free.
+    public static func snapshot(db: String, version: Int, free: (String) -> UInt64? = freeBytes) -> (path: String?, problem: String?) {
+        let size = UInt64((Sys.fileSize(db) ?? 0) + (Sys.fileSize(db + "-wal") ?? 0))
+        let avail = free(Sys.dirname(db))
+        guard let avail, avail >= 2 * size else {
+            return (nil, "\(mb(size)) MB database, " + (avail.map { "\(mb($0)) MB free" } ?? "free space unknown") + "; twice its size is needed")
+        }
+        let path = db + ".v\(version)", tmp = path + ".tmp"
+        Sys.remove(tmp)
+        do {
+            let c = try SQLite(path: db, readOnly: true)
+            try c.exec("VACUUM INTO '" + tmp.split(separator: "'", omittingEmptySubsequences: false).joined(separator: "''") + "'")
+        } catch {
+            Sys.remove(tmp)
+            return (nil, "\(error)")
+        }
+        var st = stat()
+        if stat(db, &st) == 0 { _ = chown(tmp, st.st_uid, st.st_gid); chmod(tmp, st.st_mode & 0o777) }
+        guard rename(tmp, path) == 0 else { Sys.remove(tmp); return (nil, "cannot write \(path) (errno \(errno))") }
+        return (path, nil)
+    }
+
+    /// What `snapshot` gives the user: how to roll back, or a warning that there is no way back.
+    public static func snapshotNote(_ s: (path: String?, problem: String?), db: String, exe: String, old: String) -> String {
+        if let p = s.path {
+            return "a copy of the database from before this update: \(p); to roll back to \(old): stop the service, then "
+                + "mv \(exe).prev \(exe) and mv \(p) \(db), and start it again"
+        }
+        return "WARNING: no copy of \(db) was made (\(s.problem ?? "?")): after this update there is no way back to \(old) "
+            + "with this database"
+    }
+
+    /// The copies `snapshot` left in `dataDir`, oldest version first: name, bytes, mtime.
+    public static func snapshots(dataDir: String) -> [(name: String, bytes: Int, mtime: Double)] {
+        Sys.listDir(dataDir).filter { n in n.hasPrefix("zagon.db.v") && Int(n.dropFirst("zagon.db.v".count)) != nil }
+            .sorted { Int($0.dropFirst(10))! < Int($1.dropFirst(10))! }
+            .map { ($0, Sys.fileSize(dataDir + "/" + $0) ?? 0, Sys.mtime(dataDir + "/" + $0) ?? 0) }
+    }
+
+    /// Bytes free for this user on the file system of `dir`.
+    public static func freeBytes(_ dir: String) -> UInt64? {
+        var st = statvfs()
+        guard statvfs(dir, &st) == 0 else { return nil }
+        return UInt64(st.f_bavail) * UInt64(st.f_frsize)
+    }
+
+    static func mb(_ b: UInt64) -> UInt64 { (b + (1 << 19)) >> 20 }
 }

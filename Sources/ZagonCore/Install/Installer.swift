@@ -866,6 +866,7 @@ public struct Installer {
         notifyCheck(log, note)
         versionChecks(note)
         archiveCheck(note)
+        snapshotsCheck(note)
         return out
     }
 

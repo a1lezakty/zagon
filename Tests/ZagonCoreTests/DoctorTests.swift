@@ -161,5 +161,13 @@ extension InstallerTests {
         Sys.mkdirs(o.userUnitDir)
         Sys.writeFile(o.userUnitDir + "/zagon.service", Array("[Service]\nExecStart=/z daemon --no-archive\n".utf8))
         #expect(line(Installer(o).doctor(), "archive:") == "info archive: off (--no-archive in the service unit)")
+
+        #expect(line(Installer(o).doctor(), "database copies") == nil)
+        Sys.mkdirs(o.paths.dir)
+        Sys.writeFile(o.paths.dir + "/zagon.db.v7", Array(repeating: 0, count: 3 << 20))
+        Sys.writeFile(o.paths.dir + "/zagon.db.v7.tmp", [0])
+        try setMtime(o.paths.dir + "/zagon.db.v7", o.now)
+        #expect(line(Installer(o).doctor(), "database copies") == "info database copies kept by updates, for a rollback: "
+            + "zagon.db.v7 (3 MB, \(Time.dayString(o.now))); remove them when no longer needed")
     }
 }
