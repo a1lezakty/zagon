@@ -8,7 +8,7 @@ public struct HoursLine: Codable, Sendable, Equatable {
     public var taskKey: String?
     public var title: String?
     public var text: String
-    /// planned: in the plan, not in Jira yet | logged: in Jira | writing: a write that did not finish (Jira not read)
+    /// planned: in the plan, not in Jira yet | logged: in Jira | writing: a write not settled yet that Jira does not show
     public var state: String
 }
 
@@ -65,8 +65,12 @@ extension DayWorklog {
         var byId: [Int: TaskItem] = [:], byJira: [String: TaskItem] = [:]
         for t in try Tasks(store: store).list() { byId[t.id] = t; if let k = t.jiraKey { byJira[k] = t } }
         var out: [HoursLine] = []
-        // With Jira read, what is in Jira comes from Jira (also Zagon's own worklogs, as they are there now).
-        for r in rows where r.state == "planned" || (logs == nil && (r.state == "logged" || r.state == "writing")) {
+        // With Jira read, what is in Jira comes from Jira (also Zagon's own worklogs, as they are there now); a write
+        // still unsettled (in flight, or not checked) stays as `writing` unless a worklog of its issue covers it.
+        func inJira(_ r: WorklogRow) -> Bool {
+            logs?.contains { $0.issueKey == r.jiraKey && $0.started < r.end && $0.started + Double($0.seconds) > r.start } ?? false
+        }
+        for r in rows where r.state == "planned" || (r.state == "writing" && !inJira(r)) || (logs == nil && r.state == "logged") {
             out.append(HoursLine(day: r.day, start: r.start, seconds: r.seconds, jiraKey: r.jiraKey, taskKey: r.taskKey,
                                  title: r.taskId.flatMap { byId[$0]?.title }, text: r.text, state: r.state))
         }
@@ -89,7 +93,7 @@ public enum HoursText {
     static func clockSec(_ ts: Timestamp) -> String { Txt.clock(ts) + ":" + p2((Int(ts.rounded(.down)) % 60 + 60) % 60) }
 
     /// A text cell a spreadsheet would run as a formula (`=`, `+`, `-`, `@`, tab, CR first) gets a leading `'`.
-    static func safe(_ s: String) -> String { s.first.map { "=+-@\t\r".contains($0) } == true ? "'" + s : s }
+    static func safe(_ s: String) -> String { s.unicodeScalars.first.map { "=+-@\t\r".unicodeScalars.contains($0) } == true ? "'" + s : s }
 
     /// `1:30:00`
     static func duration(_ s: Int) -> String { "\(s / 3600):" + p2(s % 3600 / 60) + ":" + p2(s % 60) }

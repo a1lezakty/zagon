@@ -33,9 +33,9 @@ public enum Setup {
                                  secret: (path: String, text: String)? = nil) throws {
         let cur = Sys.readFile(paths.config).map { String(decoding: $0, as: UTF8.self) }
         if cur == nil, Sys.exists(paths.config) { throw Failure("cannot read \(paths.config)") }
-        if let secret { try writeSecret(secret.path, secret.text) }
         // A new key goes right under the header: put in reverse, they read in the given order.
         let new = keys.reversed().reduce(cur ?? "") { TOMLLite.setting($0, section: section, key: $1.0, to: $1.1) }
+        if let secret { try writeSecret(secret.path, secret.text) }
         guard new != cur else { return }
         Sys.mkdirs(paths.dir)
         guard Sys.writeFile(paths.config, Array(new.utf8), mode: 0o600) else { throw Failure("cannot write \(paths.config)") }
@@ -113,18 +113,18 @@ public enum Setup {
         }
 
         /// Waits for a message to the bot (getUpdates, long polls until `deadline`); nil when none came. What waits
-        /// already is the backlog: confirmed and skipped, so the first message after it is the user's (no clock is
-        /// compared: a server's may be off). The message itself is not confirmed.
+        /// already is the backlog, read (100 at a time) until Telegram answers nothing: confirmed and skipped, so the first
+        /// message after it is the user's (no clock is compared: a server's may be off). That message is not confirmed.
         public func waitForChat(deadline: Double, now: () -> Double = { Sys.now() }) throws -> Chat? {
-            var offset: Int?
+            var offset: Int?, backlog = true
             while now() < deadline {
                 // No `allowed_updates`: Telegram would keep that filter for the service's bot (its buttons need callbacks).
-                var body: [JValue.Member] = [.init("timeout", .number(offset == nil ? "0" : String(Int(min(25, max(1, deadline - now()))))))]
+                var body: [JValue.Member] = [.init("timeout", .number(backlog ? "0" : String(Int(min(25, max(1, deadline - now()))))))]
                 if let offset { body.append(.init("offset", .number(String(offset)))) }
-                let r = try call("getUpdates", .object(body), timeout: 40)
-                if offset != nil, let c = Bot.chat(r) { return c }
-                for u in r.array ?? [] { if let id = u["update_id"]?.double { offset = max(offset ?? 0, Int(id) + 1) } }
-                if offset == nil { offset = 0 }
+                let r = try call("getUpdates", .object(body), timeout: 40), list = r.array ?? []
+                if !backlog, let c = Bot.chat(r) { return c }
+                for u in list { if let id = u["update_id"]?.double { offset = max(offset ?? 0, Int(id) + 1) } }
+                if list.isEmpty { backlog = false }
             }
             return nil
         }

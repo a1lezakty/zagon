@@ -33,20 +33,19 @@ enum Prompt {
         fflush(nil)
         var old = termios()
         let tty = isatty(0) == 1 && tcgetattr(0, &old) == 0
-        // The CLI leaves these signals at their defaults, so the defaults are what is put back.
         let ends = [SIGINT, SIGTERM, SIGHUP, SIGQUIT]
+        if tty { saved = old }
+        // What was there before (e.g. HUP ignored under nohup) is put back after.
+        let before = tty ? ends.map { signal($0) { s in _ = tcsetattr(0, TCSANOW, &Prompt.saved); _exit(128 + s) } } + [signal(SIGTSTP, SIG_IGN)] : []
         if tty {
-            saved = old
             var t = old
             t.c_lflag &= ~tcflag_t(ECHO)
-            for e in ends { signal(e) { s in _ = tcsetattr(0, TCSANOW, &Prompt.saved); _exit(128 + s) } }
-            signal(SIGTSTP, SIG_IGN)
             _ = tcsetattr(0, TCSAFLUSH, &t)
         }
         let l = readLine()
         if tty {
             _ = tcsetattr(0, TCSAFLUSH, &old)
-            for e in ends + [SIGTSTP] { signal(e, SIG_DFL) }
+            for (s, h) in zip(ends + [SIGTSTP], before) { signal(s, h) }
             print()
         }
         guard let l else { throw ExitCode(1) }
@@ -116,7 +115,7 @@ extension NotifyCommand {
             if try channel == "ntfy" || channel == nil && Prompt.yes("Set up ntfy?") { sent.append(try ntfy(paths)) }
             if !sent.isEmpty {
                 print("The service reads this when it starts: restart it (systemctl --user restart zagon; a system service: "
-                      + "sudo systemctl restart zagon-\(Sys.env("USER") ?? "<user>")).")
+                      + "sudo systemctl restart zagon-\(getpwuid(getuid()).map { String(cString: $0.pointee.pw_name) } ?? "<user>")).")
             }
             if sent.contains(false) { throw ExitCode(1) }
         }

@@ -77,25 +77,22 @@ struct SetupMockTests {
         #expect(throws: JiraError.self) { try Setup.checkJira(url: "http://jira.example.com", email: "a@b", token: "t", saved: nil) }
     }
 
-    /// What waits already is a backlog: confirmed and skipped; the message after it is the user's, whatever its date.
+    /// What waits already is a backlog, read until Telegram answers nothing: confirmed and skipped; the message after it
+    /// is the user's, whatever its date.
     @Test func botWaitsForAMessage() throws {
-        let dir = makeTempDir(), mock = try MockHTTP(dir: dir), log = mock.log, updates = dir + "/updates.json"
-        try #"[{"update_id": 7, "message": {"date": 100, "chat": {"id": 5, "first_name": "Old"}}}]"#
-            .write(toFile: updates, atomically: true, encoding: .utf8)
-        // After the second poll (the backlog has been read), the user writes; the date is far off this machine's clock.
-        let writer = Thread {
-            while ((try? String(contentsOfFile: log, encoding: .utf8)) ?? "").components(separatedBy: "getUpdates").count < 3 { usleep(5000) }
-            try? #"[{"update_id": 9, "message": {"date": 5, "chat": {"id": 42, "first_name": "Me"}}}]"#
-                .write(toFile: updates, atomically: true, encoding: .utf8)
-        }
-        writer.start()
+        let dir = makeTempDir(), mock = try MockHTTP(dir: dir)
+        try #"""
+            [[{"update_id": 7, "message": {"date": 100, "chat": {"id": 5, "first_name": "Old"}}}],
+             [],
+             [{"update_id": 9, "message": {"date": 5, "chat": {"id": 42, "first_name": "Me"}}}]]
+            """#.write(toFile: dir + "/updates.json.queue", atomically: true, encoding: .utf8)
         let bot = Setup.Bot(curl: try #require(Curl()), api: "http://127.0.0.1:\(mock.port)/", token: "123:SECRET")
         #expect(try bot.name() == "@?")
         #expect(try bot.waitForChat(deadline: Sys.now() + 10) == .init(id: "42", name: "Me"))
-        let r = mock.requests.filter { $0.path.hasSuffix("/getUpdates") }.compactMap { JValue.parse($0.body) }
-        #expect(mock.requests.first?.path == "/bot123:SECRET/getMe" && r.count >= 3)
-        #expect(r.first?["timeout"] == .number("0") && r.first?["offset"] == nil)
-        #expect(r.dropFirst().allSatisfy { $0["offset"] == .number("8") } && r.allSatisfy { $0["allowed_updates"] == nil })
+        #expect(mock.requests.map(\.path) == ["/bot123:SECRET/getMe"] + Array(repeating: "/bot123:SECRET/getUpdates", count: 3))
+        let r = mock.requests.dropFirst().compactMap { JValue.parse($0.body) }
+        #expect(r.map { $0["offset"] } == [nil, .number("8"), .number("8")] && r.allSatisfy { $0["allowed_updates"] == nil })
+        #expect(r[0]["timeout"] == .number("0") && r[1]["timeout"] == .number("0") && r[2]["timeout"] != .number("0"))
     }
 
     /// The day of `JiraClientTests.state` (2026-10-29, UTC): PROJ-1 worked 05:00–09:00, Jira has 06:00–07:00 on PROJ-1
@@ -179,6 +176,6 @@ struct SetupMockTests {
             """)
         #expect(HoursText.duration(36 * 3600 + 61) == "36:01:01" && HoursText.hours(0) == "0.00" && HoursText.hours(17) == "0.00")
         #expect(HoursText.safe("=1+1") == "'=1+1" && HoursText.safe("- fixed") == "'- fixed" && HoursText.safe("@x") == "'@x")
-        #expect(HoursText.safe("plain") == "plain" && HoursText.safe("") == "")
+        #expect(HoursText.safe("plain") == "plain" && HoursText.safe("") == "" && HoursText.safe("\r\n=x") == "'\r\n=x")
     }
 }
