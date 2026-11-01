@@ -196,7 +196,7 @@ public struct Installer {
                 log("codex: hooks installed in \(codexHooks); Codex runs them once trusted: open /hooks in codex, press t")
             } else {
                 log("codex: already installed")
-                codexTrustWarning().map(log)
+                Self.trustWarning(codexTrust()).map(log)
             }
         }
         if o.mcp && forOther {
@@ -252,7 +252,8 @@ public struct Installer {
             enableSystem()
             if userOn { log("service: the user unit zagon.service is enabled too: systemctl --user disable --now zagon.service") }
         } else if Sys.exists(systemUnit) && runner([sc, "is-enabled", "--quiet", Sys.basename(systemUnit)]) == 0 {
-            log("service: \(Sys.basename(systemUnit)) runs zagon for \(userName); the user unit is left off (one daemon per database)")
+            log("service: \(Sys.basename(systemUnit)) runs zagon for \(userName); the user unit is left off (one daemon per database)"
+                + (userOn ? ", but it is enabled: systemctl --user disable --now zagon.service" : ""))
         } else if forOther {
             log("service: as \(userName): systemctl --user enable --now zagon.service (or here: --system-service)")
             lingerNote().map(log)

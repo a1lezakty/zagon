@@ -49,18 +49,20 @@ public enum SchemaCheck {
     /// its WAL included), made with the file identity of the database's owner (root updating for another account
     /// writes nothing as root in that account's folder) and with the database's mode. One per schema version: a later
     /// update from the same version replaces it, copies of other versions are left alone. Not made (`problem` says why)
-    /// when the disk has less than twice the database's size free, or the database is a symbolic link.
+    /// when the disk has less than twice the database's size free, or, for root, the database is a symbolic link.
     public static func snapshot(db: String, version: Int, free: (String) -> UInt64? = freeBytes) -> (path: String?, problem: String?) {
-        var st = stat()
-        guard lstat(db, &st) == 0 else { return (nil, "cannot read \(db)") }
+        let root = geteuid() == 0
+        var st = stat(), dir = stat()
+        guard (root ? lstat(db, &st) : stat(db, &st)) == 0, lstat(Sys.dirname(db), &dir) == 0 else { return (nil, "cannot read \(db)") }
         guard st.st_mode & S_IFMT == S_IFREG else { return (nil, "\(db) is not a plain file") }
         let size = UInt64((Sys.fileSize(db) ?? 0) + (Sys.fileSize(db + "-wal") ?? 0))
         let avail = free(Sys.dirname(db))
         guard let avail, avail >= 2 * size else {
             return (nil, "\(mb(size)) MB database, " + (avail.map { "\(mb($0)) MB free" } ?? "free space unknown") + "; twice its size is needed")
         }
-        let other = geteuid() == 0 && st.st_uid != 0
-        guard !other || z_as_user(UInt32(st.st_uid), UInt32(st.st_gid)) == 0 else { return (nil, "cannot act as the owner of \(db)") }
+        // The folder's owner: a file in it owned by root (an older root run) must not make root write there.
+        let other = root && dir.st_uid != 0
+        guard !other || z_as_user(UInt32(dir.st_uid), UInt32(dir.st_gid)) == 0 else { return (nil, "cannot act as the owner of \(Sys.dirname(db))") }
         defer { if other { z_as_root() } }
         let path = db + ".v\(version)", tmp = path + ".tmp"
         Sys.remove(tmp)

@@ -45,14 +45,18 @@ extension InstallerTests {
         #expect(line(i.doctor(), "daemon:")?.hasPrefix("MISSING daemon: no health line for 20 min (one every 10 min while it runs)") == true)
         Sys.append(log, Array("\(LogFile.iso(o.now - 120)) start: pid 1\n".utf8))
         #expect(line(i.doctor(), "daemon:") == "ok daemon: last health line 2 min ago")
-        // systemd says neither unit runs (or cannot be asked), but the daemon logs: it runs.
+        // Not active, only a fresh start line: a unit restarting after crashes, not a running daemon.
         active.units = []
+        #expect(line(i.doctor(), "service:")?.hasPrefix("MISSING ") == true)
+        // systemd says neither unit runs (or cannot be asked), but the daemon logs health: it runs.
+        Sys.append(log, Array("\(LogFile.iso(o.now - 60)) health: rss 13.0 MB\n".utf8))
         #expect(line(i.doctor(), "service:")?.hasSuffix("present, not running; but a daemon runs (fresh health line)") == true)
         #expect(line(i.doctor(), "service:")?.hasPrefix("ok ") == true)
-        // A unit with longer health intervals: 1.5 of them.
+        // A unit with longer health intervals (in a drop-in): 1.5 of them.
         Sys.writeFile(log, Array("\(LogFile.iso(o.now - 40 * 60)) health: rss 13.0 MB\n".utf8))
         #expect(line(i.doctor(), "daemon:")?.hasPrefix("MISSING") == true)
-        Sys.writeFile(o.userUnitDir + "/zagon.service", Array("[Service]\nExecStart=/z daemon --health-minutes 30\n".utf8))
+        Sys.mkdirs(o.userUnitDir + "/zagon.service.d")
+        Sys.writeFile(o.userUnitDir + "/zagon.service.d/override.conf", Array("[Service]\nExecStart=\nExecStart=/z daemon --health-minutes=30\n".utf8))
         #expect(line(i.doctor(), "daemon:") == "ok daemon: last health line 40 min ago")
     }
 

@@ -45,28 +45,32 @@ extension Installer {
             + (running ? "" : alive ? "; but a daemon runs (fresh health line)" : "; start it: " + start))
     }
 
-    /// Seconds a health line may be old: 15 minutes, or 1.5 intervals of a unit's `--health-minutes`.
+    /// Seconds a health line may be old: 15 minutes, or 1.5 intervals of `--health-minutes` in a unit (or its drop-ins).
     var healthMaxAge: Double {
-        let every = [userUnit, systemUnit].compactMap { Sys.readFile($0).map { String(decoding: $0, as: UTF8.self) } }.compactMap { t -> Double? in
-            guard let r = t.split(separator: "\n").first(where: { $0.hasPrefix("ExecStart=") })?.split(separator: " ")
-                .split(whereSeparator: { $0 == "--health-minutes" }).dropFirst().first?.first else { return nil }
-            return Double(r)
-        }.max()
+        let files = [userUnit, systemUnit].flatMap { u in [u] + Sys.listDir(u + ".d").filter { $0.hasSuffix(".conf") }.map { u + ".d/" + $0 } }
+        let every = files.compactMap { Sys.readFile($0).map { String(decoding: $0, as: UTF8.self) } }
+            .flatMap { $0.split(separator: "\n").filter { $0.hasPrefix("ExecStart=") } }
+            .compactMap { l -> Double? in
+                let w = l.split(separator: " ")
+                if let i = w.firstIndex(of: "--health-minutes"), i + 1 < w.endIndex { return Double(w[i + 1]) }
+                return w.first { $0.hasPrefix("--health-minutes=") }.flatMap { Double($0.dropFirst("--health-minutes=".count)) }
+            }.max()
         return max(900, (every ?? 0) * 90)
     }
 
-    /// The daemon's last `health:` / `start:` / `full pass` line is at most `healthMaxAge` old; returns whether it is.
+    /// The daemon's last `health:` / `start:` / `full pass` line is at most `healthMaxAge` old. Returns whether a
+    /// `health:` line is: the daemon has run a whole interval (a unit restarting after a crash writes only `start:`).
     func healthCheck(_ log: [String], _ add: (Bool, String) -> Void) -> Bool {
-        let path = o.paths.dir + "/logs/daemon.log"
+        let path = o.paths.dir + "/logs/daemon.log", maxAge = healthMaxAge
         guard let l = log.last(where: { $0.contains(" health: ") || $0.contains(" start: ") || $0.contains(" full pass (") }),
               let t = Self.logTime(l) else {
             add(false, "daemon: no health line in \(path): it has not run here")
             return false
         }
-        let age = o.now - t, fresh = age <= healthMaxAge
+        let age = o.now - t, fresh = age <= maxAge
         add(fresh, "daemon: " + (fresh ? "last health line \(Self.ago(age))"
             : "no health line for \(Self.ago(age).dropLast(4)) (one every 10 min while it runs): stopped or stuck, see \(path)"))
-        return fresh
+        return log.last { $0.contains(" health: ") }.flatMap(Self.logTime).map { o.now - $0 <= maxAge } ?? false
     }
     #endif
 
@@ -224,17 +228,17 @@ extension Installer {
         return String(h)
     }
 
-    /// The warning about trust, nil when Codex runs all of our hooks.
-    func codexTrustWarning() -> String? {
-        guard let t = codexTrust(), !(t.untrusted.isEmpty && t.changed.isEmpty) else { return nil }
+    /// The warning about `codexTrust()`, nil when Codex runs all of our hooks.
+    static func trustWarning(_ t: (untrusted: [String], changed: [String], all: Int)?) -> String? {
+        guard let t, !(t.untrusted.isEmpty && t.changed.isEmpty) else { return nil }
         let some = t.untrusted.count + t.changed.count < t.all ? " (" + (t.untrusted + t.changed).joined(separator: ", ") + ")" : ""
         return "codex: hooks " + (t.untrusted.isEmpty ? "changed since they were trusted, Codex skips them" : "not trusted yet")
             + some + ": open /hooks in codex, press t"
     }
 
     func codexTrustCheck(_ add: (String, String) -> Void) {
-        if let w = codexTrustWarning() { add("warn", w) }
-        else if let t = codexTrust() { add("info", "codex: hooks trusted in /hooks (\(t.all))") }
+        let t = codexTrust()
+        if let w = Self.trustWarning(t) { add("warn", w) } else if let t { add("info", "codex: hooks trusted in /hooks (\(t.all))") }
     }
 
     // MARK: versions

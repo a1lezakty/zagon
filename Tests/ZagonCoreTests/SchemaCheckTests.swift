@@ -67,7 +67,11 @@ import Testing
         let other = makeTempDir()
         symlink(db, other + "/zagon.db")
         let linked = SchemaCheck.snapshot(db: other + "/zagon.db", version: 7, free: { _ in 1 << 40 })
-        #expect(linked.path == nil && linked.problem == "\(other)/zagon.db is not a plain file" && Sys.listDir(other) == ["zagon.db"])
+        if geteuid() == 0 {
+            #expect(linked.path == nil && linked.problem == "\(other)/zagon.db is not a plain file" && Sys.listDir(other) == ["zagon.db"])
+        } else {  // the user's own link (a database on another disk): followed
+            #expect(linked.path == other + "/zagon.db.v7")
+        }
     }
 
     #if os(Linux)
@@ -76,12 +80,16 @@ import Testing
     @Test(.enabled(if: geteuid() == 0)) func snapshotAsTheOwner() throws {
         let dir = makeTempDir(), db = dir + "/zagon.db"
         do { try Store(path: db).db.exec("CREATE TABLE t(x); INSERT INTO t VALUES (1)") }  // closed: no WAL left
-        chmod(dir, 0o777)
+        chown(dir, 65534, 65534)
         for f in Sys.listDir(dir) { chown(dir + "/" + f, 65534, 65534) }
         let s = SchemaCheck.snapshot(db: db, version: 7, free: { _ in 1 << 40 })
         #expect(s.path == db + ".v7" && s.problem == nil)
         var st = stat()
         #expect(stat(db + ".v7", &st) == 0 && st.st_uid == 65534 && st.st_gid == 65534)
+        // A root-owned file in the account's folder (an older root run) does not make the copy root's.
+        chown(db + ".v7", 0, 0)
+        #expect(SchemaCheck.snapshot(db: db, version: 7, free: { _ in 1 << 40 }).problem == nil)
+        #expect(stat(db + ".v7", &st) == 0 && st.st_uid == 65534)
     }
     #endif
 }
