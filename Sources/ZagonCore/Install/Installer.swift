@@ -193,7 +193,7 @@ public struct Installer {
         if o.mcp && forOther {
             log("mcp: not registered from sudo; run `zagon install` as \(userName) for it")
         } else if o.mcp {
-            if o.claude, let claude = Sys.which("claude", path: o.searchPath), !claudeHasMCP() {
+            if o.claude, let claude = claudeCLI, !claudeHasMCP() {
                 let rc = runner([claude, "mcp", "add", "--scope", "user", "zagon", "--", o.zagon, "mcp"])
                 log(rc == 0 ? "claude: MCP server zagon added" : "claude: `claude mcp add` failed (\(rc))")
             }
@@ -298,7 +298,7 @@ public struct Installer {
         if o.mcp && forOther {
             log("mcp: not removed from sudo; run `zagon uninstall` as \(userName) for it")
         } else if o.mcp {
-            if let claude = Sys.which("claude", path: o.searchPath), claudeHasMCP() {
+            if let claude = claudeCLI, claudeHasMCP() {
                 _ = runner([claude, "mcp", "remove", "--scope", "user", "zagon"]); log("claude: MCP server zagon removed")
             }
             if let codex = Sys.which("codex", path: o.searchPath), codexHasMCP() {
@@ -777,6 +777,12 @@ public struct Installer {
 
     // MARK: MCP
 
+    /// `claude` on PATH, else the one an editor's Claude Code extension bundles (`DaySummary.editorBins`): a Mac with
+    /// Claude Code only in VS Code or Cursor gets the MCP server too.
+    var claudeCLI: String? {
+        Sys.which("claude", path: o.searchPath) ?? Sys.which("claude", path: DaySummary.editorBins(home: o.paths.home).joined(separator: ":"))
+    }
+
     func claudeHasMCP() -> Bool {
         guard let b = Sys.readFile(o.claudeJSON), let v = JValue.parse(b, maxDepth: 512) else { return false }
         return v["mcpServers"]?["zagon"] != nil
@@ -825,7 +831,9 @@ public struct Installer {
         }
         if o.mcp {
             for (tool, on, has) in [("claude", o.claude, claudeHasMCP()), ("codex", o.codex, codexHasMCP())] where on {
-                if !has && Sys.which(tool, path: o.searchPath) == nil { add(true, "\(tool): MCP skipped (no \(tool) CLI on PATH)"); continue }
+                if !has && (tool == "claude" ? claudeCLI : Sys.which(tool, path: o.searchPath)) == nil {
+                    add(true, "\(tool): MCP skipped (no \(tool) CLI on PATH)"); continue
+                }
                 add(has, "\(tool): MCP server zagon " + (has ? "registered" : "not registered"))
             }
         }
