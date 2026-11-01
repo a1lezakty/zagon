@@ -80,6 +80,7 @@ struct ReconcileScreen: View {
     @ViewBuilder func content(_ vm: ReconcileVM) -> some View {
         if let c = vm.coverage { Banner.amber(c) }
         ForEach(vm.warnings, id: \.self) { Banner.blue(Emphasis(before: $0)) }
+        if !vm.connected, let s = app.currentTaskSource, app.jiraOff(s) { JiraConnectHint(source: s) }
         StatsRow(stats: vm.stats, highlightLast: vm.connected)
         DayBars(vm: vm)
         table(vm)

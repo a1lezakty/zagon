@@ -115,6 +115,8 @@ struct Toast: Equatable {
     /// A file to show in Finder, and the button's title (default "Show in Finder").
     var reveal: URL?
     var revealTitle: String?
+    /// Text the toast's button copies (its title: `revealTitle`), e.g. the install command for a server.
+    var copy: String?
 }
 
 struct ToastView: View {
@@ -128,6 +130,9 @@ struct ToastView: View {
                 Text(t.text).font(.system(size: 13)).foregroundColor(Z.text).lineLimit(8).fixedSize(horizontal: false, vertical: true)
                     .help(t.text)
                 Spacer(minLength: 0)
+                if let text = t.copy {
+                    CopyButton(title: t.revealTitle ?? app.f.t("copy"), height: 28) { text }
+                }
                 if let url = t.reveal {
                     PillButton(title: t.revealTitle ?? app.f.t("toast.reveal"), height: 28) {
                         NSWorkspace.shared.activateFileViewerSelecting([url])

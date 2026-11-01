@@ -11,6 +11,9 @@ public enum Connect {
         public var missing: [String] = []
         public var notes: [String] = []
         public var connected: Bool { missing.isEmpty && !ok.isEmpty }
+        /// No claude CLI anywhere, neither on PATH nor in an editor extension: Claude did not get Zagon's MCP tools,
+        /// which install does not say (doctor's `claude: MCP skipped …`).
+        public var mcpSkipped: Bool { notes.contains { $0.hasPrefix("claude: MCP skipped") } }
         public init(ok: [String] = [], missing: [String] = [], notes: [String] = []) {
             self.ok = ok; self.missing = missing; self.notes = notes
         }
@@ -105,6 +108,21 @@ public struct EditorPanelsVM: Sendable, Equatable {
         notes = s.other.map(Remote.scrubHomes)
         canEnable = !s.off.isEmpty
         canDisable = !s.on.isEmpty
+    }
+
+    /// "Check the panel": when the panel last started Claude through Zagon and when its last limits reading came
+    /// (`ClaudeWrap.panelSeen`).
+    public static func panelCheck(run: Date?, reading: Date?, _ f: Fmt) -> String {
+        guard let run else { return f.t("editors.notSeen") }
+        // A reading older than the last start belongs to an earlier chat: still the last one from the panel.
+        guard let reading else { return f.t("editors.seenNoReading", f.resetMoment(run)) }
+        return f.t("editors.seen", f.resetMoment(run), f.resetMoment(reading))
+    }
+
+    /// `panelCheck` of this Mac now.
+    public static func panelCheck(_ f: Fmt) -> String {
+        let seen = ClaudeWrap.panelSeen()
+        return panelCheck(run: seen.run.map { Date(timeIntervalSince1970: $0) }, reading: seen.reading.map { Date(timeIntervalSince1970: $0) }, f)
     }
 
     /// This Mac's editors now.

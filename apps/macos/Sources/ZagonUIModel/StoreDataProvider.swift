@@ -363,10 +363,11 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 case .waitingInput: status = .waitingInput
                 case .idle: status = .idle
                 }
-                return LiveSession(id: s.id, title: Self.title(s.title, s.project, s.id), host: shown(s.host),
+                let host = shown(s.host)
+                return LiveSession(id: s.id, title: Self.title(s.title, s.project, s.id), host: host,
                                    tool: s.tool == "codex" ? .codex : .claude, model: Self.modelName(s.model), status: status,
-                                   since: Self.date(s.since), command: command(tool: s.tool, id: s.nativeId, cwd: s.cwd, host: shown(s.host)),
-                                   drivenBy: s.drivenBy)
+                                   since: Self.date(s.since), command: command(tool: s.tool, id: s.nativeId, cwd: s.cwd, host: host),
+                                   drivenBy: s.drivenBy, server: host == localHost ? nil : host)
             }
         }
     }

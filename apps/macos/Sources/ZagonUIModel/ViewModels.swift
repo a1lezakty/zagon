@@ -121,6 +121,8 @@ public struct SessionRowVM: Sendable, Identifiable, Equatable {
     public var subtitle: String
     public var time: String
     public var command: String
+    /// Where its handoff is made (`TaskBackend.handoff` with `id`): the ssh alias, nil = this Mac.
+    public var server: String? = nil
 }
 
 public struct MainVM: Sendable {
@@ -180,7 +182,7 @@ public struct MainVM: Sendable {
         let sessions = p.liveSessions().sorted { $0.since < $1.since }
         func row(_ s: LiveSession, _ detail: String) -> SessionRowVM {
             SessionRowVM(id: s.id, title: s.title, subtitle: s.host + " · " + detail,
-                         time: f.duration(f.now.timeIntervalSince(s.since)), command: s.command)
+                         time: f.duration(f.now.timeIntervalSince(s.since)), command: s.command, server: s.server)
         }
         // A worker driven by another session waits for that session, not for you: listed with the idle ones.
         func driven(_ s: LiveSession) -> Bool { s.status == .waitingInput && s.drivenBy != nil }

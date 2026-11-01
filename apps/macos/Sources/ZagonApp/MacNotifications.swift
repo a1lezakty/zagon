@@ -8,22 +8,51 @@ enum MacNotifications {
     /// A click on one of Zagon's notifications (`ZagonCommands` sets it).
     @MainActor static var onOpen: (@MainActor () -> Void)?
 
-    /// Asks for permission once and shows banners even while the app is active.
+    /// Shows banners even while the app is active and opens "Sessions" on a click. Asks nothing: the permission is
+    /// asked when notifications are first wanted (`ask`), not at launch.
     static func start() {
         guard available else { return }
-        let center = UNUserNotificationCenter.current()
-        center.delegate = delegate
-        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        UNUserNotificationCenter.current().delegate = delegate
     }
 
-    /// Called on the store's write queue. Not allowed (denied, or not decided yet) = dropped, not retried: the user has
-    /// not opted in, and a retry every pass would only fill the log.
+    /// macOS shows its prompt while the user has not decided (later calls only answer); then whether it is denied.
+    static func ask(_ done: (@MainActor (Bool) -> Void)? = nil) {
+        guard available else { return }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in denied(done) }
+    }
+
+    /// Whether macOS has Zagon's notifications turned off.
+    static func denied(_ done: (@MainActor (Bool) -> Void)?) {
+        guard available, let done else { return }
+        UNUserNotificationCenter.current().getNotificationSettings { s in
+            let off = s.authorizationStatus == .denied
+            Task { @MainActor in done(off) }
+        }
+    }
+
+    /// System Settings → Notifications, at Zagon where macOS takes the id.
+    static func openSettings() {
+        let id = Bundle.main.bundleIdentifier.map { "?id=" + $0 } ?? ""
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension" + id) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// The first notification found the permission undecided and asked (the store's write queue only).
+    private static var asked = false
+
+    /// Called on the store's write queue. Denied = dropped, not retried: the user said no, and a retry every pass would
+    /// only fill the log. Not decided yet: asked once, and retried until the user answers (the first warning is kept).
     static func deliver(title: String, text: String, loud: Bool) -> Bool {
         let center = UNUserNotificationCenter.current()
         let done = DispatchSemaphore(value: 0)
         var status = UNAuthorizationStatus.notDetermined
         center.getNotificationSettings { status = $0.authorizationStatus; done.signal() }
         guard done.wait(timeout: .now() + 5) == .success else { return false }
+        if status == .notDetermined {
+            if !asked { asked = true; ask() }
+            return false
+        }
         guard status == .authorized || status == .provisional else { return true }
         let content = UNMutableNotificationContent()
         content.title = title

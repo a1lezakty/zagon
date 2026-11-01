@@ -83,6 +83,7 @@ struct WorklogScreen: View {
                         ForEach(vm.notes.indices, id: \.self) { i in
                             Text(vm.notes[i]).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
                         }
+                        if let s = app.currentTaskSource, app.jiraOff(s) { JiraConnectHint(source: s) }
                         parts(vm, key, f)
                     }
                     .font(.system(size: 13)).foregroundColor(Z.body)

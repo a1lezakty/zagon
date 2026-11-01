@@ -36,6 +36,8 @@ final class ConnectTests: XCTestCase {
                                               notes: ["codex: MCP skipped (no codex CLI on PATH)"]))
         XCTAssertTrue(Connect.parseDoctor("ok       claude: hooks\nok       codex: MCP skipped (no codex CLI on PATH)\n").connected)
         XCTAssertFalse(status.connected)
+        XCTAssertFalse(status.mcpSkipped, "codex's skip is not Claude's tools")
+        XCTAssertTrue(Connect.parseDoctor("ok       claude: MCP skipped (no claude CLI on PATH)\n").mcpSkipped)
 
         XCTAssertNil(Connect.change(bin, "install", path: path))
         XCTAssertEqual(try String(contentsOfFile: dir + "/path", encoding: .utf8), path + "\n")  // the CLI got the full PATH
@@ -67,5 +69,14 @@ final class ConnectTests: XCTestCase {
         XCTAssertTrue(Connect.temporaryLocation("/Volumes/Zagon/Zagon.app"))
         XCTAssertFalse(Connect.temporaryLocation("/Applications/Zagon.app"))
         XCTAssertFalse(Connect.temporaryLocation("/Volumes/SSD/Applications/Zagon.app"))
+    }
+
+    /// "Check the panel": never, started without a reading, both (today by time, another day by weekday).
+    func testPanelCheck() {
+        let f = Fmt(lang: .en, timeZone: TimeZone(identifier: "UTC")!, now: Date(timeIntervalSince1970: 1_793_000_000))
+        let run = Date(timeIntervalSince1970: 1_792_990_000), reading = Date(timeIntervalSince1970: 1_792_600_000)
+        XCTAssertEqual(EditorPanelsVM.panelCheck(run: nil, reading: reading, f), f.t("editors.notSeen"))
+        XCTAssertEqual(EditorPanelsVM.panelCheck(run: run, reading: nil, f), f.t("editors.seenNoReading", "at 04:46"))
+        XCTAssertEqual(EditorPanelsVM.panelCheck(run: run, reading: reading, f), f.t("editors.seen", "at 04:46", "Wed 16:26"))
     }
 }

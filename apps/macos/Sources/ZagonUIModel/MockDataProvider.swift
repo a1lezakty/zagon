@@ -20,6 +20,8 @@ public struct MockDataProvider: ZagonDataProvider {
     /// The sample's editors: Cursor and VS Code found, Zagon not on in them yet.
     public static let editors = Installer.EditorPanels(off: ["/Users/you/Library/Application Support/Cursor/User/settings.json",
                                                              "/Users/you/Library/Application Support/Code/User/settings.json"])
+    /// The same editors with Zagon on in Cursor.
+    public static let editorsOn = Installer.EditorPanels(on: [editors.off[0]], off: [editors.off[1]])
 
     public init(lang: Lang = .en, timeZone: TimeZone = .current) {
         var c = Calendar(identifier: .gregorian)

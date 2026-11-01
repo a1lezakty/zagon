@@ -107,11 +107,7 @@ struct TasksScreen: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(f.t("tasks.jiraOff", place)).font(.system(size: 12)).foregroundColor(Z.muted)
                         .fixedSize(horizontal: false, vertical: true)
-                    // A server's Jira is set there, not here.
-                    if s == .local {
-                        Button(f.t("tasks.jiraConnect")) { app.screen = .settings }
-                            .buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundColor(Z.week)
-                    }
+                    JiraConnectHint(source: s)
                 }
             }
         }
