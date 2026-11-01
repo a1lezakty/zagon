@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.a1lezakty/zagon",
+  "title": "Zagon",
+  "description": "Claude Code and Codex CLI sessions on this machine: limits, time and tokens per day, search",
+  "repository": { "url": "https://github.com/a1lezakty/zagon", "source": "github" },
+  "websiteUrl": "https://github.com/a1lezakty/zagon",
+  "version": "0.0.0",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/a1lezakty/zagon/releases/download/v0.0.0/zagon-mcp-macos.mcpb",
+      "fileSha256": "",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}
