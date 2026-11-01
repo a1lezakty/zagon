@@ -287,9 +287,9 @@ extension AppState {
             for (name, b) in backends {
                 do { try write(b) } catch { failed.append(f.t("settings.wl.notSaved", name, Remote.scrubHomes(String(describing: error)))) }
             }
-            let failed = failed
+            let notSaved = failed  // a constant crosses to the main actor, the var does not
             await MainActor.run {
-                if !failed.isEmpty { self.worklogConfigMessage = failed.joined(separator: "\n") } else if all { self.worklogConfigMessage = nil }
+                if !notSaved.isEmpty { self.worklogConfigMessage = notSaved.joined(separator: "\n") } else if all { self.worklogConfigMessage = nil }
                 for s in self.taskCache.keys { self.taskCache[s]?.plans = [:]; self.taskCache[s]?.reconciles = [:] }
                 self.planEpoch += 1
                 self.loadWorklogConfig()
