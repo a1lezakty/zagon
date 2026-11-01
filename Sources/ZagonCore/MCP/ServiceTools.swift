@@ -228,8 +228,8 @@ enum ServiceTools {
                     description: "The plan of Jira worklogs for a day: the user's working time split by task, without "
                         + "overlap with worklogs already in Jira, rounded to 5 minutes, each row with 1-2 sentences about its "
                         + "stretch and, on each task's longest row, the day's summary. Makes no AI call and writes nothing to "
-                        + "Jira. To build the texts again use worklog_refresh; refresh: true here (from older versions) does "
-                        + "the same: one AI call, the texts saved in Zagon's database.",
+                        + "Jira. To build the texts again use worklog_refresh; refresh: true here is its synonym and, like it, "
+                        + "calls the AI once and writes the texts to Zagon's database.",
                     inputSchema: planSchema) { a in
                 try plan(a, "worklog_plan", refresh: try a.bool("refresh") ?? false)
             },

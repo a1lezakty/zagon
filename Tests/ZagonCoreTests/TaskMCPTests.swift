@@ -77,6 +77,15 @@ private let day = "2026-10-29"
         #expect(try m.call("worklog_refresh", #"{"date":"\#(day)","format":"xml"}"#).isError)
     }
 
+    /// The plan says how to build stale texts again: the CLI's command, or the MCP tool.
+    @Test func refreshHint() {
+        var p = DayPlan(day: day, userSec: 0, sessionSec: 0, jiraSec: nil, rows: [], tasks: [], unassignedSec: 0, unknownKeys: [],
+                        unplaced: [:], notes: [])
+        p.tz = "UTC"; p.sessionsAfterSummary = 2
+        #expect(TaskText.plan(p).hasSuffix("\ndays in UTC · texts not built yet, 2 sessions since (log plan --refresh)"))
+        #expect(TaskText.plan(p, refresh: "worklog_refresh").hasSuffix(", 2 sessions since (worklog_refresh)"))
+    }
+
     @Test func planWithoutJiraAndCommitRefused() throws {
         let m = try TaskMCP()
         _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)
@@ -193,6 +202,16 @@ struct TaskMCPJiraTests {
         #expect(try !m.call("worklog_skip", #"{"ids":[\#(id)],"confirm":true}"#).isError)
         #expect(try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#).text == "Nothing to write to Jira for \(day).")
         #expect((try mock.state()["issues"] as! [String: [String: Any]])["PROJ-1"]!["worklogs"] == nil)
+    }
+
+    /// A plan shown by worklog_refresh counts as shown, as one of worklog_plan.
+    @Test func commitAfterRefresh() throws {
+        let mock = try JiraMock(state: Self.state)
+        let m = try TaskMCP(jira: try JiraClient(mock.config))
+        _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)
+        #expect(try m.call("worklog_refresh", #"{"date":"\#(day)"}"#).text.contains("Nothing was written to Jira."))
+        let ok = try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#)
+        #expect(!ok.isError && ok.text.hasSuffix("1 worklogs written to Jira"), "\(ok.text)")
     }
 
     /// A text set through worklog_text after the plan was shown counts as shown: commit writes it.

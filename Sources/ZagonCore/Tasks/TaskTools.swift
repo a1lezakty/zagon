@@ -212,7 +212,7 @@ public final class TaskTools: TaskService {
                 e.outputFormatting = [.sortedKeys]
                 return String(decoding: try e.encode(p), as: UTF8.self)
             }
-            return text + "\nNothing was written. To log, the user must ask; then worklog_commit with confirm: true (and ids to pick rows)."
+            return text + "\nNothing was written to Jira. To log, the user must ask; then worklog_commit with confirm: true (and ids to pick rows)."
         }
     }
 
