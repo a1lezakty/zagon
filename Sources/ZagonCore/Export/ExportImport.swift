@@ -98,10 +98,12 @@ public final class ExportImport {
                   let created = v["created"]?.double else { return }
             // ponytail: one row per (day, engine) on this store: two servers' summaries of a day replace each other
             // (the newer stays); a host in the key of `summary` (a schema change) if that bites.
-            try db.run("""
+            let n = try db.run("""
                 INSERT INTO summary(day, engine, text, created) VALUES(?1, ?2, ?3, ?4)
                 ON CONFLICT(day, engine) DO UPDATE SET text = ?3, created = ?4 WHERE ?4 >= created
                 """, [.text(day), .text(engine), .text(text), .real(created)])
+            // This store's reason for a summary without AI is not the other host's.
+            if engine == "none", n > 0 { try db.run("DELETE FROM meta WHERE key = ?", [.text("summary_why:" + day)]) }
         case "limit":
             guard let tool = v["tool"]?.string.flatMap(ToolKind.init), let w = v["window"]?.string,
                   let pct = v["used_pct"]?.double, let ts = v["ts"]?.double else { return }

@@ -146,6 +146,30 @@ struct TaskMCPJiraTests {
         #expect(try m.call("worklog_commit", #"{"date":"\#(day)","confirm":false}"#).isError)
     }
 
+    /// Edits only on rows still as shown; status shows no rows; a skipped row is simply not written.
+    @Test func editsOfAShownPlanOnly() throws {
+        let mock = try JiraMock(state: Self.state)
+        let m = try TaskMCP(jira: try JiraClient(mock.config))
+        _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)
+        #expect(try m.call("status", "{}").text.contains("to log today: 2026-10-29"))
+        let early = try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#)
+        #expect(early.isError && early.text.contains("Call worklog_plan for \(day) first"), "\(early.text)")
+        let id = try #require(Worklog(store: m.f.store).rows(day: day).first?.id)
+        let unseen = try m.call("worklog_skip", #"{"ids":[\#(id)],"confirm":true}"#)
+        #expect(unseen.isError && unseen.text.contains("was not shown here") && unseen.text.hasSuffix("Nothing was skipped."), "\(unseen.text)")
+        // The row's Jira issue changed after the plan was shown: no new text, and commit wants the plan again.
+        _ = try m.call("worklog_plan", #"{"date":"\#(day)"}"#)
+        _ = try m.call("task_update", #"{"ref":"PROJ-1","jira_key":"PROJ-2"}"#)
+        let t = try m.call("worklog_text", #"{"id":\#(id),"text":"Elsewhere","confirm":true}"#)
+        #expect(t.isError && t.text.contains("changed since worklog_plan showed it"), "\(t.text)")
+        #expect(try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#).text.contains("Call worklog_plan for \(day) first"))
+        _ = try m.call("task_update", #"{"ref":"PROJ-1","jira_key":"PROJ-1"}"#)
+        _ = try m.call("worklog_plan", #"{"date":"\#(day)"}"#)
+        #expect(try !m.call("worklog_skip", #"{"ids":[\#(id)],"confirm":true}"#).isError)
+        #expect(try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#).text == "Nothing to write to Jira for \(day).")
+        #expect((try mock.state()["issues"] as! [String: [String: Any]])["PROJ-1"]!["worklogs"] == nil)
+    }
+
     /// A text set through worklog_text after the plan was shown counts as shown: commit writes it.
     @Test func commitWritesTheEditedText() throws {
         let mock = try JiraMock(state: Self.state)

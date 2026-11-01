@@ -15,7 +15,7 @@ public enum ZagonMCP {
                               now: @escaping () -> Timestamp = Time.now,
                               log: @escaping (String) -> Void = { _ in }) -> MCPServer {
         let r = ReportTools(store: store, exportDir: exportDir, refresh: refresh, tasks: tasks, now: now, log: log)
-        return MCPServer(tools: r.tools + ServiceTools.tools(handoff: handoff, tasks: tasks) + (paths.map(SettingsTools.tools) ?? []),
+        return MCPServer(tools: r.tools + ServiceTools.tools(handoff: handoff, tasks: tasks) + (paths.map { SettingsTools.tools($0, store: store) } ?? []),
                          prompts: [ServiceTools.resume(handoff)], log: log)
     }
 }
@@ -242,7 +242,7 @@ final class ReportTools {
         let d = try a.day("date", old: "day") ?? Time.dayString(now())
         let r = try reports.day(d)
         if r.tokens.total == 0 && r.sessionSec == 0 && r.sessions.isEmpty { return "\(d): no activity recorded." }
-        var out = ["\(d) (\(Txt.weekday(d))): " + Txt.tokenLine(r.tokens) + ", \(r.toolCalls) tool calls",
+        var out: [String] = ["\(d) (\(Txt.weekday(d))): " + Txt.tokenLine(r.tokens) + ", \(r.toolCalls) tool calls",
                    "cost: \(Txt.usd(r.cost, unpriced: r.unpriced)) \(Txt.apiNote)",
                    "time: sessions \(Txt.dur(r.sessionSec)), the user \(Txt.dur(r.userSec)); \(Txt.count(r.sessions.count, "session"))"]
         if !r.models.isEmpty {
@@ -278,7 +278,7 @@ final class ReportTools {
         let whyNoAI: String?
         /// A stored doc as text or Markdown, free text from before as it is.
         func text(markdown: Bool) -> String { doc?.text(markdown: markdown) ?? raw }
-        var mark: String { whyNoAI.map { " (made without AI: \($0))" } ?? "" }
+        var mark: String { whyNoAI.map { " (without AI: \($0))" } ?? "" }
     }
 
     /// The kept summary of a day or a range key (`SummaryDoc.key`): one written by an AI over one made without.
@@ -291,9 +291,12 @@ final class ReportTools {
     }
 
     func week(_ a: MCPArgs) throws -> String {
-        let end = try a.day("from", old: "start").flatMap { Time.addDays($0, 6) } ?? a.day("to", old: "end") ?? Time.dayString(now())
+        let from = try a.day("from", old: "start"), to = try a.day("to")
+        if from != nil && to != nil { throw MCPToolError("from or to, not both: a week is seven days") }
+        var end = Time.dayString(now())
+        if let from, let e = Time.addDays(from, 6) { end = e } else if let to { end = to }
         let w = try reports.week(ending: end)
-        var out = ["\(w.from) … \(w.to): " + Txt.tokenLine(w.tokens)
+        var out: [String] = ["\(w.from) … \(w.to): " + Txt.tokenLine(w.tokens)
                    + " (\(Txt.change(w.tokens.total, w.previous.total)) vs the 7 days before: \(Txt.tokens(w.previous.total)))",
                    "cost: \(Txt.usd(w.cost, unpriced: w.unpriced)) (the 7 days before: \(Txt.usd(w.previousCost, unpriced: w.previousUnpriced))) "
                    + Txt.apiNote,
@@ -334,7 +337,7 @@ final class ReportTools {
             }
             if r.tokens.total > 0 || r.sessionSec > 0 { perDay.append((d, r.tokens, r.sessionSec)) }
         }
-        var out = ["\(from) … \(to) (\(days.count) days, \(perDay.count) active): " + Txt.tokenLine(tokens) + ", \(calls) tool calls",
+        var out: [String] = ["\(from) … \(to) (\(days.count) days, \(perDay.count) active): " + Txt.tokenLine(tokens) + ", \(calls) tool calls",
                    "cost: \(Txt.usd(cost, unpriced: unpriced)) \(Txt.apiNote)",
                    "time: sessions \(Txt.dur(ss)), the user \(Txt.dur(us))"]
         if !models.isEmpty {

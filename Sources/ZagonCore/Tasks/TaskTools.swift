@@ -223,7 +223,8 @@ public final class TaskTools: TaskService {
         return try Settings.inZone(w.config.tz) {
             let (p, err) = try w.plan(Time.dayString(now()), refresh: false)
             let rows = p.rows.filter { $0.state == "planned" && $0.jiraKey != nil }.count
-            var out = [String(TaskText.plan(p, base: w.base).prefix { $0 != "\n" }) + " (\(Txt.count(rows, "row")); worklog_plan shows them)"]
+            let head = String(TaskText.plan(p, base: w.base).prefix { $0 != "\n" })
+            var out: [String] = [head + " (\(Txt.count(rows, "row")); worklog_plan shows them)"]
             if p.unassignedSec > 0 { out.append("no task: \(Txt.dur(p.unassignedSec)) (task_suggestions suggests tasks for it)") }
             if let err { out.append("Jira failed, planned without it: \(err)") }
             return out.joined(separator: "\n")
@@ -238,27 +239,67 @@ public final class TaskTools: TaskService {
         return d
     }
 
-    /// The new text counts as shown: worklog_commit writes the row with it (other rows as before).
+    /// The day's rows as they are now (texts filled), by id.
+    func current(_ w: DayWorklog, _ day: String) throws -> [Int: WorklogRow] {
+        let wl = Worklog(store: store)
+        var out: [Int: WorklogRow] = [:]
+        for r in try wl.filled(day: day, config: w.config, exclude: try wl.exclusions(w.config)) { out[r.id] = r }
+        return out
+    }
+
+    /// A row worklog_plan showed for Jira that is no longer that row (row ids are reused, a task's Jira key can change).
+    func changed(_ day: String, _ id: Int, _ now: WorklogRow?) -> Bool {
+        guard let s = shown[day]?[id] else { return false }
+        return now.flatMap(Self.shown) != s
+    }
+
+    /// Only on a row still as shown; then the new text counts as shown: worklog_commit writes the row with it.
     public func worklogText(row: Int, text: String?, summary: Bool) throws -> String {
         let w = try makeWorklog(), day = try rowDay(row)
         return try mapErrors {
             try Settings.inZone(w.config.tz) {
+                if changed(day, row, try current(w, day)[row]) {
+                    shown[day] = nil
+                    throw MCPToolError("Row #\(row) changed since worklog_plan showed it; nothing was changed. Show worklog_plan for \(day) again.")
+                }
                 let r = try w.setText(row: row, day: day, summary: summary, text: Self.given(text))
-                if shown[day]?[row] != nil { shown[day]?[row] = Self.shown(r) }
-                return TaskText.rows([r]) + "\nSet in Zagon; nothing was written to Jira."
+                if var s = shown[day]?[row] {
+                    if summary { s.summary = r.summary } else { s.text = r.text }
+                    shown[day]?[row] = s
+                }
+                let jira = r.jiraKey.map { "Jira \($0)" } ?? "Zagon only, not for Jira"
+                let next = shown[day]?[row] != nil ? "; worklog_commit writes it with this text, show it to the user first" : ""
+                return TaskText.rows([r]) + "\n\(jira)\(next). Nothing was written to Jira."
             }
         }
     }
 
-    public func worklogSkip(rows: [Int]) throws -> String {
-        let wl = Worklog(store: store)
-        var out: [String] = []
-        for id in rows {
-            guard let r = try wl.skip(id) else { out.append("#\(id): no planned row"); continue }
-            shown[r.day]?[id] = nil
-            out.append("skipped #\(id) \(r.day) \(r.taskKey ?? "-") \(Txt.clock(r.start))–\(Txt.clock(r.end)) \(Txt.dur(Double(r.seconds)))")
+    /// Only rows of a plan this server showed, and those shown for Jira only while still as shown; all or nothing.
+    public func worklogSkip(rows ids: [Int]) throws -> String {
+        let w = try makeWorklog(), wl = Worklog(store: store)
+        return try mapErrors {
+            try Settings.inZone(w.config.tz) {
+                try store.db.transaction {
+                    var out: [String] = [], now: [String: [Int: WorklogRow]] = [:], skipped = 0
+                    for id in ids {
+                        guard let day = try store.db.one("SELECT day FROM worklog_plan WHERE id = ?", [.int(Int64(id))], { $0.text(0) }) ?? nil else {
+                            out.append("#\(id): no planned row"); continue
+                        }
+                        guard shown[day] != nil else { out.append("#\(id): not skipped, worklog_plan for \(day) was not shown here"); continue }
+                        if now[day] == nil { now[day] = try current(w, day) }
+                        if changed(day, id, now[day]?[id]) {
+                            out.append("#\(id): not skipped, it changed since worklog_plan showed it; show worklog_plan for \(day) again"); continue
+                        }
+                        guard let r = try wl.skip(id) else { out.append("#\(id): no planned row"); continue }
+                        shown[day]?[id] = nil
+                        skipped += 1
+                        out.append("skipped #\(id) \(day) \(r.taskKey ?? "-") \(Txt.clock(r.start))–\(Txt.clock(r.end)) \(Txt.dur(Double(r.seconds)))")
+                    }
+                    guard skipped > 0 else { throw MCPToolError(out.joined(separator: "\n") + "\nNothing was skipped.") }
+                    return out.joined(separator: "\n") + "\nNothing was written to Jira."
+                }
+            }
         }
-        return out.joined(separator: "\n") + "\nNothing was written to Jira."
     }
 
     public func worklogConfig() throws -> String {
@@ -285,6 +326,10 @@ public final class TaskTools: TaskService {
             guard let exportDir, out.count > maxInline else { return out }
             let path = exportDir + "/reconcile-\(r.from)-\(r.to)." + (format == "text" ? "txt" : format)
             guard Sys.mkdirs(exportDir), Sys.writeFile(path, Array(out.utf8), mode: 0o600) else { throw MCPToolError("could not write \(path)") }
+            if format == "json" {
+                let reply: JValue = ["file": .string(path), "bytes": .number("\(out.utf8.count)")]
+                return reply.compact
+            }
             return "Wrote \(path) (\(out.utf8.count) bytes, \(format)): too long to show here, read the file for the days. Per task:\n"
                 + ReconcileText.text(r, days: false)
         }

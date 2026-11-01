@@ -160,6 +160,7 @@ struct MCPFixture {
         // The names of 0.1.4 still work; `to` ends the seven days.
         #expect(try f.call("week", #"{"start":"\#(Time.addDays(day, -2)!)"}"#).0 == w)
         #expect(try f.call("week", #"{"to":"\#(Time.addDays(day, 4)!)"}"#).0 == w)
+        #expect(try f.call("week", #"{"from":"\#(day)","to":"\#(day)"}"#).1)
         #expect(try f.call("sessions", #"{"day":"\#(day)"}"#).0 == f.call("sessions", #"{"date":"\#(day)"}"#).0)
         #expect(try f.call("day", #"{"day":"\#(day)"}"#).0 == d)
 
@@ -187,7 +188,7 @@ struct MCPFixture {
                            [.text(day), .text("First line\n" + long), .real(f.now)])
         try f.store.db.run("INSERT INTO meta(key, value) VALUES(?, ?)", [.text("summary_why:" + day), .text("claude: no answer in 120 s")])
         let d = try f.call("day", #"{"date":"\#(day)"}"#).0
-        #expect(d.hasSuffix("\nsummary (made without AI: claude: no answer in 120 s):\nFirst line\n" + long), "\(d)")
+        #expect(d.hasSuffix("\nsummary (without AI: claude: no answer in 120 s):\nFirst line\n" + long), "\(d)")
 
         let (from, to) = try #require(DaySummary.week(of: day))
         #expect(try f.call("summary", #"{"date":"\#(Time.addDays(day, 30)!)"}"#).0.hasSuffix(": no summaries kept. The service "
@@ -208,6 +209,8 @@ struct MCPFixture {
         let m = try f.call("summary", #"{"period":"month","date":"\#(String(day.prefix(7)))"}"#).0
         #expect(m.hasPrefix("month \(String(day.prefix(7)))-01 … ") && m.contains("merged without AI"), "\(m)")
         #expect(try f.call("summary", #"{"period":"year"}"#).1)
+        #expect(try f.call("summary", #"{"period":"week","date":"2026-10"}"#).1)
+        #expect(try f.call("summary", #"{"period":"month","date":"\#(day)"}"#).0 == m)
         #expect(try f.call("summary", #"{"period":"month","date":"2026-13"}"#).1)
     }
 
@@ -236,6 +239,11 @@ struct MCPFixture {
         #expect(try call(#"{"kind":"task","name":"PROJ-1","confirm":true}"#).hasPrefix("Nothing to change"))
         #expect(try call(#"{"kind":"folder","name":"x","confirm":true}"#).contains("kind must be"))
         #expect(try call(#"{"kind":"task","name":"PROJ-1","undo":true,"confirm":true}"#).hasPrefix("task PROJ-1 counts again"))
+        #expect(WorklogConfig.load(paths).exclude.isEmpty)
+        // A session by the 8 characters the tools show; one that is not there is refused.
+        #expect(try call(#"{"kind":"session","name":"aaaaaaaa ","confirm":true}"#).hasPrefix("Excluded session claude:\(sessionA)"))
+        #expect(try call(#"{"kind":"session","name":"zzzz","confirm":true}"#).hasPrefix("No session zzzz"))
+        #expect(try call(#"{"kind":"session","name":"aaaaaaaa","undo":true,"confirm":true}"#).hasPrefix("session claude:\(sessionA) counts again"))
         #expect(WorklogConfig.load(paths).exclude.isEmpty)
     }
 

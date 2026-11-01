@@ -126,7 +126,7 @@ public enum TaskText {
         func line(_ l: TaskListLine) -> String {
             let worked = label(base) + " " + Txt.dur(l.weekSec) + " in 7d", sessions = Txt.count(l.sessions, "session")
             let jira = l.jiraStatus.map { "  · Jira \"\($0)\"" } ?? "", adopt = l.task.id == 0 ? "  (not a task here yet)" : ""
-            return "\(pad(l.task.key, 10)) \(pad(l.task.status.rawValue, 11)) \(pad(worked, 21)) \(pad(sessions, 12)) "
+            return "\(pad(l.task.key, 10)) \(pad(l.task.status.rawValue, 11)) \(pad(worked, 21)) \(pad(sessions, max(12, sessions.count))) "
                 + "\(Txt.oneLine(l.task.title, 70))\(jira)\(adopt)"
         }
         let worked = lines.filter { $0.worked != false }, rest = lines.filter { $0.worked == false }

@@ -212,6 +212,13 @@ import Testing
         // The engine turned off: nothing to explain.
         s.config.summaryEngine = "none"
         #expect(try s.make(d, now: 4).engine == "none" && DaySummary.whyNoAI(store, d) == nil)
+        // A newer summary of the day from another host: this store's reason is not its reason.
+        let mac = try Store(path: ":memory:")
+        try mac.db.run("INSERT INTO meta(key, value) VALUES(?, 'claude CLI not found')", [.text("summary_why:" + d)])
+        var lines: [String] = []
+        try Export.run(store: store, since: 0) { lines.append($0) }
+        try ExportImport(store: mac, source: "box").apply(lines)
+        #expect(try DaySummary.whyNoAI(mac, d) == nil)
     }
 
     @Test func hostsOfTheDaysSessions() throws {
