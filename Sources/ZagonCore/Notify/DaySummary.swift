@@ -51,9 +51,9 @@ public struct DaySummary {
         Sys.capture($0, stdin: $1, cwd: $2, timeout: $3, env: HookSpool.internalEnv)
     }
     public var log: (String) -> Void = { _ in }
-    /// Why the last AI call gave nothing (the CLI's first error line, a timeout, an unreadable answer), nil after one
-    /// that answered: `zagon summary --json` sends it with a summary written without AI. A class, so the copies kept
-    /// by callers share it.
+    /// Why the last AI call gave nothing (the CLI's first error line, a timeout, an unreadable answer, a billing stop),
+    /// nil after one that answered: `zagon summary --json` sends it with a summary written without AI. A class, so the
+    /// copies kept by callers share it.
     public final class Failure { public var reason: String? }
     public let failure = Failure()
     static let maxDigest = 12000
@@ -340,6 +340,7 @@ public struct DaySummary {
         let prompt = Array(text.utf8)
         let run = paths.dir + "/run"
         Sys.mkdirs(run)
+        if let stop = stopped() { failure.reason = stop; return nil }
         switch config.summaryEngine {
         case "claude":
             guard let claude = engineCLI else { log("\(what): claude CLI not found"); return nil }
@@ -347,12 +348,20 @@ public struct DaySummary {
             // the user's permission mode: bypassPermissions makes claude refuse to start as root, and the call has no
             // tools anyway.
             let r = runner([claude, "-p", "--safe-mode", "--permission-mode", "default", "--model", config.summaryModel,
-                            "--tools", "", "--max-turns", "1", "--no-session-persistence", "--output-format", "json"],
-                           prompt, run, config.summaryTimeout)
-            let v = JValue.parse(r.out)
+                            "--tools", "", "--max-turns", "1", "--no-session-persistence", "--output-format", "stream-json",
+                            "--verbose"], prompt, run, config.summaryTimeout)
+            // One message a line, the result last. Only there a rate-limit event says that extra usage (pay-as-you-go
+            // beyond the plan) paid for the call: it is used, and no other is made today.
+            let msgs = r.out.split(separator: 0x0A).compactMap { JValue.parse(Array($0)) }
+            let v = msgs.last { $0["type"]?.string == "result" } ?? msgs.last
+            if msgs.contains(where: { $0["type"]?.string == "rate_limit_event" && $0["rate_limit_info"]?["isUsingOverage"] == .bool(true) }) {
+                stop("claude: billing — the call was paid as extra usage" + DaySummary.paused)
+                log("\(what): claude was paid as extra usage; no AI calls until tomorrow")
+            }
             guard r.status == 0, let v, v["is_error"] != .bool(true), let answer = v["result"]?.string?.trimmingSpaces, !answer.isEmpty else {
                 // an error answer's `result` is the error, not a reply (claude exits 1 with it)
-                failed(what, "claude", r.status, r.err, v?["is_error"] == .bool(true) ? v?["result"]?.string : nil, prompt: text)
+                failed(what, "claude", r.status, r.err, v?["is_error"] == .bool(true) ? v?["result"]?.string : nil, prompt: text,
+                       codes: [v?["api_error"]?.string, v?["api_error_code"]?.string].compactMap { $0 })
                 return nil
             }
             return (String(answer), "claude", v)
@@ -374,17 +383,52 @@ public struct DaySummary {
 
     /// Keeps and logs why a call failed, never with the prompt: the error claude answered, else the last `ERROR:`
     /// line of the CLI's stderr, else claude's first stderr line; cut to 200 characters. Lines of the prompt are left
-    /// out (codex echoes it to stderr, and a Jira text in it may hold an `ERROR:` line).
-    func failed(_ what: String, _ engine: String, _ status: Int32, _ err: [UInt8], _ answered: String?, prompt: String) {
+    /// out (codex echoes it to stderr, and a Jira text in it may hold an `ERROR:` line). An error about money or the
+    /// plan's limit (`billingKind`, also from claude's error `codes`) says so and stops the AI calls for the day.
+    func failed(_ what: String, _ engine: String, _ status: Int32, _ err: [UInt8], _ answered: String?, prompt: String,
+                codes: [String] = []) {
         let lines = String(decoding: err, as: UTF8.self).split(separator: "\n").map { String($0.trimmingSpaces) }
             .filter { !$0.isEmpty && !prompt.contains($0) }
         let line = answered.flatMap { $0.split(separator: "\n").first.map { String($0.trimmingSpaces) } }
             ?? lines.last { $0.hasPrefix("ERROR:") }.map { String($0.dropFirst(6).trimmingSpaces) }
             ?? (engine == "claude" ? lines.first : nil)
-        let reason = status == 124 ? "no answer in \(Int(config.summaryTimeout)) s"
+        var reason = status == 124 ? "no answer in \(Int(config.summaryTimeout)) s"
             : line.map { $0.count > 200 ? String($0.prefix(199)) + "…" : $0 } ?? (status == 0 ? "an empty answer" : "exit \(status)")
+        let kind = status == 124 ? nil : DaySummary.billingKind(([line ?? ""] + codes).joined(separator: " "))
+        if let kind { reason = "\(kind) — " + reason + DaySummary.paused }
         failure.reason = "\(engine): " + reason
+        if kind != nil { stop(failure.reason!) }
         log("\(what): \(engine) failed (\(status)): \(reason)")
+    }
+
+    /// What an engine's error says about paying: "usage limit" (the plan's limit is reached), "billing" (credit
+    /// balance, usage credits, extra usage, a spending cap); nil for anything else. From the texts and codes of
+    /// claude 2.1 ("You've hit your limit", "Credit balance is too low", "You're out of extra usage",
+    /// `usage_limit_reached`, `model_requires_usage_credits`) and codex 0.166 ("You've hit your usage limit",
+    /// "Quota exceeded. Check your plan and billing details.", "You're out of credits").
+    static func billingKind(_ error: String) -> String? {
+        let t = error.lowercased()
+        if ["usage limit", "usage_limit", "hit your limit", "reached your", "out of usage"].contains(where: { t.contains($0) }) {
+            return "usage limit"
+        }
+        return ["credit", "billing", "extra usage", "spend", "overage"].contains(where: { t.contains($0) }) ? "billing" : nil
+    }
+
+    static let paused = " (no AI calls until tomorrow)"
+    /// `<local day>\n<reason>`: after a billing or usage-limit answer, or a call paid as extra usage, no AI call is made
+    /// for the rest of the day (by any zagon process) with the engine the reason names, so a subscription is never
+    /// charged extra and the log does not repeat the refusal.
+    var stopFile: String { paths.dir + "/run/ai-stop" }
+
+    func stop(_ reason: String, now: Double = Sys.now()) {
+        Sys.writeFile(stopFile, Array((Time.dayString(now) + "\n" + reason).utf8), mode: 0o600)
+    }
+
+    /// The reason of today's stop for the configured engine, nil when calls may go on.
+    func stopped(now: Double = Sys.now()) -> String? {
+        let parts = Sys.readFile(stopFile).map { String(decoding: $0, as: UTF8.self).split(separator: "\n", maxSplits: 1) } ?? []
+        guard parts.count == 2, parts[0] == Time.dayString(now), parts[1].hasPrefix(config.summaryEngine + ":") else { return nil }
+        return String(parts[1])
     }
 
     /// Where the AI CLIs are looked up. A user service runs with systemd's PATH: the CLIs' own install places come

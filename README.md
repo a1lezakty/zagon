@@ -74,6 +74,8 @@ The macOS app (sample data): the menu bar, then the Day, Week and Calendar windo
   worklog text in Jira unless you set one by hand. A week,
   a month or a range is one more call over the days' summaries. With `[summary] engine = "none"` the summary is
   built without AI; `[summary] time = ""` (or `zagon summary --at off`) stops the service writing it at all.
+  When the engine answers about billing, credits, extra usage or the plan's usage limit, or a call was paid as extra
+  usage, Zagon makes no more AI calls that day: summaries are built without AI and say why.
 - Evening task suggestions are a second AI call a day, the same way and on the same engine, at `[notify] worklog_at`
   (19:00) when the service sends notifications. It gets the day's stretches of work no task key linked: project,
   folder, session title, the first 100 characters of up to three typed messages (secrets redacted), edited file
