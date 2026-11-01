@@ -6,14 +6,18 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![Platforms: Linux, macOS](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey)
 
-Zagon reads the session files Claude Code and Codex already write and turns them into time per task: a Jira key
+Zagon reads the session files Claude Code and Codex already write (and what Cursor's agent reports through the same
+hooks) and turns them into time per task: a Jira key
 (`PROJ-123`) in the git branch, the session title, a message you typed or a commit links that work to the task. It
 plans the day's worklogs with a short text for each, reconciles a period with what is already in Jira, and writes to
 Jira only after you confirm. Around that: subscription limits, which sessions are waiting for you, tokens and $ per day
 and project, a daily "what was done" summary, alerts in Telegram or ntfy, context handoff between sessions, and an MCP
 server, so Claude or Codex can answer from the same data. Everything stays on your machine.
 
-![What to log in the Mac app (sample data): the day's worklog plan per task with a text for each row, where the texts come from, time already in Jira, the button that writes the plan to Jira](docs/images/worklog.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/worklog.png">
+  <img src="docs/images/worklog-light.png" alt="What to log in the Mac app (sample data): the day's worklog plan per task with a text for each row, where the texts come from, time already in Jira, the button that writes the plan to Jira">
+</picture>
 
 ## Install
 
@@ -22,6 +26,8 @@ Linux server (x86_64 or aarch64), a single static binary:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/a1lezakty/zagon/main/install.sh | sh -s -- --enable-service
 zagon doctor
+zagon setup jira      # optional: connect Jira Cloud by answering a few questions
+zagon notify setup    # optional: alerts through your own Telegram bot or an ntfy topic
 ```
 
 macOS 13 or later: [Zagon.dmg](https://github.com/a1lezakty/zagon/releases/latest/download/Zagon.dmg), then
@@ -58,9 +64,13 @@ limits and no service: those come from the hooks and the status line.
 
 With the MCP server registered (`zagon install` does it), ask in any session:
 
+- "Where do I stand?" (`status`: limits, sessions waiting for you, what is left to log today)
 - "What did I work on yesterday, and what should go to Jira?" (`worklog_plan`)
+- "Shorten the text of the PROJ-12 row and don't log the scratch one." (`worklog_text`, `worklog_skip`, each after
+  you confirm)
 - "Log yesterday to Jira." (`worklog_commit`, only on your explicit request)
 - "Do my Jira worklogs for October match my sessions?" (`worklog_reconcile`)
+- "What did I get done this month?" (`summary`)
 - "How much of my 5-hour and weekly limits is left?" (`limits`)
 - "Which sessions are waiting for me?" (`sessions`)
 - "Compare this week with the last one." (`week`)
@@ -78,18 +88,18 @@ All tools: [MCP](#mcp).
 | The current limits and cost inside a session | built in: Claude Code `/usage`, Codex `/status` |
 | Time per Jira task from your sessions, worklogs with texts, a period reconciled with Jira | Zagon |
 | A headless Linux server or tmux box: a service with alerts, MCP answers about limits, days and sessions | Zagon |
-| History after Claude Code's 30-day cleanup, Claude Code and Codex in one place, a Mac that reads your servers over SSH | Zagon |
+| History after Claude Code's 30-day cleanup, Claude Code, Codex and Cursor's agent in one place, a Mac that reads your servers over SSH | Zagon |
 
-Zagon does not count other providers or the editors' own agents (Cursor's Agent among them), has no GUI on Linux or
-Windows, and its Mac app is not notarized.
+Zagon shows no limits or $ for Cursor's agent (only its sessions, time and tokens), does not count other providers
+or the other editors' own agents, has no GUI on Linux or Windows, and its Mac app is not notarized.
 
 ## Privacy
 
 - **Local, no telemetry.** Data stays in `~/.zagon`. The network is used only for what you turn on: a notification
   channel (Telegram or ntfy), Jira, and updates from GitHub (`zagon update` when you run it, the Mac app once a day).
-- **Files, not accounts.** Zagon reads the transcripts in `~/.claude/projects` and Codex's session files. Limits come
-  from what Claude Code passes to its status line and from Codex's own files: it never reads OAuth tokens, cookies or
-  credential files and calls no usage API.
+- **Files, not accounts.** Zagon reads the transcripts in `~/.claude/projects`, Codex's session files and, for
+  Cursor's agent, its hooks and earlier chats. Limits come from what Claude Code passes to its status line and
+  from Codex's own files: it never reads OAuth tokens, cookies or credential files and calls no usage API.
 - **Numbers, not conversations.** The database keeps numbers, times, projects, branches and session titles. Text goes
   only into the local archive of transcripts and into short digests for three AI calls (the day summary, the worklog
   texts, the evening task suggestions), run on your own `claude` or `codex` subscription.
@@ -101,12 +111,15 @@ All the details: [Privacy in detail](#privacy-in-detail).
 What to turn off when your employer limits where code and conversations go:
 
 - **Archive.** The service keeps compressed copies of transcripts in `~/.zagon/archive`, also after Claude Code's own
-  cleanup (`cleanupPeriodDays`). Run the service with `zagon daemon --no-archive`: `systemctl --user edit zagon` (a
-  system unit: `sudo systemctl edit zagon-<user>`), add `[Service]`, `ExecStart=` and
-  `ExecStart=<path to zagon> daemon --no-archive`, then restart the service. Delete `~/.zagon/archive` if it was
+  cleanup. When your organization sets `cleanupPeriodDays` in Claude Code's managed settings, the archive keeps Claude
+  Code transcripts no longer than that (0: none) and removes older copies; `zagon doctor` says which rule applies.
+  Codex copies are not bound by it. To keep no copies at all, run the service with `zagon daemon --no-archive`:
+  `systemctl --user edit zagon` (a system unit: `sudo systemctl edit zagon-<user>`), add `[Service]`, `ExecStart=`
+  and `ExecStart=<path to zagon> daemon --no-archive`, then restart the service. Delete `~/.zagon/archive` if it was
   written.
-- **AI calls.** The day summary, the worklog texts (the service at 23:55, `zagon log plan --refresh`, the Mac app's
-  rebuild) and the evening task suggestions send titles, project and branch names, edited file names, commit subjects
+- **AI calls.** The day summary, the worklog texts (the service at 23:55, on a Mac without a server the app at 23:55,
+  `zagon log plan --refresh`, MCP `worklog_refresh`, the Mac app's Rebuild) and the evening task suggestions send
+  titles, project and branch names, edited file names, commit subjects
   and words of your typed messages (secrets redacted) to your Claude or Codex subscription. `[summary] engine = "none"`
   turns all of them off (summaries and texts are then built without AI); `[tasks] evening_suggestions = false` stops
   only the evening call. Restart the service after changing either.
@@ -120,22 +133,40 @@ What to turn off when your employer limits where code and conversations go:
 ### Checked with
 
 Claude Code 2.1.316 and Codex CLI 0.166.0 on a live server (1 November 2026); the test fixtures come from Claude Code
-2.1.233–2.1.250 and Codex 0.78–0.166. Both change their files often: if the numbers stop adding up after an update,
-open an issue with the output of `zagon doctor`.
+2.1.233–2.1.250 and Codex 0.78–0.166. `zagon doctor` shows the versions writing your logs next to these. Both change
+their files often: if the numbers stop adding up after an update, open an issue with the output of `zagon doctor`.
+Cursor's agent is new in 0.1.5: built from Cursor's documentation and the files of Cursor 3.27 on a Mac, not yet run
+against a live Cursor for long.
 
 ## Screens
 
-The macOS app (sample data): a worklog row opened, the menu bar, then the Day, Week and Calendar windows.
+The macOS app (sample data; light or dark as your system, or set in Settings → General → Appearance): a worklog row
+opened, the menu bar, then the Day, Week and Calendar windows.
 
-![A worklog row opened: the day summary that goes into the task's worklog, Rebuild text and Shorten, the sessions it comes from and why they count for the task](docs/images/worklog-row.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/worklog-row.png">
+  <img src="docs/images/worklog-row-light.png" alt="A worklog row opened: the day summary that goes into the task's worklog, Rebuild text and Shorten, the sessions it comes from and why they count for the task">
+</picture>
 
-<p align="center"><img src="docs/images/main.png" width="320" alt="Menu bar: 5-hour and weekly limits with a forecast, sessions waiting for you, sessions working, today's totals"></p>
+<p align="center"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/main.png">
+  <img src="docs/images/main-light.png" width="320" alt="Menu bar: 5-hour and weekly limits with a forecast, sessions waiting for you with a button that copies a session's summary, sessions working, today's totals">
+</picture></p>
 
-![Day: totals, timeline of sessions working and waiting for you, where usage went, what was done](docs/images/day.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/day.png">
+  <img src="docs/images/day-light.png" alt="Day: totals, timeline of sessions working and waiting for you, where usage went, what was done">
+</picture>
 
-![Week: session hours by day and project, weekly limit, projects of the week](docs/images/week.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/week.png">
+  <img src="docs/images/week-light.png" alt="Week: session hours by day and project, weekly limit, projects of the week, the week's summary">
+</picture>
 
-![Calendar: hours per day of the month, the selected day, search across sessions](docs/images/calendar.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/calendar.png">
+  <img src="docs/images/calendar-light.png" alt="Calendar: hours per day of the month, the selected day, the month's summary, search across sessions">
+</picture>
 
 > **Status: early releases (0.x).** Binaries and the macOS app are on the
 > [Releases](https://github.com/a1lezakty/zagon/releases) page. Commands in this README are the ones the latest
@@ -144,16 +175,17 @@ The macOS app (sample data): a worklog row opened, the menu bar, then the Day, W
 | Feature | State |
 |---|---|
 | Claude Code transcripts and Codex sessions: tokens, models, tools, projects, sub-agents | works |
+| Cursor's agent: sessions, live status, time and the tokens its hooks report (no limits, no $) | new in 0.1.5 |
 | Session time and your own time per day, live status from hooks (working / waiting for you) | works |
 | CLI reports: `today`, `day`, `week`, `sessions` | works |
-| Background service (`zagon daemon`), install / uninstall / doctor | works |
+| Background service (`zagon daemon`), install / uninstall / doctor, `zagon setup jira`, `zagon notify setup` | works |
 | Limits from the Claude Code status line and Codex session files: MCP `limits`, Telegram `/limits`, alerts | works |
 | MCP server for Claude Code and Codex (`zagon mcp`): reports and search | works |
 | Notifications (Telegram, ntfy) and a Telegram bot | works |
 | Daily "what was done" summary (`zagon summary`, sent in the evening) | works |
 | Compressed archive of transcripts, kept after Claude Code deletes them (`zagon archive`) | works |
 | Context handoff between sessions and tools (`zagon handoff`, MCP `handoff_*`) | works |
-| Task list, worklog plan, Jira (`zagon task`, `zagon log`, MCP `task_*`, `worklog_*`) | works |
+| Task list, worklog plan, Jira (`zagon task`, `zagon log`, MCP `task_*`, `worklog_*`), hours for invoices (`zagon log export`) | works |
 | macOS app: menu bar, Day / Week / Calendar / Tasks windows, servers over SSH, self-updating | works |
 | Release binaries, install script, `zagon update` | works |
 | Homebrew tap: the CLI formula (macOS, Linux) and the app's cask | works |
@@ -163,24 +195,38 @@ The macOS app (sample data): a worklog row opened, the menu bar, then the Day, W
 - Everything stays local and there is no telemetry. The only network requests are the notifications you configure
   (Telegram Bot API or ntfy, through `curl`), Jira if you connect it, and updates: `zagon update` goes to GitHub only
   when you run it (the service never checks), and the macOS app checks its update feed on GitHub once a day (turn
-  that off in Settings → Updates).
+  that off in Settings → General → Updates).
 - It reads only local files: Claude Code transcripts (`~/.claude/projects`), Codex session files and its thread index
   (`~/.codex/sessions`, `~/.codex/archived_sessions`, `~/.codex/state_*.sqlite`), plus what its own hooks and status
   line wrapper record. To name the project of a working directory it also looks for a `.git` above it (and a
   worktree's `commondir`) and reads the `origin` URL from its git config; it stores the directory paths and project
   names, never file contents or URLs.
+- Cursor's agent: its hooks (below) count it from when they first fire. For the days before, Zagon reads Cursor's
+  earlier chats (`~/.cursor/projects/*/agent-transcripts`, Cursor up to 2.x): your typed requests there are treated
+  like those of Claude Code (indexed for search, scanned for task keys, placed in the day when they carry a time
+  stamp), and the first line of a chat's first request (up to 80 characters) becomes its title. Cursor 3 keeps no
+  transcripts: Zagon opens Cursor's own list of conversations in its `state.vscdb` read-only and takes only ids,
+  workspace, times and titles, never the chats' text or Cursor's login; that list is copied to
+  `~/.zagon/cursor/headers.ndjson`.
+- While a Claude session is active, the service also runs `claude agents --json` (Claude Code 2.1.145 or later) for
+  the live statuses hooks may miss: session ids, folders and statuses.
 - Limits come only from what Claude Code passes to its status line (`rate_limits`, Claude Code 2.1.80+ on Pro and
   Max) and from Codex's own session files. Zagon never reads or stores OAuth tokens, cookies or credential files,
   and it does not call any usage API. So it shows the 5-hour and weekly windows, and the last reading when no
   session is running. The current reading is the highest one of the newest window, from any session or connected
-  server: a session left open keeps re-sending its older, lower reading. Readings carry no account, so two accounts
-  (say, a personal one on the Mac and a work one on a server) mix: the one whose window resets last is shown. The Mac
-  does not yet say which server a reading came from.
+  server: a session left open keeps re-sending its older, lower reading. Two accounts (say, a personal one on the Mac
+  and a work one on a server) still mix: the one whose window resets last is shown. When readings come from more than
+  one machine, the Mac names where the shown one came from next to the rings ("build-box · work"); the account name
+  is `[limits] account = "work"` in that machine's `~/.zagon/config.toml`.
 - The database does not hold the text of your conversations. It holds numbers, times, project names, git branches
-  and session titles: the ones Claude Code generates or you set, and Codex thread names (never your first prompt).
-  Hooks record ids, paths, event names and numbers only, never prompts or tool input.
-- The archive does keep text: compressed copies of the transcript files, in `~/.zagon/archive`, so your history
-  outlives Claude Code's 30-day cleanup. Run the service with `zagon daemon --no-archive` to turn that off.
+  and session titles: the ones Claude Code generates or you set, Codex thread names (never your first prompt), and
+  Cursor's conversation names (a chat read from an old Cursor transcript: the first line of its first request).
+  Hooks record ids, paths, event names and numbers only, never prompts or tool input (of Cursor's prompts, only the
+  task keys they mention, by `[tasks] key_pattern`).
+- The archive does keep text: compressed copies of the Claude Code and Codex transcript files (not Cursor's), in
+  `~/.zagon/archive`, so your history outlives Claude Code's 30-day cleanup. An organization's `cleanupPeriodDays`
+  in Claude Code's managed settings bounds the Claude Code copies ([Under an NDA](#under-an-nda)). Run the service
+  with `zagon daemon --no-archive` to turn the archive off.
 - The daily summary written by an AI is one call a day on your own subscription: `claude -p --safe-mode` on a cheap
   model (no CLAUDE.md, hooks, plugins or MCP servers of yours), or `codex exec --ephemeral --ignore-user-config`.
   It gets a compact digest: titles, projects, branches, linked tasks (key and title), times, edited files, your
@@ -190,7 +236,9 @@ The macOS app (sample data): a worklog row opened, the menu bar, then the Day, W
   linked task's card (not what it was or what is left) become that task's text for the day, which is also its
   worklog text in Jira unless you set one by hand. A week,
   a month or a range is one more call over the days' summaries. With `[summary] engine = "none"` the summary is
-  built without AI; `[summary] time = ""` (or `zagon summary --at off`) stops the service writing it at all.
+  built without AI; `[summary] time = ""` (or `zagon summary --at off`) stops the service writing it at all. When the
+  AI CLI answers about money (credit balance, extra usage, a spending cap), or a call was paid as extra usage, Zagon
+  makes no more AI calls that day and builds the summary without AI, saying why.
 - Evening task suggestions are a second AI call a day, the same way and on the same engine, at `[notify] worklog_at`
   (19:00) when the service sends notifications. It gets the day's stretches of work no task key linked: project,
   folder, session title, the first 100 characters of up to three typed messages (secrets redacted), edited file
@@ -202,7 +250,9 @@ The macOS app (sample data): a worklog row opened, the menu bar, then the Day, W
 - Your typed messages go into a contentless full-text index used for search: the words can be searched, the text
   itself is not kept. Pass `--no-index-prompts` to every command that scans (`zagon daemon`, `zagon scan`,
   `zagon mcp`, the reports) to turn that off; the Mac app always indexes.
-- Data lives in `~/.zagon` (or `$ZAGON_DIR`): `zagon.db`, `spool/`, `archive/`, `logs/`, `config.toml`, `backup/`.
+- Data lives in `~/.zagon` (or `$ZAGON_DIR`): `zagon.db`, `spool/`, `archive/`, `logs/`, `config.toml`, `backup/`,
+  `exports/`, `cursor/`; `jira-token` and `telegram-token` (mode 0600) when `zagon setup jira` / `zagon notify setup`
+  saved them; `zagon.db.v<N>` copies that `zagon update` keeps before a schema change.
 
 ## Install on a Linux server
 
@@ -217,14 +267,18 @@ after `--`. Without `--enable-service` the service unit is written but not start
 binary for your CPU from [Releases](https://github.com/a1lezakty/zagon/releases), then
 `install -m 755 zagon-linux-x86_64 ~/.local/bin/zagon && zagon install --enable-service`.
 
-`zagon doctor` lists what is installed, shows the service log, and exits with 1 if something is missing. Then set up
-[notifications](#notifications) if you want them.
+`zagon doctor` lists what is installed and whether the service runs (and wrote its health line in the last 15
+minutes), the notification channels and whether the last message got through, the Claude Code and Codex versions
+writing the logs against the tested ones, the archive's rule and the database copies kept; it shows the service log
+and exits with 1 if something is missing (its `warn` and `info` lines never change that). Then connect Jira
+(`zagon setup jira`) and [notifications](#notifications) (`zagon notify setup`) if you want them.
 
 What `zagon install` changes:
 
 - **`~/.claude/settings.json`**:
   - hooks for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PostToolUse`, `Notification`, `Stop` and
-    `SessionEnd`, each running `zagon hook claude <event>`;
+    `SessionEnd`, each running `zagon hook claude <event>`. Cursor's agent runs these hooks too (Cursor Settings →
+    Agents → Third-Party Imports, on by default), which is how Zagon counts it;
   - the status line command becomes `zagon statusline`. Your previous command is saved in `~/.zagon/config.toml`
     (`[statusline] original_command`) and still runs with the same input, so your status line looks the same.
   - Opt out with `--no-claude` or `--no-statusline`.
@@ -245,13 +299,17 @@ What `zagon install` changes:
 - **`~/.codex/hooks.json`**, if `~/.codex` exists:
   - hooks for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `PostToolUse`, `Stop`, `Interrupt` and
     `SessionEnd`;
-  - open `/hooks` in Codex once to trust them;
+  - Codex runs a hook only once you trust it: open `/hooks` in Codex and press `t`, again after the hooks' command
+    changes; `zagon install` and `zagon doctor` say when they are not trusted yet;
   - opt out with `--no-codex`.
 - **MCP registration** (default `--mcp`): runs `claude mcp add --scope user zagon -- zagon mcp` and
-  `codex mcp add zagon -- zagon mcp`. The second one writes `[mcp_servers.zagon]` into `~/.codex/config.toml`.
+  `codex mcp add zagon -- zagon mcp`. The second one writes `[mcp_servers.zagon]` into `~/.codex/config.toml`. With
+  no `claude` on PATH, the `claude` bundled with an editor's Claude Code extension (VS Code, Cursor and other forks)
+  does the first.
 - **systemd units**:
   - `~/.config/systemd/user/zagon.service`, running `zagon daemon`;
-  - `--enable-service` enables and starts it;
+  - `--enable-service` enables and starts it; as root on a host without a user systemd (ssh without linger, a
+    container) it writes and enables the system unit instead, by itself;
   - on a host without a user systemd, run `sudo zagon install --system-service --enable-service`. That writes
     `/etc/systemd/system/zagon-<user>.service` running as you: under sudo, install works for the user who ran sudo
     (or `--user <name>`), writes the files in that user's home as that user, and leaves the MCP registration to a
@@ -281,7 +339,11 @@ zagon update            # replace the binary and restart the service
 
 `zagon update` downloads the latest release for your CPU, checks it against `SHA256SUMS`, and only then replaces
 its own binary (atomically, in the same directory). The old binary stays next to it as `zagon.prev`: move it back to
-roll back (not across a database schema change: the older binary refuses a newer database). Running services are restarted. If the binary is in `/usr/local/bin`, run `sudo zagon update` (behind a
+roll back (not across a database schema change: the older binary refuses a newer database). From 0.1.5 on, an update
+that moves the database to a newer schema says so first, keeps a copy as `~/.zagon/zagon.db.v<N>` and prints how to
+roll back with it (`zagon.prev` plus that copy); with too little disk space for the copy it warns instead, and it
+refuses a version that cannot open your database. `zagon doctor` lists the copies kept. Running services are
+restarted. If the binary is in `/usr/local/bin`, run `sudo zagon update` (behind a
 proxy: `sudo -E zagon update`, since sudo drops the proxy variables). On macOS the app updates itself, the `zagon`
 inside it included.
 
@@ -292,7 +354,8 @@ update servers and the Mac together and do not roll back to 0.1.0.
 
 **0.1.5 moves the database to schema v7** (where a task key came from). 0.1.4 does not open a v7 database, so the
 `zagon.prev` that `zagon update` leaves cannot roll you back. Keep a copy before you update; the update itself is run
-by the old binary, so it cannot make the copy for you:
+by the old binary, so it cannot make the copy for you. Quit the open Claude Code and Codex sessions first (their
+`zagon mcp` uses the database too), then:
 
 ```sh
 systemctl --user stop zagon        # a system unit: sudo systemctl stop zagon-<user>
@@ -301,8 +364,11 @@ zagon update                       # in /usr/local/bin: sudo zagon update
 systemctl --user start zagon       # update restarts only a running service; or: sudo systemctl start zagon-<user>
 ```
 
-To go back to 0.1.4 later: stop the service, move the current `~/.zagon/zagon.db*` files aside, copy the saved ones
-back, and move `zagon.prev` over `zagon`.
+To go back to 0.1.4 later: stop the service and quit the Claude Code and Codex sessions, move the current
+`~/.zagon/zagon.db*` files aside, copy the saved ones back, move `zagon.prev` over `zagon`, and start the service.
+
+Update the Mac app with the servers: a 0.1.4 app reads a 0.1.5 server, but lists its Cursor sessions as Claude ones
+and prices their tokens of Claude models at API prices.
 
 ## Use
 
@@ -318,7 +384,9 @@ zagon summary --week 2026-10-29  # the week of that day; --month 2026-10, --from
 zagon summary --at 21:00       # when the service writes the day summary (off = never)
 zagon archive stats            # archived sessions, bytes before / after compression
 zagon archive cat <session>    # print an archived transcript (id or a unique prefix)
+zagon notify setup telegram    # your own bot (the chat is found when you write /start to it), or: ntfy; then a test
 zagon notify test              # a test message to every configured channel
+zagon setup jira               # connect Jira Cloud: address, email, API token (typed, not shown), checked before saving
 zagon tz Asia/Almaty           # the zone days are cut in (no argument: show it; `system` = the machine's)
 zagon daemon --verbose         # what the service runs: follow files, keep totals current, notify, archive
 zagon export --since 0         # changed totals as NDJSON, read by the macOS app over SSH
@@ -330,6 +398,7 @@ zagon log text set 41 "…"      # a row's worklog text by hand (log text rebuil
 zagon log exclude add project example-tool   # never log this work (project | task | session; log exclude rm|list)
 zagon log config tz Asia/Nicosia             # [worklog] settings: tz, projects, day_summary, rebuild_at_end
 zagon log reconcile --from 2026-09-01 --to 2026-10-31 --md   # sessions against your Jira worklogs per task and day (--csv, --json)
+zagon log export --from 2026-10-01 --to 2026-10-31 > october.csv   # hours for invoices; --format toggl: Toggl Track's import
 zagon update                   # the latest release (see Update above)
 ```
 
@@ -382,8 +451,11 @@ Name worker sessions like their tmux targets (`claude --name`): then only send-k
 ### Jira
 
 Jira is optional and stays off until you connect it. Only Jira Cloud (`*.atlassian.net`) works: Zagon uses its REST
-API v3 search, which Jira Server and Data Center do not have. In the Mac app: Settings → Jira (address, email, API
-token). On a server, set it in `~/.zagon/config.toml`:
+API v3 search, which Jira Server and Data Center do not have. In the Mac app: Settings → Jira and worklogs (address,
+email, API token), also reached from the Connect Jira button where Jira is missing. On a server, run
+`zagon setup jira`: it asks for the address, your Atlassian email and an API token (typed, not shown), checks them
+with Jira before saving anything, writes `[jira]` into `~/.zagon/config.toml` and keeps the token in
+`~/.zagon/jira-token` (mode 0600). Or set it by hand in `~/.zagon/config.toml`:
 
 ```toml
 [jira]
@@ -402,16 +474,22 @@ token_file = "~/.config/zagon/jira-token"   # an Atlassian API token, the file's
 ```
 
 Worklog texts: each plan row gets 1–2 sentences about its own stretch, and the longest row of each task the day's
-summary (what the task was, what the check found, what was done), written by the summary's AI engine (`[summary]`) in
-the language of `[notify] lang`. They are built by `zagon log plan --refresh` (when sessions worked after the last
-build) and by the service at 23:55; a text set by hand is never replaced. The summary goes to Jira only when you ask:
-`zagon log commit --with-summary` puts it into the task's longest worklog, `--summary-comment PROJ-1` writes it as one
-comment on the issue (once per task and day). A session counts for a task when the key is in what you typed, in the
-title (first heading) of a brief file your message points to, in the git branch, a commit, the session title or a manual link —
-never from memory files, CLAUDE.md or files the agent read; a paragraph or numbered item with a clock range (a pasted worklog list) gives no
-key; once Jira's project list is known, only keys of those projects (and `projects`) count.
+summary (what the task was, what the check found, what was done), written by the summary's AI engine (`[summary]`)
+in the language of `[notify] lang`. They are built by `zagon log plan --refresh` (when sessions worked after the
+last build) and by the service at 23:55; a text set by hand is never replaced. The summary goes to Jira only when
+you ask: `zagon log commit --with-summary` puts it into the task's longest worklog, `--summary-comment PROJ-1`
+writes it as one comment on the issue (once per task and day). A session counts for a task when the key is in what
+you typed, in the title (first heading) of a brief file your message points to, in the git branch, a commit, the
+session title or a manual link — never from memory files, CLAUDE.md or files the agent read; a paragraph or numbered
+item with a clock range (a pasted worklog list) gives no key; once Jira's project list is known, only keys of those
+projects (and `projects`) count.
 
-Create the token at id.atlassian.com → Security → API tokens, then keep it in a file only you can read:
+Hours for invoices: `zagon log export --from 2026-10-01 --to 2026-10-31` prints the plan's rows and your worklogs in
+Jira as CSV (`date,start,end,hours,task,title,text,state`, `state` = `planned` or `logged`), in the worklog zone;
+`--format toggl` gives Toggl Track's import CSV. It plans each day again without AI and exits with 2 when Jira is set
+up but could not be read (the export is then partial).
+
+By hand, create the token at id.atlassian.com → Security → API tokens, then keep it in a file only you can read:
 
 ```sh
 mkdir -p ~/.config/zagon && chmod 700 ~/.config/zagon
@@ -422,7 +500,8 @@ chmod 600 ~/.config/zagon/jira-token
 - Only https is accepted (plain http only to localhost). The token goes to `curl` through its config on stdin, never
   on the command line or in logs.
 - Zagon reads Jira (read-only) at most once an hour, or when you run `zagon task import`. It writes only after you
-  confirm: `zagon log commit`, or creating an issue from a suggestion.
+  confirm: `zagon log commit`, or creating an issue from a suggestion. The service reads `[jira]` when it starts:
+  restart it after a change.
 - `zagon doctor` says whether Jira is configured.
 
 ### Editors: VS Code, Cursor and other forks, JetBrains
@@ -447,9 +526,19 @@ tasks: their transcripts land in `~/.claude/projects`), but the limits need one 
   setting.
 - JetBrains IDEs: the Claude Code plugin runs the regular `claude` in the IDE's terminal, so the status line and the
   limits work as in any terminal.
-- The editors' own agents (Cursor's Agent, Devin / Windsurf, Trae, VS Code's agent mode) are not Claude Code, so their
-  work is not counted. Several of them run the Claude Code hooks from `~/.claude/settings.json` ("third-party hooks",
-  on by default in Cursor and Devin); Zagon ignores those calls, so they do not show up as Claude sessions.
+- Cursor's own agent is counted as a third AI next to Claude Code and Codex: its sessions, live status (working /
+  waiting / ended), project, model and the tokens its hooks report. Cursor runs the Claude Code hooks from
+  `~/.claude/settings.json` (Settings → Agents → Third-Party Imports, on by default), so its time is exact from the
+  first hook on; earlier days come from its chats on disk (Cursor up to 2.x) or its list of conversations (Cursor 3),
+  and that time is approximate (each Cursor 3 conversation gets a turn of at most 10 minutes from its start). A
+  conversation stops waiting 30 minutes after its last answer, since Cursor rarely says it ended. No limits and no $:
+  Cursor keeps plan usage and its prices on its servers, reachable only with your Cursor login token or browser
+  cookie, and Zagon never reads credentials, so its tokens are left out of the $ (`$ ?` in the CLI). Over Remote SSH
+  its hooks run on the server, so the Zagon there counts it and the Mac shows it from there; for Cursor windows on the
+  Mac itself, Zagon has to run on the Mac.
+- The other editors' own agents (Devin / Windsurf, Trae, VS Code's agent mode) are not counted. Some run the Claude
+  Code hooks too ("third-party hooks", on by default in Devin); Zagon ignores those calls, so they do not show up as
+  Claude sessions.
 - Task suggestions and summaries use the `claude` CLI. When only the editor extension is installed, Zagon falls back
   to the newest Claude Code binary bundled with it in any of those editors
   (`~/.<editor>/extensions/anthropic.claude-code-*/resources/native-binary/claude`).
@@ -469,22 +558,28 @@ codex mcp add zagon -- zagon mcp
 transcripts and `~/.zagon` like `zagon mcp` does; live status and Claude limits still need the hooks and the status
 line (the app's Connect or `zagon install`). It does not update itself: install the new bundle after each update. A
 bundle older than the database stops answering, and a newer one moves the database to its schema before the app or
-service has it, so keep them on the same version. Claude Code and Codex load MCP servers when a session starts: the tools show up in
-sessions started after the registration, so restart the ones you have open (`/mcp` in Claude Code lists them).
+service has it, so keep them on the same version. Claude Code and Codex load MCP servers when a session starts: the
+tools show up in sessions started after the registration, so restart the ones you have open (`/mcp` in Claude Code
+lists them).
 
-Answers are short and carry numbers; a long one, such as a day exported to Markdown, goes to a file in
-`~/.zagon/exports`. Examples of questions: [Ask Claude or Codex](#ask-claude-or-codex).
+Answers are short and carry numbers; a long one, such as a day exported to Markdown or a long reconciliation, goes to
+a file in `~/.zagon/exports` and the answer gives its path. Days are `date`, ranges `from` and `to` in every tool
+(`YYYY-MM-DD`, `today` and `yesterday` work too). Examples of questions: [Ask Claude or Codex](#ask-claude-or-codex).
 
-- reports: `limits`, `sessions` (live status, how long each waits for you), `day`, `week`, `range`, `search` (titles
-  and your typed words), `export_day`;
+- reports: `status` (limits, sessions waiting for you and what is left to log today, in one call), `limits`,
+  `sessions` (live status, how long each waits for you), `day` (with the day's summary), `week`, `range` (these three
+  with the cost at API list prices), `summary` (what was done over a week or a month, from the kept summaries, no AI
+  call), `search` (titles and your typed words), `export_day`;
 - settings: `settings_timezone`;
 - handoff: `handoff_create`, `handoff_get`, `handoff_list`, and the prompt `/mcp__zagon__resume <id|latest>`;
 - tasks: `task_list`, `task_get`, `task_create`, `task_update`, `task_suggestions`, `task_suggestions_answer`,
   `task_create_in_jira` (makes a suggested task a Jira issue; shows a preview first, creates only with `confirm: true`
   after you said so);
-- worklogs: `worklog_plan`, `worklog_config` (the `[worklog]` settings, read-only), `worklog_reconcile` (sessions
-  against Jira worklogs over a range, read-only), `worklog_commit` (needs `confirm: true` and is meant only for an
-  explicit request).
+- worklogs: `worklog_plan`, `worklog_refresh` (builds the day's texts again: one AI call), `worklog_config` (the
+  `[worklog]` settings, read-only), `worklog_reconcile` (sessions against Jira worklogs over a range, read-only);
+  changes to the plan, each only with your confirmation and none of them written to Jira: `worklog_text` (a row's
+  text), `worklog_skip` (rows not to log), `worklog_exclude` (never log a project, task or session); and
+  `worklog_commit` (needs `confirm: true` and is meant only for an explicit request).
 
 ## Notifications
 
@@ -497,8 +592,10 @@ The service sends alerts through your own Telegram bot or an [ntfy](https://ntfy
   a worker another session drives: that session watches it);
 - the day summary at 20:00, with a picture of the day (written at that time even with no channel configured).
 
-Nothing is sent during quiet hours (23:00–08:00). Keep notifications on one host only. Every key in
-`~/.zagon/config.toml` is optional; the main ones with their defaults:
+Nothing is sent during quiet hours (23:00–08:00). Keep notifications on one host only. The quickest way to set them
+up is `zagon notify setup` (or `zagon notify setup telegram`, `zagon notify setup ntfy`): it asks a few questions,
+saves the settings and sends a test message. Every key in `~/.zagon/config.toml` is optional; the main ones with
+their defaults:
 
 ```toml
 timezone = ""               # e.g. "Europe/Berlin"; empty = system zone. Days are cut at this zone's midnight.
@@ -533,14 +630,23 @@ engine = "claude"           # claude | codex | none
 model = "haiku"
 timeout = 120               # seconds; on failure the summary is built without AI
 time = "20:00"              # when the service writes the day summary ("" = off); also `zagon summary --at`
+
+[limits]
+account = "work"            # optional: names this machine's subscription; shown next to the rings when limits come
+                            # from more than one machine
 ```
 
 Check with `zagon notify test`. The service reads the file when it starts, so restart it after a change
 (`[summary] time` and the time zone are picked up without a restart).
 
-**Telegram.** Create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`) and put its token in
-`~/.config/zagon/tg-bot-token` (`chmod 600`). To find your `chat_id`, send the bot any message (`/start`), then ask
-Telegram for the bot's updates; the token goes to `curl` through its config on stdin, not on the command line:
+**Telegram.** Create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`), then run
+`zagon notify setup telegram`: paste the token (it is not shown, and is kept in `~/.zagon/telegram-token`, mode 0600),
+write `/start` to the bot, and Zagon finds the chat by itself. If the service already runs with this bot, stop it
+meanwhile, and restart it after the setup.
+
+By hand: put the token in `~/.config/zagon/tg-bot-token` (`chmod 600`). To find your `chat_id`, send the bot any
+message (`/start`), then ask Telegram for the bot's updates; the token goes to `curl` through its config on stdin,
+not on the command line:
 
 ```sh
 printf 'url = "https://api.telegram.org/bot%s/getUpdates"\n' "$(cat ~/.config/zagon/tg-bot-token)" |
@@ -552,9 +658,10 @@ tool already reads this bot's updates, the two take each other's messages, so gi
 `commands = false`; the evening "Yes / No" buttons need the commands on).
 
 **Only MCP, no Telegram?** MCP answers when you ask; it never sends anything by itself. For the alerts (limits at
-80 % and 95 %, a session waiting for you) the lightest channel is ntfy: one line, `[ntfy] topic = "<a long random
-name>"`, and the ntfy app on your phone subscribed to it. Anyone who knows the topic can read it on ntfy.sh: pick a
-name nobody can guess, or run your own server (`url`).
+80 % and 95 %, a session waiting for you) the lightest channel is ntfy: `zagon notify setup ntfy` offers a
+hard-to-guess topic and saves it (or set one line, `[ntfy] topic = "<a long random name>"`), and the ntfy app on your
+phone subscribes to it. Anyone who knows the topic can read it on ntfy.sh: keep the name unguessable, or run your own
+server (`url`).
 
 ## macOS app
 
@@ -568,16 +675,26 @@ signature, because there is no paid Apple developer account, so macOS blocks it 
    macOS 15 and later, right-click → Open no longer bypasses this.
 4. In Zagon's window click **Connect Claude Code / Codex**: it does what `zagon install` does on a server (hooks,
    status line, MCP, the editor setting; see [what install changes](#install-on-a-linux-server)), and Disconnect
-   undoes it. Jira is in Settings → Jira.
+   undoes it. Jira is in Settings → Jira and worklogs (or the Connect Jira button where Jira is missing).
 
 On first launch macOS may ask whether Zagon can access your Documents or Desktop folder: it asks when your Claude
 Code or Codex projects live there (Zagon reads their `.git` to tell which checkout a session belongs to), and the
 Desktop also when you save diagnostics there.
 
-It needs macOS 13 or later. It offers servers from `~/.ssh/config`; each server needs the Linux version installed.
-After that the app updates itself: it checks GitHub for a new release once a day and asks before installing (the
-update is signed). Turn the check off, or check now, in Settings → Updates. Because the signature is ad-hoc, macOS may
-ask again for permissions tied to it (such as access to a folder) after an update.
+It needs macOS 13 or later. It offers servers from `~/.ssh/config`; each server needs the Linux version installed (a
+server without it gets a Copy install command button). After that the app updates itself: it checks GitHub for a new
+release once a day and asks before installing (the update is signed). Turn the check off, or check now, in Settings →
+General → Updates. Because the signature is ad-hoc, macOS may ask again for permissions tied to it (such as access to
+a folder) after an update.
+
+- Settings are in tabs: General (appearance: match the system, dark or light; time zone; updates), Claude Code and
+  Codex (Connect, the editor panels), Jira and worklogs, Notifications, Servers.
+- A Mac without a server rebuilds the day summary and the worklog texts at 23:55 in the worklog time zone, as a
+  server's service does: up to one AI call a day, only when there was work on tasks.
+- Session rows have a button that copies the session's summary to continue it in a new session (the same as
+  `zagon handoff`). A click on a Cursor session copies `cursor <folder>` (`cursor --remote ssh-remote+<server>
+  <folder>` for a server's).
+- macOS asks for notification permission when you first want notifications, not at launch.
 
 ## Build from source
 

@@ -15,7 +15,8 @@ Homebrew, or let Zagon.app update itself.
 
 ## What Zagon touches
 
-Zagon runs locally and has no telemetry. It reads Claude Code transcripts and Codex session files and keeps its
+Zagon runs locally and has no telemetry. It reads Claude Code transcripts, Codex session files and, for Cursor's
+agent, its hook calls, earlier chats and list of conversations (read-only), and keeps its
 database, settings and transcript archive in `~/.zagon`; tokens you give it (Jira, Telegram) stay in files only you
 can read. Its install step adds hooks, a status line wrapper and an MCP server to the Claude Code and Codex settings
 (backed up first). Its network requests are only the notifications and Jira you configure, and updates. Details:
