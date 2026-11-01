@@ -151,6 +151,13 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   or `/` (one that works in many projects), counts for its own `dir_project.project` (its last component when not
   resolved). Tool calls go to the session's own project. `cache_write_1h` (v5) as in `usage_hour`.
 - `limit_snapshot`, `task*`, `worklog_plan`, `summary`, `handoff`, `fts` (contentless FTS5) + `fts_doc`.
+- Limit sources live in `meta` (0.1.5, no column in `limit_snapshot`): `limit_src:<tool>:<window>:<source>` = the `ts`
+  of that source's newest reading of the window (`Store.addLimitSnapshot(_:source:)`; `<source>` "" = this store's own
+  readings, else the ssh alias `ExportImport` was given), `limit_account:<alias>` = the server's `[limits] account`
+  (removed when its `limit` lines come without one). `Query.limitSources` names the source of each current reading
+  (its own newest reading, else the source's newest reading of the same window period) and whether more than one
+  source has a reading of that tool within 8 days. The Mac drops an alias's keys with its other rows (`Remote.forget`).
+  The pace history (`Query.limitHistory`) still mixes sources.
 
 ## Time rules
 
@@ -224,14 +231,17 @@ NDJSON on stdout, keys in snake_case, one consistent read snapshot; the Mac app 
 - `{"type":"summary", day, engine, text, created, seq}` — a kept day or period summary (`summary` row) changed after
   `since` (`meta` `summary_seq:<day>`; `since` 0 sends all): `day` = `YYYY-MM-DD` or `from..to`, `text` = the
   `SummaryDoc` JSON (`Notify/SummaryDoc.swift`); the client stores it as its `summary` row of that day and engine;
-- `{"type":"limit", tool, window, used_pct, resets_at, window_minutes, ts}` — the current reading per (tool, window)
-  (`Store.latestLimits`), in every export;
+- `{"type":"limit", tool, window, used_pct, resets_at, window_minutes, ts, host, account}` — the current reading per
+  (tool, window) (`Store.latestLimits`), in every export; `host` (0.1.5) = the exporting store's `meta.host`, `account`
+  (0.1.5) = its `[limits] account`, left out when not set; a line without them (0.1.4) = no account (the Mac's
+  `Remote.apply` takes host names of a server from its `session` / `day` lines only, not from this `host`);
 - unknown line types and keys must be ignored (the format only grows).
 
 `ExportImport(store:source:)` (`Export/ExportImport.swift`) is the reference client: it applies an export to
 another store, keeping imported `usage_hour` / `tool_use` / `activity` rows on one `source_file` row
 `export:<source>` (your time as `activity` with `kind = 'user'`, `session_id = ''`), so local ingest never touches
-them and `Reports` on that store give the server's numbers. Tested: a full export imported into an empty store gives
+them and `Reports` on that store give the server's numbers. Its `limit` readings are stored with `<source>` as their
+source (`limit_src:…:<source>`, `limit_account:<source>`). Tested: a full export imported into an empty store gives
 the same `Reports.day`, per-agent and per-tool sums and intervals; incremental exports applied on top, each twice,
 double nothing.
 
@@ -323,6 +333,10 @@ claude.week = [80, 95]
 codex.five_hour = [80, 95]
 codex.week = [80, 95]
 codex.<limit_id> = [80, 95]   # a Codex premium limit, both of its windows (stored as `<limit_id>:primary|secondary`)
+
+[limits]
+account = ""              # e.g. "work": names this machine's subscription; with readings from more than one
+                          # source (this Mac, servers) the Mac app shows "<server> · <account>" next to the rings
 
 [telegram]
 token_file = "~/.config/zagon/tg-bot-token"   # the user's own bot; the token is read from this file only

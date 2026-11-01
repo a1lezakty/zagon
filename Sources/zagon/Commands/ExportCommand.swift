@@ -9,6 +9,7 @@ struct ExportCommand: ParsableCommand {
 
     func run() throws {
         let store = try common.open()
-        try Export.run(store: store, since: since, version: zagonVersion) { print($0) }
+        try Export.run(store: store, since: since, version: zagonVersion,
+                       account: Settings.limitsAccount(ZagonPaths(dir: common.dataDir))) { print($0) }
     }
 }

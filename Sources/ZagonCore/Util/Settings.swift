@@ -118,6 +118,12 @@ public enum Settings {
         return n > 0 ? "localtime=" + String(decoding: buf[0..<n], as: UTF8.self) : "system"
     }
 
+    /// `[limits] account = "work"`: names the subscription this machine's limit readings belong to, for a user with two
+    /// (shown next to the rings when readings come from more than one source); nil = not set.
+    public static func limitsAccount(_ paths: ZagonPaths) -> String? {
+        TOMLLite.string(at: paths.config, section: "limits", key: "account").flatMap { $0.isEmpty ? nil : $0 }
+    }
+
     /// `[tasks] key_pattern` (a regular expression), else the default; `""` turns task keys off.
     public static func keyPattern(_ paths: ZagonPaths) -> String? {
         let v = TOMLLite.string(at: paths.config, section: "tasks", key: "key_pattern")

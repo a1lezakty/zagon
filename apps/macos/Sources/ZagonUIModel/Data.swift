@@ -44,12 +44,33 @@ public struct LimitWindow: Sendable {
     /// Whose window this is and when it was read; nil in samples that do not say.
     public var tool: Tool?
     public var readAt: Date?
-    public init(usedPct: Double, resetsAt: Date, pctPerHour: Double? = nil, tool: Tool? = nil, readAt: Date? = nil) {
+    /// Whose reading it is; set only when limits come from more than one source (`Query.limitSources`).
+    public var from: LimitFrom?
+    public init(usedPct: Double, resetsAt: Date, pctPerHour: Double? = nil, tool: Tool? = nil, readAt: Date? = nil,
+                from: LimitFrom? = nil) {
         self.usedPct = usedPct; self.resetsAt = resetsAt; self.pctPerHour = pctPerHour; self.tool = tool; self.readAt = readAt
+        self.from = from
     }
 
     /// Used percent as the rings show it; nil when the reading is older than its reset (the window started over).
     public func pct(at now: Date) -> Int? { resetsAt > now ? Int(usedPct.rounded()) : nil }
+}
+
+/// Where a limit reading came from: a server (its ssh alias; nil = this Mac) and its `[limits] account`.
+public struct LimitFrom: Sendable, Equatable {
+    public var server: String?
+    public var account: String?
+    public init(server: String? = nil, account: String? = nil) { self.server = server; self.account = account }
+
+    /// "build-box · work", "this Mac".
+    public func label(_ f: Fmt) -> String { (server ?? f.t("sum.src.local")) + (account.map { " · " + $0 } ?? "") }
+
+    /// The labels of some windows, each once: "this Mac · work / build-box"; nil when none says.
+    static func label(_ ws: [LimitWindow?], _ f: Fmt) -> String? {
+        var out: [String] = []
+        for l in ws.compactMap({ $0?.from?.label(f) }) where !out.contains(l) { out.append(l) }
+        return out.isEmpty ? nil : out.joined(separator: " / ")
+    }
 }
 
 /// One AI's two windows.

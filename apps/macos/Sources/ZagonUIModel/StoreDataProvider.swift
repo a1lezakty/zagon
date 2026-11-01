@@ -297,11 +297,16 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
     public func limits() -> Limits {
         read(Limits()) {
             let all = try query.limits(now: now.timeIntervalSince1970)
+            // Whose reading each is, said only with more than one source; a failed read loses only the labels.
+            let sources = (try? query.limitSources(now: now.timeIntervalSince1970,
+                                                   localAccount: Settings.limitsAccount(paths))) ?? []
             func window(_ tool: ToolKind, _ name: String) -> LimitWindow? {
                 guard let r = all.first(where: { $0.tool == tool && $0.window == name }) else { return nil }
                 let reset = r.resetsAt ?? r.ts + Double((r.windowMinutes ?? 0) * 60)
+                let from = sources.first { $0.tool == tool && $0.window == name && $0.several }
+                    .map { LimitFrom(server: $0.source.isEmpty ? nil : $0.source, account: $0.account) }
                 return LimitWindow(usedPct: r.usedPct, resetsAt: Self.date(reset), pctPerHour: r.pctPerHour,
-                                   tool: tool == .codex ? .codex : .claude, readAt: Self.date(r.ts))
+                                   tool: tool == .codex ? .codex : .claude, readAt: Self.date(r.ts), from: from)
             }
             // For `AILimits.weekAlone`: week readings over a minute after the 5-hour one was due (a reset's own reading
             // lands within seconds of it); a failed read keeps both rings.
@@ -341,6 +346,8 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
     /// The editors' settings changed (`zagon editor-panels`, connect): the next `limits()` reads them again.
     public func forgetEditors() { queue.sync { editors = nil } }
 
+    // ponytail: the pace history mixes sources: with two accounts it runs through both accounts' readings of the window
+    // (the rings say whose the current one is, `Query.limitSources`). Exact: a source column in `limit_snapshot` (schema v8).
     public func limitHistory(_ kind: LimitKind) -> [LimitPoint] {
         read([]) {
             let windows: [(ToolKind, String)] = kind == .fiveHour ? [(.claude, "five_hour"), (.codex, "primary")]
