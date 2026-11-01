@@ -121,7 +121,9 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   NULL = typed; `brief` = from the first non-empty line of a brief the message names (an absolute or `~/` path to a
   regular .md/.txt file of at most 256 KB on this machine, at most 5 paths per message; never the brief's body). A key
   typed and in a brief at once stays typed. The v7 migration marks Claude files changed in the last 14 days for one
-  recount (`source_file.recount`, as in v5), so their keys follow these rules; older days keep their keys.
+  recount (`source_file.recount`, as in v5), so their keys follow these rules; older days keep their keys, and so does
+  a file whose recount comes out with other totals. A brief is read when its message is scanned (also by the
+  recount): its title then; the title is its first heading among the first 5 non-empty lines, else the first line.
 - Worklog texts live in `meta` (no table): `wltext:<auto|manual>:<day>:<task>:<start>`, `wlsum:<auto|manual>:<day>:<task>`,
   `wltext_built:<day>`, `wltext_auto:<day>` (the 23:55 rebuild done), `wlsummary:<day>:<jira key>` and
   `wlcomment:<day>:<jira key>` (a day summary in Jira), see docs/dev/tasks.md. `log plan --json` (`DayPlan`) only gained

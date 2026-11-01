@@ -34,7 +34,7 @@ public struct WorklogConfig: Sendable, Equatable {
     public static func load(configText t: String) -> WorklogConfig {
         var c = WorklogConfig()
         func s(_ k: String) -> String? { TOMLLite.string(in: t, section: "worklog", key: k) ?? TOMLLite.raw(in: t, section: "worklog", key: k).map(String.init) }
-        if let v = s("tz"), !v.isEmpty { c.tz = v }
+        if let v = s("tz"), !v.isEmpty, Settings.isZone(v) { c.tz = v }  // a zone libc does not know would be UTC
         c.projects = list(s("projects")).map { $0.uppercased() }
         if let v = s("day_summary") { c.daySummary = v != "false" }
         if let v = s("rebuild_at_end") { c.rebuildAtEnd = v != "false" }

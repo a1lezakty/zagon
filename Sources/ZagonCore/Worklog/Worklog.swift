@@ -87,7 +87,7 @@ public struct DayPlan: Codable, Sendable {
     public var tz: String?
     /// When the day's texts were last built (nil: never).
     public var summaryBuiltAt: Double?
-    /// Sessions with work in the day after `summaryBuiltAt` (all the day's sessions when never built).
+    /// Sessions of the rows with work in the day after `summaryBuiltAt` (all of them when never built).
     public var sessionsAfterSummary: Int?
     /// `[worklog] exclude` items and their time (in no row, no task line, not in `unassignedSec`).
     public var excluded: [ExcludedTime]?
@@ -225,7 +225,8 @@ public struct Worklog {
         p.tz = Settings.zoneName()
         let texts = WorklogTexts(store: store)
         p.summaryBuiltAt = try texts.builtAt(day)
-        p.sessionsAfterSummary = try sessions(from: max(from, p.summaryBuiltAt ?? from), to: to, exclude: exclude).count
+        let mine = Set(p.rows.flatMap { $0.sessions?.map(\.id) ?? [] })
+        p.sessionsAfterSummary = try sessions(from: max(from, p.summaryBuiltAt ?? from), to: to, exclude: exclude).intersection(mine).count
         p.excluded = config.exclude.enumerated().map { i, x in ExcludedTime(kind: x.kind, name: x.name, seconds: Int((report.excluded[i] ?? 0).rounded())) }
         var byProject: [String: Double] = [:]
         for (sid, sec) in report.noTask {
@@ -274,9 +275,15 @@ public struct Worklog {
         return r.text.isEmpty ? s : r.text + "\n\n" + s
     }
 
-    /// Meta marks of a day summary in Jira: `wlsummary:<day>:<key>` (in a worklog) or `wlcomment:<day>:<key>` (comment).
+    /// Whether the task's day summary is in Jira: a comment written (`wlcomment:<day>:<key>` = `id:…`; one still
+    /// `writing:` is offered again, `writeComments` then looks in Jira first), or the worklog that carries it
+    /// (`wlsummary:<day>:<key>` = `worklog:<row id>`) is logged or may be (writing).
     static func summaryWritten(_ db: SQLite, day: String, key: String) throws -> Bool {
-        try db.one("SELECT 1 FROM meta WHERE key IN (?1, ?2)", [.text("wlsummary:\(day):\(key)"), .text("wlcomment:\(day):\(key)")]) { _ in true } ?? false
+        if let v = try db.one("SELECT value FROM meta WHERE key = ?", [.text("wlcomment:\(day):\(key)")], { $0.text(0) }) ?? nil, v.hasPrefix("id:") { return true }
+        guard let v = try db.one("SELECT value FROM meta WHERE key = ?", [.text("wlsummary:\(day):\(key)")], { $0.text(0) }) ?? nil,
+              let row = Int64(v.dropFirst("worklog:".count)) else { return false }
+        let state = try db.one("SELECT state FROM worklog_plan WHERE id = ?", [.int(row)], { $0.text(0) }) ?? nil
+        return state == "logged" || state == "writing"
     }
 
     static func asComment(_ r: WorklogRow, _ keys: Set<String>) -> Bool {
@@ -302,10 +309,12 @@ public struct Worklog {
             longest[t] = i
         }
         let sessions = try rowSessions(rs, longest: Set(longest.values), from: from, to: to, exclude: exclude)
+        var siblings: [Int: [Interval]] = [:]
+        for r in rs where r.state == "planned" { if let t = r.taskId { siblings[t, default: []].append(Interval(r.start, r.end)) } }
         for i in rs.indices {
             guard let t = rs[i].taskId else { continue }
             guard rs[i].state == "planned" else { rs[i].daySummary = false; continue }
-            let (text, source) = try texts.rowText(day: day, task: t, start: rs[i].start, end: rs[i].end) {
+            let (text, source) = try texts.rowText(day: day, task: t, start: rs[i].start, end: rs[i].end, siblings: siblings[t] ?? []) {
                 try titles(task: t, from: from, to: to, fallback: try Tasks(store: store).get(t)?.title ?? "")
             }
             if text != rs[i].text {

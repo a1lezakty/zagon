@@ -217,15 +217,15 @@ public final class TaskTools: TaskService {
     public func worklogReconcile(from: String, to: String?, format: String) throws -> String {
         scan()
         let w = try makeWorklog()
-        let r = try Settings.inZone(w.config.tz) {
+        return try Settings.inZone(w.config.tz) {
             let today = Time.dayString(now())
-            return try mapErrors { try w.reconcile(from: from, to: to ?? today, today: today) }
-        }
-        switch format {
-        case "json": return try ReconcileText.json(r)
-        case "csv": return ReconcileText.csv(r)
-        case "text": return ReconcileText.text(r)
-        default: return ReconcileText.markdown(r)
+            let r = try mapErrors { try w.reconcile(from: from, to: to ?? today, today: today) }
+            switch format {
+            case "json": return try ReconcileText.json(r)
+            case "csv": return ReconcileText.csv(r)
+            case "text": return ReconcileText.text(r)
+            default: return ReconcileText.markdown(r)
+            }
         }
     }
 

@@ -118,7 +118,9 @@ public enum TaskTime {
                 for (sid, ivs) in active where ivs.contains(where: { $0.start <= mid && mid < $0.end }) {
                     for (t, x) in tasks(sid, at: mid) { w[t, default: 0] += x; if t == nil { nw[sid, default: 0] += x } }
                 }
-                if w.keys.contains(where: { $0 != nil }) { w[nil] = nil; nw = [:] }
+                // A linked session takes the piece from unlinked and excluded ones (one slot, one task); without one
+                // "no task" and excluded work share it.
+                if w.keys.contains(where: { ($0 ?? 0) > 0 }) { w = w.filter { ($0.key ?? 0) > 0 }; nw = [:] }
                 let total = w.values.reduce(0, +)
                 guard total > 0 else { uncovered += b - a; continue }
                 for (t, x) in w {

@@ -140,8 +140,8 @@ class H(BaseHTTPRequestHandler):
                     next_id[0] += 1
                     c = {"id": "c" + str(next_id[0]), "author": me, "body": b["body"]}
                     i.setdefault("comments", []).append(c)
-                    if state.get("lose_post_replies", 0) > 0:
-                        state["lose_post_replies"] -= 1
+                    if state.get("lose_comment_replies", 0) > 0:
+                        state["lose_comment_replies"] -= 1
                         self.close_connection = True
                         return
                 return self.send(201, {"id": c["id"], "body": c["body"]})

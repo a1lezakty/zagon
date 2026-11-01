@@ -678,8 +678,9 @@ public final class Ingest {
             tried += 1
             if tried > 5 { break }
             guard let body = Self.smallFile(path, max: Self.briefMax) else { continue }
-            let title = String(decoding: body, as: UTF8.self).split(whereSeparator: \.isNewline)
-                .first { !$0.allSatisfy(\.isWhitespace) }.map(String.init) ?? ""
+            // The title: the first heading of the first 5 lines (a banner may come before it), else the first line.
+            let lines = String(decoding: body, as: UTF8.self).split(whereSeparator: \.isNewline).filter { !$0.allSatisfy(\.isWhitespace) }.prefix(5)
+            let title = (lines.first { $0.drop { $0 == " " }.hasPrefix("#") } ?? lines.first).map(String.init) ?? ""
             for k in taskKeys(title) where !out.contains(k) { out.append(k) }
         }
         return out

@@ -75,22 +75,26 @@ full it is reported as unplaced. Invariant (tested on random days): no overlap w
 Days are cut in `[worklog] tz` (`Settings.inZone`: CLI and MCP switch `TZ` after their scan; the service runs
 `zagon log at-end` as a child for the 23:55 rebuild, since its threads stay in the database's zone).
 Exclusions (`[worklog] exclude`, `Worklog.exclusions` → `TaskTime.Exclude`): a project's or one session's time, or a
-task's, is taken out as a task of its own (its share of parallel time too): in no row, task line or "no task", not
-reconciled; `DayPlan.excluded` has each item's time. `DayPlan.unassigned` splits "no task" by the sessions' project.
+task's, is taken out as a task of its own: in no row, task line or "no task", not reconciled (nor the Jira worklogs of
+an excluded task); a linked session takes a parallel piece from it as from unlinked work, and without one "no task"
+and excluded work share the piece; `DayPlan.excluded` has each item's time. `DayPlan.unassigned` splits "no task" by the sessions' project.
 Text (`Worklog.filled`, `WorklogTexts`): per row, by task, day and row start in `meta` `wltext:<auto|manual>:<day>:<task>:<start>`
 (a kept text whose start falls inside a row that grew earlier counts too): by hand, else built, else the task's "what
 was done" of the day, else its sessions' titles (`text_source` manual | summary | titles). The task's day summary
 (`wlsum:<auto|manual>:<day>:<task>`) rides on its longest planned row (`day_summary`), unless `[worklog] day_summary`
-is off or a summary of that task and day is already in Jira (`wlsummary:<day>:<key>` = in a worklog, from its claim on;
-`wlcomment:<day>:<key>` = `writing:<time>` | `id:<id>` as a comment). `sessions` per row: the task's sessions with their
+is off or a summary of that task and day is already in Jira: `wlcomment:<day>:<key>` = `id:<id>` (a comment), or
+`wlsummary:<day>:<key>` = `worklog:<row>` whose row is logged or writing (set at the claim; `settle` drops it when the
+row is planned again). A comment left `writing:<time>` is looked up by the next plan or commit (`settleComments`):
+found → `id:`, not found after 5 min → dropped and offered again. `sessions` per row: the task's sessions with their
 time inside the row (the day on the summary row), the strongest link `how`, role leader (typed into other sessions'
 terminals, `relay`) | worker (brief link, or typed into) | single.
 Build (`WorklogTextBuilder`, one AI call per day through `DaySummary.complete`): per task and row the sessions' first
 words of typed messages, last assistant texts and `ГОТОВО:` / `DONE:` lines inside the row, the task's commits; ≤ 16 000
 characters (fewer words per session first). Answer `{rows: {id: text}, tasks: {key: {was, found, done}}}`. Phrases about
 the input ("digest", "not visible", "итогов нет" …) → asked once more, then those texts are dropped (titles take over);
-home paths are cut to their last part. `wltext_built:<day>` = build time; `sessions_after_summary` = sessions with work
-after it. `log text rebuild` = one call for one row (`--shorten` shortens the current text and keeps its source).
+home paths are cut to their last part. `wltext_built:<day>` = build time; `sessions_after_summary` = the rows' sessions
+with work after it (work of no task does not ask for a rebuild). A kept text follows its row: at its start, inside it,
+or (the row moved) the nearest row of the task within 12 h. A build keeps earlier texts of rows its answer left out. `log text rebuild` = one call for one row (`--shorten` shortens the current text and keeps its source).
 Writes: the worklog gets the row's text; `--with-summary` adds the summary on its row; `--summary-comment KEY` posts it
 once as an issue comment (`JiraClient.addComment`; before the POST your comments on the issue are read and one that
 starts with the day's header `Итог дня — <day>` / `Day summary — <day>` counts as written). `commit_digest` covers both.

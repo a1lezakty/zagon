@@ -169,12 +169,15 @@ public enum TaskText {
         return out.joined(separator: "\n")
     }
 
-    public static func rows(_ rows: [WorklogRow]) -> String {
+    /// `summary`: the rows whose day summary is shown in full under them (what would go to Jira with it).
+    public static func rows(_ rows: [WorklogRow], summary: (WorklogRow) -> Bool = { $0.daySummary == true }) -> String {
         rows.map { r in
             "#\(pad("\(r.id)", 5)) \(pad(r.taskKey ?? "-", 10)) \(Txt.clock(r.start))–\(Txt.clock(r.end)) \(pad(Txt.dur(Double(r.seconds)), 7)) "
                 + "\(pad(r.state, 8)) \(Txt.oneLine(r.text, 260))" + (r.jiraKey == nil ? "  (Zagon only)" : "")
                 + (r.textSource.map { "  [\($0)]" } ?? "")
-                + (r.daySummary == true && !(r.summary ?? "").isEmpty ? "\n       + day summary: \(Txt.oneLine(r.summary!, 200))" : "")
+                + (summary(r) && !(r.summary ?? "").isEmpty
+                   ? "\n       + day summary:\n" + r.summary!.split(separator: "\n", omittingEmptySubsequences: false).map { "         " + $0 }.joined(separator: "\n")
+                   : "")
         }.joined(separator: "\n")
     }
 

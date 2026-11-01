@@ -38,7 +38,7 @@ public struct DayWorklog {
         // Rows an earlier write left `writing` are settled first, so their time counts as it is in Jira.
         var settled: [String] = []
         if jira != nil {
-            do { settled = try settle(day) } catch { if strict { throw error }; jiraError = jiraError ?? "\(error)" }
+            do { settled = try settle(day) + settleComments(day) } catch { if strict { throw error }; jiraError = jiraError ?? "\(error)" }
         }
         let wl = Worklog(store: store)
         var p = try wl.plan(day: day, idleGap: idleGap, base: base, jira: jiraDay, linker: linker, config: config)
@@ -156,6 +156,8 @@ public struct DayWorklog {
                           try store.db.run("UPDATE worklog_plan SET state = 'planned' WHERE id = ? AND state = 'writing'", [.int(Int64(row.id))]) == 1
                     else { return false }
                     try dropClaim(row.id)
+                    // Its day summary did not reach Jira either: offered again.
+                    try store.db.run("DELETE FROM meta WHERE key LIKE 'wlsummary:%' AND value = ?", [.text("worklog:\(row.id)")])
                     return true
                 }
                 if done { out.append("\(span) did not reach Jira: planned again") }
@@ -221,6 +223,7 @@ public struct DayWorklog {
         guard let (from, to) = Time.dayBounds(day) else { throw TaskError("bad day \(day)") }
         var r = WriteResult()
         r.lines = try settle(day, now: now)
+        r.commentLines = try settleComments(day, now: now)
         let me = try jira.accountId()
         var taken = try jira.myWorklogs(from: from, to: to).map(\.interval)
         var mine: [String: [JiraWorklog]] = [:]
@@ -246,8 +249,12 @@ public struct DayWorklog {
                 continue
             }
             // Claim the row first: a second writer (CLI, MCP, bot at once) finds it taken; a re-plan meanwhile keeps it.
-            let text = Worklog.comment(row, withSummary: withSummary, commentKeys: commentKeys)
-            let summaryMark = text != row.text ? "wlsummary:\(day):\(key)" : nil
+            var text = Worklog.comment(row, withSummary: withSummary, commentKeys: commentKeys)
+            var summaryMark = text != row.text ? "wlsummary:\(day):\(key)" : nil
+            // A comment of the same summary written or on its way (another commit at once): the worklog gets the text only.
+            if summaryMark != nil, try store.db.one("SELECT 1 FROM meta WHERE key = ?", [.text("wlcomment:\(day):\(key)")], { _ in true }) == true {
+                text = row.text; summaryMark = nil
+            }
             let claimed = try store.db.transaction { () throws -> Bool in
                 guard try store.db.run("UPDATE worklog_plan SET state = 'writing' WHERE id = ? AND state = 'planned'", [.int(Int64(row.id))]) == 1
                 else { return false }
@@ -285,8 +292,34 @@ public struct DayWorklog {
             }
         }
         let c = try writeComments(Worklog.issueComments(rows, commentKeys: commentKeys), day: day)
-        r.commentLines = c.lines; r.commented = c.commented; r.commentsFailed = c.commentsFailed
+        r.commentLines += c.lines; r.commented = c.commented; r.commentsFailed = c.commentsFailed
         return r
+    }
+
+    /// Day-summary comments left `writing` (a lost reply, a crash): found among your comments on the issue → written;
+    /// not found and the claim older than `claimTimeout` → the mark goes and the summary is offered again.
+    @discardableResult
+    public func settleComments(_ day: String, now: Timestamp = Time.now()) throws -> [String] {
+        guard let jira else { return [] }
+        let prefix = "wlcomment:\(day):"
+        var open: [(mark: String, at: Double)] = []
+        try db.query("SELECT key, value FROM meta WHERE key >= ?1 AND key < ?2", [.text(prefix), .text(prefix + "\u{7F}")]) { r in
+            if let k = r.text(0), let v = r.text(1), v.hasPrefix("writing:") { open.append((k, Double(v.dropFirst(8)) ?? 0)) }
+        }
+        var out: [String] = []
+        for o in open {
+            let key = String(o.mark.dropFirst(prefix.count)), what = "day summary on \(key)"
+            do {
+                if let had = try jira.myComments(issue: key).first(where: { WorklogTexts.isCommentOf($0.body, day: day) }) {
+                    try db.run("UPDATE meta SET value = ? WHERE key = ?", [.text("id:" + had.id), .text(o.mark)])
+                    out.append("\(what) is in Jira: marked")
+                } else if now - o.at > Self.claimTimeout {
+                    try db.run("DELETE FROM meta WHERE key = ? AND value = ?", [.text(o.mark), .text("writing:\(o.at)")])
+                    out.append("\(what) did not reach Jira: offered again")
+                }
+            } catch { out.append("\(what) not checked (\(error))") }
+        }
+        return out
     }
 
     /// Writes each day summary as one comment on its issue, once per issue and day: a comment of yours that starts with
@@ -308,6 +341,9 @@ public struct DayWorklog {
                     r.lines.append("\(what) is in Jira: marked"); r.commented += 1; continue
                 }
             } catch { r.lines.append("\(what) not written: \(error)"); r.commentsFailed += 1; continue }
+            if try Worklog.summaryWritten(db, day: day, key: c.key) {
+                r.lines.append("\(what) not written: the summary is already in Jira"); r.commentsFailed += 1; continue
+            }
             let claimed = try db.transaction { () throws -> Bool in
                 if let v = try db.one("SELECT value FROM meta WHERE key = ?", [.text(mark)], { $0.text(0) }) ?? nil {
                     guard v.hasPrefix("writing:"), let at = Double(v.dropFirst(8)), Time.now() - at > Self.claimTimeout else { return false }

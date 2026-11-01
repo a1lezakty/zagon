@@ -41,6 +41,10 @@ public protocol TaskService: AnyObject {
     func worklogPlan(day: String) throws -> String
     /// Writes the day's planned worklogs (all, or the rows `ids`) to Jira. Reached only with `confirm: true`.
     func worklogCommit(day: String, ids: [Int]?) throws -> String
+    // Since 0.1.5; the defaults below serve older services.
+    func worklogPlan(day: String?, refresh: Bool, json: Bool) throws -> String
+    func worklogCommit(day: String, ids: [Int]?, withSummary: Bool, summaryComment: [String]) throws -> String
+    func worklogConfig() throws -> String
     /// Sessions against the user's Jira worklogs over [from, to], per task and day; `format`: md | text | csv | json.
     /// Reads Jira only.
     /// `to` nil: today.

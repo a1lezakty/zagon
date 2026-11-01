@@ -13,12 +13,7 @@ import Darwin
 extension Common {
     var configText: String { Sys.readFile(dataDir + "/config.toml").map { String(decoding: $0, as: UTF8.self) } ?? "" }
 
-    /// Keys count only of Jira's projects and `[worklog] projects` (once either is known).
-    func linker() throws -> TaskLinker {
-        var l = try TaskLinker(patterns: [TOMLLite.string(in: configText, section: "tasks", key: "key_pattern") ?? TaskLinker.defaultPattern])
-        l.projects = Set(WorklogConfig.load(configText: configText).projects)
-        return l
-    }
+    func linker() throws -> TaskLinker { try TaskLinker.load(configText: configText) }
 
     /// `--time`, else `[worklog] time` in config.toml, else the sessions' wall-clock time.
     func timeBase(_ flag: TaskTime.Base?) -> TaskTime.Base {

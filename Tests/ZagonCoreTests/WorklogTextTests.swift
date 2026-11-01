@@ -81,13 +81,17 @@ final class FakeEngine: @unchecked Sendable {
                            DayPlan.commitDigest(p1.rows, commentKeys: ["PROJ-1"])])
         #expect(digests.count == 3 && DayPlan.commitDigest(p1.rows) == p1.commitDigest)
 
-        // A text by hand; then a session works after the build: the rebuild keeps the hand-made text.
-        #expect(try w.setText(row: b.id, day: day, summary: false, text: "By hand").textSource == "manual")
+        // Work of no task after the build is no reason to build again.
         try f.session("claude:other", working: [(D0 + 21 * H, D0 + 21.5 * H)], actions: [D0 + 21 * H])
-        let p2 = try w.plan(day, refresh: true, now: D0 + 22 * H).plan
-        #expect(ai.prompts.count == 2)
-        #expect(p2.rows.map(\.text) == ["Morning again.", "By hand"] && p2.rows.map(\.textSource) == ["summary", "manual"])
-        #expect(p2.unassigned == [ProjectTime(project: "—", seconds: Int(0.5 * H))])
+        let p1b = try w.plan(day, refresh: true, now: D0 + 21.6 * H).plan
+        #expect(ai.prompts.count == 1 && p1b.sessionsAfterSummary == 0 && p1b.unassigned == [ProjectTime(project: "—", seconds: Int(0.5 * H))])
+        // A text by hand; then the task's session works after the build: the rebuild keeps the hand-made text.
+        #expect(try w.setText(row: b.id, day: day, summary: false, text: "By hand").textSource == "manual")
+        try f.interval("claude:a", D0 + 22 * H, D0 + 22.5 * H)
+        #expect(try w.plan(day).plan.sessionsAfterSummary == 1)
+        let p2 = try w.plan(day, refresh: true, now: D0 + 23 * H).plan
+        #expect(ai.prompts.count == 2 && p2.rows.count == 3)
+        #expect(p2.rows.prefix(2).map(\.text) == ["Morning again.", "By hand"] && p2.rows.map(\.textSource) == ["summary", "manual", "titles"])
         // Back to the built one.
         #expect(try w.setText(row: b.id, day: day, summary: false, text: "").text == "Afternoon again.")
     }
@@ -120,10 +124,15 @@ final class FakeEngine: @unchecked Sendable {
         #expect(p.unassignedSec == 0 && p.unassigned == [] && p.userSec == 5 * H)
         #expect(p.excluded == [ExcludedTime(kind: "project", name: "example-tool", seconds: Int(2 * H)),
                                ExcludedTime(kind: "task", name: "NOPE-1", seconds: 0)])
-        // An excluded task: its time is in no row and no line.
+        // In parallel with the task's session, an excluded project takes nothing from it.
+        try f.interval("claude:z", D0 + 9 * H, D0 + 12 * H)
+        c.exclude = [WorklogExclusion(kind: "project", name: "example-tool")]
+        let par = try Worklog(store: f.store).plan(day: day, config: c)
+        #expect(par.rows.reduce(0) { $0 + $1.seconds } == Int(5 * H) && par.excluded?.first?.seconds == Int(2 * H))
+        // An excluded task: its time is in no row and no line; next to work of no task (09:00–12:00) they share it.
         c.exclude = [WorklogExclusion(kind: "task", name: "proj-1")]
         let t = try Worklog(store: f.store).plan(day: day, config: c)
-        #expect(t.rows.isEmpty && t.tasks.isEmpty && t.excluded?.first?.seconds == Int(5 * H) && t.unassignedSec == 2 * H)
+        #expect(t.rows.isEmpty && t.tasks.isEmpty && t.excluded?.first?.seconds == Int(3.5 * H) && t.unassignedSec == 3.5 * H)
     }
 
     @Test func configKeysAndExclusionsKeepTheRestOfTheFile() throws {
@@ -168,14 +177,29 @@ final class FakeEngine: @unchecked Sendable {
         let data = try e.encode(p)
         let d = JSONDecoder()
         d.keyDecodingStrategy = .convertFromSnakeCase
-        let old = try d.decode(OldPlan.self, from: data)
-        #expect(old.rows.map(\.text) == ["One.", "Two."] && old.commitDigest == p.commitDigest)
+        let mac014 = try d.decode(OldPlan.self, from: data)
+        #expect(mac014.rows.map(\.text) == ["One.", "Two."] && mac014.commitDigest == p.commitDigest)
         let v = try #require(JValue.parse(Array(data)))
         #expect(v["rows"]?.array?[0]["day_summary"] == .bool(true) && v["rows"]?.array?[0]["text_source"]?.string == "summary")
         #expect(v["rows"]?.array?[0]["sessions"]?.array?[0]["how"]?.string == "branch" && v["summary_built_at"]?.double != nil)
         let oldJSON = #"{"day":"2026-10-29","user_sec":1,"session_sec":1,"rows":[{"id":1,"day":"2026-10-29","start":0,"end":300,"seconds":300,"text":"t","state":"planned"}],"tasks":[],"unassigned_sec":0,"unknown_keys":[],"unplaced":{},"notes":[],"commit_digest":""}"#
         let back = try d.decode(DayPlan.self, from: Data(oldJSON.utf8))
         #expect(back.tz == nil && back.excluded == nil && back.rows[0].textSource == nil && back.rows[0].sessions == nil)
+        // Without flags the digest is the 0.1.4 one: `key|start|end|seconds|text` of the planned Jira rows.
+        var jr = p.rows
+        for i in jr.indices { jr[i].jiraKey = "PROJ-1" }
+        let old = jr.map { "PROJ-1|\(Int64($0.start))|\(Int64($0.end))|\($0.seconds)|\($0.text)" }.joined(separator: "\n")
+        #expect(jr[0].summary != nil && DayPlan.commitDigest(jr) == String(UInt64(bitPattern: fnv1a64(old)), radix: 16))
+    }
+
+    /// A text kept by hand follows its row when the row moves (here: starts later), not another row of the task.
+    @Test func aManualTextFollowsItsMovedRow() throws {
+        let f = try Fixture(), kept = WorklogTexts(store: f.store)
+        try kept.setManual(day: day, task: 1, start: D0 + 9 * H, text: "Morning")
+        let rows = [Interval(D0 + 9.5 * H, D0 + 12 * H), Interval(D0 + 14 * H, D0 + 16 * H)]
+        #expect(try kept.row("manual", day, 1, rows[0].start, rows[0].end, siblings: rows) == "Morning")
+        #expect(try kept.row("manual", day, 1, rows[1].start, rows[1].end, siblings: rows) == nil)
+        #expect(try kept.row("manual", day, 2, rows[0].start, rows[0].end, siblings: rows) == nil)
     }
 }
 
@@ -277,8 +301,45 @@ struct WorklogCommentTests {
         #expect(JiraCache.current(f.store, try JiraClient(m.config), now: D0 + 700).at == D0 + 60)   // now with its list: fresh
     }
 
+    /// A comment whose reply was lost is found by the next plan; one that never arrived is offered again.
+    @Test func aLostCommentReplyIsSettledByTheNextPlan() throws {
+        let m = try JiraMock(state: #"{"me": "acc-me", "lose_comment_replies": 1, "issues": {"PROJ-1": {"summary": "Parser", "status": "In Progress", "category": "indeterminate", "assignee": "acc-me"}}}"#)
+        let f = try Fixture()
+        _ = try Tasks(store: f.store).add(title: "Parser", key: "PROJ-1")
+        try f.session("claude:a", branch: "PROJ-1", title: "Parser work", working: [(D0 + 9 * H, D0 + 11 * H), (D0 + 14 * H, D0 + 15 * H)],
+                      actions: [D0 + 9 * H])
+        try TaskLinker().linkSessions(f.store)
+        let w = DayWorklog(store: f.store, linker: try TaskLinker(), jira: try JiraClient(m.config))
+        let p0 = try w.plan("2026-10-29").plan
+        try WorklogTexts(store: f.store).setManualSummary(day: "2026-10-29", task: p0.rows[0].taskId!, text: "What was done\n- fixed")
+        let rows = try w.plan("2026-10-29").plan.rows
+        let first = try w.write(rows.filter { $0.daySummary == true }, day: "2026-10-29", commentKeys: ["PROJ-1"])
+        #expect(first.commentsFailed == 1 && first.commentLines.last?.hasPrefix("not sure") == true)
+        // Still `writing`: offered (the commit would look in Jira first); the next plan finds it.
+        let again = try w.plan("2026-10-29").plan
+        #expect(again.notes.contains("day summary on PROJ-1 is in Jira: marked") && again.rows.allSatisfy { $0.daySummary == false })
+        #expect(try comments(m).count == 1)
+    }
+
+    /// The worklog that carried the summary never reached Jira: re-planned, its summary is offered again.
+    @Test func aSummaryWorklogThatFailedIsOfferedAgain() throws {
+        let m = try JiraMock(state: #"{"me": "acc-me", "post_status": [500], "issues": {"PROJ-1": {"summary": "Parser", "status": "In Progress", "category": "indeterminate", "assignee": "acc-me"}}}"#)
+        let f = try Fixture()
+        _ = try Tasks(store: f.store).add(title: "Parser", key: "PROJ-1")
+        try f.session("claude:a", branch: "PROJ-1", title: "Parser work", working: [(D0 + 9 * H, D0 + 11 * H)], actions: [D0 + 9 * H])
+        try TaskLinker().linkSessions(f.store)
+        let w = DayWorklog(store: f.store, linker: try TaskLinker(), jira: try JiraClient(m.config))
+        let p0 = try w.plan("2026-10-29").plan
+        try WorklogTexts(store: f.store).setManualSummary(day: "2026-10-29", task: p0.rows[0].taskId!, text: "What was done\n- fixed")
+        let r = try w.write(try w.plan("2026-10-29").plan.rows, day: "2026-10-29", withSummary: true)
+        #expect(r.failed == 1 && r.lines.last?.hasPrefix("not sure") == true)
+        #expect(try w.plan("2026-10-29").plan.rows.map(\.state) == ["writing"])   // in flight: not offered elsewhere
+        #expect(try w.settle("2026-10-29", now: Time.now() + 600).first?.hasSuffix("planned again") == true)
+        #expect(try w.plan("2026-10-29").plan.rows.map(\.daySummary) == [true])
+    }
+
     @Test func aLostReplyIsFoundInJiraNextTime() throws {
-        let m = try JiraMock(state: #"{"me": "acc-me", "lose_post_replies": 1, "issues": {"PROJ-1": {"summary": "Parser", "status": "In Progress", "category": "indeterminate", "assignee": "acc-me"}}}"#)
+        let m = try JiraMock(state: #"{"me": "acc-me", "lose_comment_replies": 1, "issues": {"PROJ-1": {"summary": "Parser", "status": "In Progress", "category": "indeterminate", "assignee": "acc-me"}}}"#)
         let f = try Fixture()
         let w = DayWorklog(store: f.store, linker: try TaskLinker(), jira: try JiraClient(m.config))
         let c = [(key: "PROJ-1", task: Int?.none, text: "What was done\n- fixed")]
@@ -286,5 +347,21 @@ struct WorklogCommentTests {
         #expect(first.commentsFailed == 1 && first.lines[0].hasPrefix("not sure"))
         #expect(try w.writeComments(c, day: "2026-10-29").lines == ["day summary on PROJ-1 is in Jira: marked"])
         #expect(try comments(m).count == 1)
+    }
+}
+
+/// The 0.1.5 options of the worklog tools reach TaskTools through MCP.
+@Suite struct WorklogMCPTests {
+    @Test func newOptionsReachTheTools() throws {
+        let m = try TaskMCP()
+        _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)
+        let j = try m.call("worklog_plan", #"{"date":"2026-10-29","format":"json","refresh":true}"#)
+        let v = try #require(JValue.parse(j.text), "\(j.text)")
+        #expect(!j.isError && v["tz"]?.string != nil && v["rows"]?.array != nil && v["sessions_after_summary"] != nil)
+        #expect(v["notes"]?.array?.contains(.string("texts not rebuilt: no AI engine")) == true)
+        let c = try m.call("worklog_config", "{}")
+        #expect(!c.isError && JValue.parse(c.text)?["day_summary"] == .bool(true) && JValue.parse(c.text)?["tz"] == .null)
+        let w = try m.call("worklog_commit", #"{"date":"2026-10-29","confirm":true,"with_summary":true,"summary_comment":["PROJ-1"]}"#)
+        #expect(w.isError && w.text.contains("Jira is not connected"), "\(w.text)")
     }
 }

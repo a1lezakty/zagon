@@ -24,23 +24,31 @@ public struct WorklogTexts {
         } else { try db.run("DELETE FROM meta WHERE key = ?", [.text(key)]) }
     }
 
-    /// A kept row text: the one at the row's start, else one whose start is inside the row (the row grew earlier).
-    func row(_ source: String, _ day: String, _ task: Int, _ start: Timestamp, _ end: Timestamp) throws -> String? {
+    /// A kept row text: the one at the row's start, else one whose start is inside the row (the row grew earlier),
+    /// else one inside none of the task's rows (`siblings`) whose nearest row this is (the row moved).
+    func row(_ source: String, _ day: String, _ task: Int, _ start: Timestamp, _ end: Timestamp, siblings: [Interval] = []) throws -> String? {
         if let t = try get(Self.rowKey(source, day, task, start)) { return t }
         let prefix = "wltext:\(source):\(day):\(task):"
-        var out: String?
+        var kept: [(start: Timestamp, text: String)] = []
         try db.query("SELECT key, value FROM meta WHERE key >= ?1 AND key < ?2 ORDER BY key", [.text(prefix), .text(prefix + "\u{7F}")]) { r in
-            guard out == nil, let s = r.text(0).flatMap({ Double($0.dropFirst(prefix.count)) }), s >= start, s < end else { return }
-            out = r.text(1)
+            if let s = r.text(0).flatMap({ Double($0.dropFirst(prefix.count)) }), let t = r.text(1) { kept.append((s, t)) }
         }
-        return out
+        if let k = kept.first(where: { $0.start >= start && $0.start < end }) { return k.text }
+        func distance(_ iv: Interval, _ t: Timestamp) -> Double { t < iv.start ? iv.start - t : t >= iv.end ? t - iv.end : 0 }
+        let mine = Interval(start, end)
+        return kept.first { k in
+            !siblings.contains { k.start >= $0.start && k.start < $0.end }
+                && (siblings.min { distance($0, k.start) < distance($1, k.start) }.map { $0.start == start && $0.end == end } ?? true)
+                && distance(mine, k.start) < 12 * 3600
+        }?.text
     }
 
     /// The row's text and where it came from: set by hand, else built, else the task's "what was done" of the day
     /// (`manual` or `summary`), else `fallback` (its sessions' titles).
-    public func rowText(day: String, task: Int, start: Timestamp, end: Timestamp, fallback: () throws -> String) throws -> (text: String, source: String) {
-        if let t = try row("manual", day, task, start, end), !t.isEmpty { return (t, "manual") }
-        if let t = try row("auto", day, task, start, end), !t.isEmpty { return (t, "summary") }
+    public func rowText(day: String, task: Int, start: Timestamp, end: Timestamp, siblings: [Interval] = [],
+                        fallback: () throws -> String) throws -> (text: String, source: String) {
+        if let t = try row("manual", day, task, start, end, siblings: siblings), !t.isEmpty { return (t, "manual") }
+        if let t = try row("auto", day, task, start, end, siblings: siblings), !t.isEmpty { return (t, "summary") }
         if let (t, s) = try db.one("SELECT text, source FROM task_done WHERE task_id = ? AND day = ? ORDER BY source = 'manual' DESC",
                                    [.int(Int64(task)), .text(day)], { ($0.text(0) ?? "", $0.text(1) ?? "") }), !t.isEmpty {
             return (t, s == "manual" ? "manual" : "summary")
@@ -68,17 +76,12 @@ public struct WorklogTexts {
         try put(Self.sumKey("manual", day, task), text.flatMap { $0.isEmpty ? nil : $0 })
     }
 
-    /// Keeps what a build made: the day's built texts are replaced (rows not named keep theirs only with `partial`).
-    func saveBuilt(day: String, rows: [(task: Int, start: Timestamp, text: String)], summaries: [Int: String], partial: Bool, now: Timestamp) throws {
+    /// Keeps what a build made and when; a row or task the answer left out keeps its earlier built text.
+    func saveBuilt(day: String, rows: [(task: Int, start: Timestamp, text: String)], summaries: [Int: String], now: Timestamp) throws {
         try db.transaction {
-            if !partial {
-                for p in ["wltext:auto:\(day):", "wlsum:auto:\(day):"] {
-                    try db.run("DELETE FROM meta WHERE key >= ?1 AND key < ?2", [.text(p), .text(p + "\u{7F}")])
-                }
-            }
             for r in rows { try put(Self.rowKey("auto", day, r.task, r.start), r.text) }
             for (t, s) in summaries { try put(Self.sumKey("auto", day, t), s) }
-            if !partial { try put(Self.builtKey(day), nil); try db.run("INSERT INTO meta(key, value) VALUES(?, ?)", [.text(Self.builtKey(day)), .real(now)]) }
+            try db.run("INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2", [.text(Self.builtKey(day)), .real(now)])
         }
     }
 
@@ -148,7 +151,7 @@ public struct WorklogTextBuilder {
         if summaries {
             for t in tasks { if let s = got.tasks[t.key], !s.isEmpty { sums[t.id] = s } }
         }
-        try WorklogTexts(store: store).saveBuilt(day: day, rows: rows, summaries: sums, partial: false, now: now)
+        try WorklogTexts(store: store).saveBuilt(day: day, rows: rows, summaries: sums, now: now)
         return rows.count
     }
 
@@ -214,9 +217,9 @@ public struct WorklogTextBuilder {
         mutating func dropMeta() { rows = rows.filter { !Answer.isMeta($0.value) }; tasks = tasks.filter { !Answer.isMeta($0.value) } }
 
         /// Phrases about the input rather than the work ("the digest has no results", "not visible in the session").
-        static let metaPhrases = ["выжимк", "не видно", "итогов нет", "итоги не", "нет итогов", "нет данных", "данных нет",
-                                  "нет информации", "информации нет", "не указано", "digest", "not visible", "no results",
-                                  "no data", "no information", "not shown", "not specified"]
+        static let metaPhrases = ["выжимк", "не видно", "итогов нет", "итоги не", "нет итогов", "в сессии не", "из сессии не",
+                                  "по сессии не", "the digest", "in the digest", "not visible", "no results", "no information about",
+                                  "not shown in", "the session does not"]
         static func isMeta(_ s: String) -> Bool { let l = s.lowercased(); return metaPhrases.contains { l.contains($0) } }
     }
 

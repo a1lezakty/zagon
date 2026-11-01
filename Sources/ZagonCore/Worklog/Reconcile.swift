@@ -218,7 +218,8 @@ extension DayWorklog {
                 let (logs, summary) = try Self.worklogs(jira, from: start, to: end, also: also)
                 r.jira = "connected"
                 issueTitle = summary
-                for w in logs {
+                let skipTasks = Set(exclude.items.flatMap(\.tasks))
+                for w in logs where !(byJira[w.issueKey].map { skipTasks.contains($0.id) } ?? false) {
                     let day = Time.dayString(w.started)
                     guard coverage.map({ day >= $0 }) ?? false else { beforeCoverage[day, default: 0] += w.seconds; continue }
                     let task = byJira[w.issueKey], id = task.map { "t\($0.id)" } ?? "j\(w.issueKey)"

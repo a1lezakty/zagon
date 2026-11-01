@@ -53,7 +53,7 @@ public struct TaskSuggester {
     public static func load(store: Store, paths: ZagonPaths, config: NotifyConfig, claudeRoot: String,
                             log: @escaping (String) -> Void = { _ in }) throws -> TaskSuggester {
         let text = Sys.readFile(paths.config).map { String(decoding: $0, as: UTF8.self) } ?? ""
-        let linker = try TaskLinker(patterns: [TOMLLite.string(in: text, section: "tasks", key: "key_pattern") ?? TaskLinker.defaultPattern])
+        let linker = try TaskLinker.load(configText: text)
         var jira: JiraClient?
         if let c = JiraConfig.load(configText: text) {
             do { jira = try JiraClient(c) } catch { log("suggest: Jira not available: \(error)") }

@@ -15,6 +15,13 @@ public struct TaskLinker {
     /// Jira projects keys may belong to besides those read from Jira (`JiraCache.projects`), e.g. `[worklog] projects`.
     public var projects: Set<String> = []
 
+    /// `[tasks] key_pattern` and `[worklog] projects` of config.toml: every linker of a process links alike.
+    public static func load(configText t: String) throws -> TaskLinker {
+        var l = try TaskLinker(patterns: [TOMLLite.string(in: t, section: "tasks", key: "key_pattern") ?? defaultPattern])
+        l.projects = Set(WorklogConfig.load(configText: t).projects)
+        return l
+    }
+
     public init(patterns: [String] = [TaskLinker.defaultPattern], idleGap: Double = 20 * 60) throws {
         self.patterns = try patterns.map { try Regex($0) }
         self.idleGap = idleGap
@@ -66,7 +73,8 @@ public struct TaskLinker {
         }
         var isEmpty: Bool { ids.isEmpty && cache.mine.isEmpty }
         func callAsFunction(_ k: String) throws -> [Int]? {
-            guard TaskLinker.allowed(k, projects) else { return nil }
+            // Your issues (`JiraCache`) always count: the project list is cut at 1000.
+            guard TaskLinker.allowed(k, projects) || cache.issues[k] != nil else { return nil }
             if let v = ids[k] { return v }
             guard cache.mine.contains(k), let i = cache.issues[k] else { return nil }
             let t = try tasks.add(title: i.summary.isEmpty ? k : i.summary, key: k, status: TaskStatus(jira: i, review: cache.review))

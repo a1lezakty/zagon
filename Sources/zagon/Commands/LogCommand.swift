@@ -67,12 +67,12 @@ struct LogCommand: ParsableCommand {
                     throw ExitCode(3)
                 }
                 guard !rows.isEmpty else { print("nothing to log to Jira for \(day)"); return }
-                print(TaskText.rows(rows))
+                // Exactly what goes to Jira: a day summary in full where it is written.
+                print(TaskText.rows(rows) { Worklog.comment($0, withSummary: withSummary, commentKeys: comments) != $0.text })
                 let issue = Worklog.issueComments(rows, commentKeys: comments)
-                for c in issue { print("comment on \(c.key): day summary (\(c.text.count) characters)") }
-                if withSummary {
-                    for r in rows where Worklog.comment(r, withSummary: true, commentKeys: comments) != r.text { print("#\(r.id) \(r.jiraKey!): with the day summary") }
-                }
+                for c in issue { print("comment on \(c.key):\n" + c.text.split(separator: "\n", omittingEmptySubsequences: false).map { "   " + $0 }.joined(separator: "\n")) }
+                let named = Set(issue.map { $0.key.uppercased() } + rows.filter { r in issue.contains { $0.key == r.jiraKey } }.compactMap { $0.taskKey?.uppercased() })
+                for k in comments.subtracting(named).sorted() { warn("no day summary to comment on \(k) (no planned row carries one)") }
                 if !yes {
                     let total = rows.reduce(0) { $0 + $1.seconds }
                     print("Log \(rows.count) worklogs (\(Fmt.dur(Double(total))))" + (issue.isEmpty ? "" : " and \(issue.count) comments")
@@ -105,11 +105,13 @@ struct LogCommand: ParsableCommand {
         }
         func run() throws {
             let store = try prepare(common, report), w = try common.worklog(store, base: time)
-            let r = try Settings.inZone(w.config.tz) { try w.reconcile(from: try LogCommand.day(from), to: try LogCommand.day(to)) }
-            if report.json { print(try ReconcileText.json(r)) }
-            else if md { print(ReconcileText.markdown(r)) }
-            else if csv { print(ReconcileText.csv(r), terminator: "") }
-            else { print(ReconcileText.text(r)) }
+            try Settings.inZone(w.config.tz) {
+                let r = try w.reconcile(from: try LogCommand.day(from), to: try LogCommand.day(to))
+                if report.json { print(try ReconcileText.json(r)) }
+                else if md { print(ReconcileText.markdown(r)) }
+                else if csv { print(ReconcileText.csv(r), terminator: "") }
+                else { print(ReconcileText.text(r)) }
+            }
         }
     }
 
@@ -178,15 +180,17 @@ struct LogCommand: ParsableCommand {
             static let configuration = CommandConfiguration(abstract: "Exclude a project (folder or repository name), a task (key or #id) or a session (id).")
             @Argument(help: "project | task | session") var kind: String
             @Argument(help: "Its name, key or id.") var name: String
+            @Flag(help: "Print the list after the change as JSON: [{kind, name}].") var json = false
             @OptionGroup var common: Common
-            func run() throws { try Exclude.change(common, kind, name, true) }
+            func run() throws { try Exclude.change(common, kind, name, true, json: json) }
         }
         struct Remove: ParsableCommand {
             static let configuration = CommandConfiguration(commandName: "rm", abstract: "Count it again.")
             @Argument(help: "project | task | session") var kind: String
             @Argument(help: "Its name, key or id.") var name: String
+            @Flag(help: "Print the list after the change as JSON: [{kind, name}].") var json = false
             @OptionGroup var common: Common
-            func run() throws { try Exclude.change(common, kind, name, false) }
+            func run() throws { try Exclude.change(common, kind, name, false, json: json) }
         }
         struct List: ParsableCommand {
             static let configuration = CommandConfiguration(abstract: "What is excluded.")
@@ -198,13 +202,13 @@ struct LogCommand: ParsableCommand {
                 print(x.isEmpty ? "nothing excluded" : x.map { "\($0.kind) \($0.name)" }.joined(separator: "\n"))
             }
         }
-        static func change(_ c: Common, _ kind: String, _ name: String, _ on: Bool) throws {
+        static func change(_ c: Common, _ kind: String, _ name: String, _ on: Bool, json: Bool) throws {
             guard WorklogExclusion.kinds.contains(kind) else { throw ValidationError("kind must be project, task or session") }
-            let x = WorklogExclusion(kind: kind, name: kind == "task" ? name.uppercased() : name)
-            do {
-                let changed = try WorklogConfig.setExcluded(ZagonPaths(dir: c.dataDir), x, on)
-                print(changed ? (on ? "excluded \(kind) \(x.name)" : "\(kind) \(x.name) counts again") : "nothing to change")
-            } catch { throw ValidationError("\(error)") }
+            let x = WorklogExclusion(kind: kind, name: kind == "task" ? name.uppercased() : name), paths = ZagonPaths(dir: c.dataDir)
+            let changed: Bool
+            do { changed = try WorklogConfig.setExcluded(paths, x, on) } catch { throw ValidationError("\(error)") }
+            if json { try emit(WorklogConfig.load(paths).exclude); return }
+            print(changed ? (on ? "excluded \(kind) \(x.name)" : "\(kind) \(x.name) counts again") : "nothing to change")
         }
     }
 
@@ -243,13 +247,14 @@ struct LogCommand: ParsableCommand {
             let store = try common.open(), w = try common.worklog(store)
             try Settings.inZone(w.config.tz) {
                 let now = Time.now(), day = Time.dayString(now), (_, end) = Time.dayBounds(day)!, due = end - 300
-                let mark = "wltext_auto:" + day
-                if w.config.rebuildAtEnd, now >= due,
-                   try store.db.one("SELECT 1 FROM meta WHERE key = ?", [.text(mark)], { _ in true }) != true {
-                    // Marked first: a failed AI call must not come back every minute.
+                // Yesterday too, when 23:55 passed while the machine slept or the service was down.
+                for d in [Time.addDays(day, -1)!, day] where w.config.rebuildAtEnd && now >= Time.dayBounds(d)!.end - 300 {
+                    let mark = "wltext_auto:" + d
+                    guard try store.db.one("SELECT 1 FROM meta WHERE key = ?", [.text(mark)], { _ in true }) != true else { continue }
+                    // Marked first: a failed AI call must not come back every minute. ponytail: a failed day stays as it is.
                     try store.db.run("INSERT OR REPLACE INTO meta(key, value) VALUES(?, 1)", [.text(mark)])
-                    let p = try w.plan(day, refresh: true, now: now).plan
-                    warn("worklog texts of \(day): " + (p.notes.first { $0.hasPrefix("texts not rebuilt") } ?? "rebuilt"))
+                    let p = try w.plan(d, refresh: true, now: now).plan
+                    warn("worklog texts of \(d): " + (p.notes.first { $0.hasPrefix("texts not rebuilt") } ?? "rebuilt"))
                 }
                 print(Int(max(60, (now >= due ? Time.dayBounds(Time.addDays(day, 1)!)!.end - 300 : due) - Time.now())))
             }
