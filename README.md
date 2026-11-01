@@ -193,6 +193,10 @@ zagon export --since 0         # changed totals as NDJSON, read by the macOS app
 zagon handoff latest --to claude   # a summary of a session to continue it in a new one (claude|codex|gemini|cursor|clipboard|file)
 zagon task list                # tasks worked on in the last 7 days; --all; task add|show|todo|note|done|status|link|import|suggest
 zagon log plan 2026-10-29      # what to log to Jira that day; log commit writes it (asks first)
+zagon log plan --refresh       # build the rows' texts again (one AI call) if sessions worked after they were built
+zagon log text set 41 "…"      # a row's worklog text by hand (log text rebuild 41 [--summary] [--shorten]: one AI call)
+zagon log exclude add project example-tool   # never log this work (project | task | session; log exclude rm|list)
+zagon log config tz Asia/Nicosia             # [worklog] settings: tz, projects, day_summary, rebuild_at_end
 zagon log reconcile --from 2026-09-01 --to 2026-10-31 --md   # sessions against your Jira worklogs per task and day (--csv, --json)
 zagon update                   # the latest release (see Update above)
 ```
@@ -257,7 +261,22 @@ token_file = "~/.config/zagon/jira-token"   # an Atlassian API token, the file's
 
 [worklog]
 # reconcile_tolerance_min = 15   # log reconcile: a task's day where sessions and Jira differ by more is a mismatch
+# tz = "Asia/Nicosia"            # the zone worklog days are cut in (default: the database's `timezone`)
+# projects = "PROJ, OPS"         # Jira projects whose keys count, besides the ones Jira lists
+# day_summary = true             # the longest row of a task carries the day's summary
+# rebuild_at_end = true          # the service builds the day's texts again at 23:55 in `tz`
+# exclude = "project:example-tool, task:PROJ-9"   # work never logged (project | task | session:<id>)
 ```
+
+Worklog texts: each plan row gets 1–2 sentences about its own stretch, and the longest row of each task the day's
+summary (what the task was, what the check found, what was done), written by the summary's AI engine (`[summary]`) in
+the language of `[notify] lang`. They are built by `zagon log plan --refresh` (when sessions worked after the last
+build) and by the service at 23:55; a text set by hand is never replaced. The summary goes to Jira only when you ask:
+`zagon log commit --with-summary` puts it into the task's longest worklog, `--summary-comment PROJ-1` writes it as one
+comment on the issue (once per task and day). A session counts for a task when the key is in what you typed, in the
+first line of a brief file your message points to, in the git branch, a commit, the session title or a manual link —
+never from memory files, CLAUDE.md or files the agent read; a line with a clock range (a pasted worklog list) gives no
+key; once Jira's project list is known, only keys of those projects (and `projects`) count.
 
 Create the token at id.atlassian.com → Security → API tokens, then keep it in a file only you can read:
 
