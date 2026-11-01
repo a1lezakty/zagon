@@ -74,6 +74,8 @@ public struct Installer {
         /// PATH used to find `claude`, `codex`, `systemctl`.
         public var searchPath: String?
         public var now: Double
+        /// Running as root: with no user manager the service goes to the system unit.
+        public var root = geteuid() == 0
 
         /// `user`: its home replaces `$HOME` for every path.
         public init(paths: ZagonPaths? = nil, user: Account? = nil, zagon: String = Sys.executablePath()) {
@@ -226,27 +228,31 @@ public struct Installer {
                 log("service: wrote \(userUnit)")
             }
         }
-        if o.systemService {
-            let sys = unitText(system: true)
-            if Sys.readFile(systemUnit) != Array(sys.utf8) {
-                guard Sys.writeFile(systemUnit, Array(sys.utf8)) else { throw InstallError("cannot write \(systemUnit) (root needed)") }
-                log("service: wrote \(systemUnit)")
-            }
-        }
+        if o.systemService { try writeSystemUnit() }
         guard o.enableService else {
             if !o.systemService { log("service: enable with `zagon install --enable-service`") }
             return
         }
         guard let sc = Sys.which("systemctl", path: o.searchPath) else { log("service: systemctl not found"); return }
-        if o.systemService {
+        func enableSystem() {
             _ = runner([sc, "daemon-reload"])
             let rc = runner([sc, "enable", "--now", Sys.basename(systemUnit)])
             log(rc == 0 ? "service: \(Sys.basename(systemUnit)) enabled" : "service: enabling the system unit failed (\(rc))")
+        }
+        if o.systemService {
+            enableSystem()
         } else if forOther {
             log("service: as \(userName): systemctl --user enable --now zagon.service (or here: --system-service)")
             lingerNote().map(log)
         } else {
-            _ = runner([sc, "--user", "daemon-reload"])
+            let reload = runner([sc, "--user", "daemon-reload"])
+            if reload != 0 && o.root {
+                // Root over ssh or in a container has no user manager (no user bus): the system unit runs it instead.
+                log("service: systemd --user is not available here (\(reload)); using the system unit")
+                try writeSystemUnit()
+                enableSystem()
+                return
+            }
             let rc = runner([sc, "--user", "enable", "--now", "zagon.service"])
             log(rc == 0 ? "service: zagon.service enabled (systemd --user)"
                 : "service: systemd --user is not available (\(rc)); sudo zagon install --system-service --enable-service")
@@ -266,6 +272,14 @@ public struct Installer {
         guard link(exe, tmp) == 0 || Sys.readFile(exe).map({ Sys.writeFile(tmp, $0, mode: 0o755) }) == true,
               rename(tmp, prev) == 0 else { return nil }
         return prev
+    }
+
+    func writeSystemUnit() throws {
+        let sys = unitText(system: true)
+        if Sys.readFile(systemUnit) != Array(sys.utf8) {
+            guard Sys.writeFile(systemUnit, Array(sys.utf8)) else { throw InstallError("cannot write \(systemUnit) (root needed)") }
+            log("service: wrote \(systemUnit)")
+        }
     }
 
     /// systemd stops an account's --user services when its last login ends (ssh logout) unless it lingers; turning
@@ -793,11 +807,16 @@ public struct Installer {
     public struct Check: Sendable {
         public var ok: Bool
         public var text: String
+        /// `warn` / `info`: a fact printed in place of ok that never counts as missing (the Mac app reads only the ok
+        /// and MISSING lines).
+        public var tag: String? = nil
     }
 
     public func doctor() -> [Check] {
         var out: [Check] = []
         func add(_ ok: Bool, _ t: String) { out.append(Check(ok: ok, text: t)) }
+        func note(_ tag: String, _ t: String) { out.append(Check(ok: true, text: t, tag: tag)) }
+        let log = daemonLog()
         add(Sys.exists(o.zagon), "binary \(o.zagon)")
         func hookChecks(_ path: String, _ tool: String, _ events: [String]) {
             guard let b = Sys.readFile(path), let doc = try? load(b) else { add(false, "\(tool): \(path) missing or unreadable"); return }
@@ -822,6 +841,7 @@ public struct Installer {
             let cfg = Sys.readFile(codexConfig).map { String(decoding: $0, as: UTF8.self) } ?? ""
             let off = ["hooks", "codex_hooks"].contains { TOMLLite.raw(in: cfg, section: "features", key: $0) == "false" }
             add(!off, "codex: hooks feature " + (off ? "disabled in config.toml [features]" : "enabled (trust them once in /hooks)"))
+            codexHooksCheck(note)
         }
         if o.mcp {
             for (tool, on, has) in [("claude", o.claude, claudeHasMCP()), ("codex", o.codex, codexHasMCP())] where on {
@@ -830,13 +850,8 @@ public struct Installer {
             }
         }
         #if os(Linux)
-        let unit = Sys.exists(userUnit)
-        var unitText = "service: \(userUnit) " + (unit ? "present" : "missing")
-        if unit, let sc = Sys.which("systemctl", path: o.searchPath) {
-            unitText += runner([sc, "--user", "is-enabled", "--quiet", "zagon.service"]) == 0 ? ", enabled" : ", not enabled"
-        }
-        if Sys.exists(systemUnit) { unitText += "; system unit \(systemUnit) present" }
-        add(unit || Sys.exists(systemUnit), unitText)
+        serviceCheck(add)
+        healthCheck(log, add)
         #else
         add(true, "service: none (Zagon.app collects data on macOS)")
         #endif
@@ -846,6 +861,8 @@ public struct Installer {
         } else {
             add(Sys.isDir(o.paths.spool), "spool: \(o.paths.spool) " + (Sys.isDir(o.paths.spool) ? "empty (no hook has fired yet)" : "missing"))
         }
+        notifyCheck(log, note)
+        versionChecks(note)
         return out
     }
 
