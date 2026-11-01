@@ -134,7 +134,8 @@ public struct Worklog {
     public func skip(_ id: Int) throws -> WorklogRow? {
         guard let day = try db.one("SELECT day FROM worklog_plan WHERE id = ? AND state = 'planned'", [.int(Int64(id))], { $0.text(0) }),
               let day else { return nil }
-        try mark(id, state: "skipped")
+        // Only while planned: a commit may have claimed it (`writing`) meanwhile.
+        guard try db.run("UPDATE worklog_plan SET state = 'skipped' WHERE id = ? AND state = 'planned'", [.int(Int64(id))]) == 1 else { return nil }
         return try rows(day: day).first { $0.id == id }
     }
 

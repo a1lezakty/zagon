@@ -14,8 +14,8 @@ public enum ZagonMCP {
                               handoff: HandoffService? = nil, tasks: TaskService? = nil, paths: ZagonPaths? = nil,
                               now: @escaping () -> Timestamp = Time.now,
                               log: @escaping (String) -> Void = { _ in }) -> MCPServer {
-        let r = ReportTools(store: store, exportDir: exportDir, refresh: refresh, now: now, log: log)
-        return MCPServer(tools: r.tools + ServiceTools.tools(handoff: handoff, tasks: tasks) + (paths.map(SettingsTools.tools) ?? []),
+        let r = ReportTools(store: store, exportDir: exportDir, refresh: refresh, tasks: tasks, now: now, log: log)
+        return MCPServer(tools: r.tools + ServiceTools.tools(handoff: handoff, tasks: tasks) + (paths.map { SettingsTools.tools($0, store: store) } ?? []),
                          prompts: [ServiceTools.resume(handoff)], log: log)
     }
 }
@@ -23,23 +23,25 @@ public enum ZagonMCP {
 extension ZagonMCP {
     /// The text of the `limits` tool (also printed by `zagon today`).
     public static func limitsText(store: Store, now: Timestamp = Time.now()) throws -> String {
-        try ReportTools(store: store, exportDir: "", refresh: nil, now: { now }, log: { _ in }).limits(MCPArgs(.object([])))
+        try ReportTools(store: store, exportDir: "", refresh: nil, tasks: nil, now: { now }, log: { _ in }).limits(MCPArgs(.object([])))
     }
 }
 
-/// limits, sessions, day, week, range, search, export_day over `Store` / `Reports`.
+/// status, limits, sessions, day, week, range, summary, search, export_day over `Store` / `Reports`.
 final class ReportTools {
     let store: Store
     let reports: Reports
     let exportDir: String
     let refresh: (() throws -> Void)?
+    /// What is left to log, in `status`.
+    let tasks: TaskService?
     let now: () -> Timestamp
     let log: (String) -> Void
 
-    init(store: Store, exportDir: String, refresh: (() throws -> Void)?, now: @escaping () -> Timestamp,
+    init(store: Store, exportDir: String, refresh: (() throws -> Void)?, tasks: TaskService?, now: @escaping () -> Timestamp,
          log: @escaping (String) -> Void) {
         self.store = store; reports = Reports(store: store); self.exportDir = exportDir; self.refresh = refresh
-        self.now = now; self.log = log
+        self.tasks = tasks; self.now = now; self.log = log
     }
 
     var tools: [MCPTool] {
@@ -52,26 +54,38 @@ final class ReportTools {
             }
         }
         return [
+            t("status", "Status now",
+              "One call for \"where do I stand\": subscription limits, sessions waiting for the user, and what is left to log "
+              + "to Jira today (worklog_plan shows the rows).", ReportTools.status),
             t("limits", "Subscription limits",
               "Claude Code and Codex subscription limits: % used of the 5-hour and weekly windows, reset time, and a "
               + "forecast at the current pace.", ReportTools.limits),
             t("sessions", "Sessions",
               "Recent sessions (Claude Code and Codex) with live status, how long each has waited for the user, tokens, "
-              + "and the command to resume it. Waiting sessions come first. With `day`: sessions active that day.",
-              schema: MCPSchema.object(["day": MCPSchema.day("Only sessions active on this day"),
+              + "and the command to resume it. Waiting sessions come first. With `date`: sessions active that day.",
+              schema: MCPSchema.object(["date": MCPSchema.day("Only sessions active on this day"),
                                 "limit": MCPSchema.integer("How many (default 10)", min: 1, max: 50)]),
               ReportTools.sessions),
             t("day", "Day report",
-              "One day: tokens by kind, requests, session time and the user's own time, models, projects, tools, busiest "
-              + "hours, top sessions, and the day's summary if there is one.",
+              "One day: tokens by kind, requests, cost at API list prices, session time and the user's own time, models, "
+              + "projects, tools, busiest hours, top sessions, and the day's summary in full if there is one.",
               schema: MCPSchema.object(["date": MCPSchema.day("The day (default today)")]), ReportTools.day),
             t("week", "Week report",
-              "Seven days from `start` (default: the 7 days ending today): totals vs the previous 7 days, each day, top "
-              + "projects.", schema: MCPSchema.object(["start": MCPSchema.day("First day of the week")]), ReportTools.week),
+              "Seven days from `from`, or ending at `to` (default: the 7 days ending today): totals and cost vs the "
+              + "previous 7 days, each day, top projects.",
+              schema: MCPSchema.object(["from": MCPSchema.day("First day of the seven"), "to": MCPSchema.day("Last day of the seven")]),
+              ReportTools.week),
             t("range", "Range report",
-              "Totals for the days from `from` to `to` (inclusive, at most 366 days): tokens, time, models, projects, days.",
+              "Totals for the days from `from` to `to` (inclusive, at most 366 days): tokens, cost, time, models, projects, days.",
               schema: MCPSchema.object(["from": MCPSchema.day("First day"), "to": MCPSchema.day("Last day (default today)")],
                                required: ["from"]), ReportTools.range),
+            t("summary", "Week or month summary",
+              "What was done over a week (Monday to Sunday) or a calendar month: the period's summary if one was made "
+              + "(zagon summary --week / --month, the Mac app), else the day summaries of the period merged. Makes no AI "
+              + "call. A day's summary is in `day`.",
+              schema: MCPSchema.object(["period": MCPSchema.string("week (default) or month", enum: ["week", "month"]),
+                                        "date": MCPSchema.day("A day in it (default today); for a month YYYY-MM works too")]),
+              ReportTools.periodSummary),
             t("search", "Search sessions",
               "Find sessions by topic: words in session titles and in the user's typed messages (prefix match, all words "
               + "must match). Returns sessions with the number of matching messages and the command to resume each.",
@@ -159,7 +173,7 @@ final class ReportTools {
     func sessions(_ a: MCPArgs) throws -> String {
         let limit = min(max(try a.int("limit") ?? 10, 1), 50)
         var list: [SessionLine]
-        if let d = try a.day("day"), let (s, e) = Time.dayBounds(d) {
+        if let d = try a.day("date", old: "day"), let (s, e) = Time.dayBounds(d) {
             list = try reports.sessions(from: s, to: e, limit: limit, now: now())
             if list.isEmpty { return "No sessions on \(d)." }
         } else {
@@ -177,20 +191,39 @@ final class ReportTools {
         }
         let t = now()
         let nWait = list.filter(Self.waiting).count, nWork = list.filter { $0.status == "working" }.count
-        var out = ["\(list.count) sessions: \(nWait) waiting for the user, \(nWork) working"]
-        for s in list {
-            let x = extras[s.id] ?? SessionExtra()
-            var parts = ["\(s.tool) \(Txt.shortId(s.id))", s.title.map { "\"\(Txt.oneLine($0, 60))\"" } ?? "(untitled)"]
-            parts.append((s.project ?? "?") + (s.gitBranch.map { " (\($0))" } ?? ""))
-            if let st = s.status {
-                var label = ["waiting_input": "waiting for input", "waiting_permission": "waiting for permission"][st] ?? st
-                if st == "waiting_input", let d = s.drivenBy { label = d.isEmpty ? "waiting for another session" : "waiting for session \(d)" }
-                parts.append(label + (x.statusAt.map { " \(Txt.dur(t - $0))" } ?? ""))
-            }
-            if let l = s.lastAt { parts.append("last active \(Txt.when(l, now: t))") }
-            parts.append("\(Txt.tokens(s.tokens.total)) tokens, working \(Txt.dur(s.workingSec))")
-            if let cmd = Self.resumeCommand(id: s.id, tool: s.tool, cwd: x.cwd) { parts.append("resume: " + cmd) }
-            out.append("- " + parts.joined(separator: " · "))
+        return (["\(Txt.count(list.count, "session")): \(nWait) waiting for the user, \(nWork) working"]
+                + list.map { line($0, extras[$0.id] ?? SessionExtra(), t) }).joined(separator: "\n")
+    }
+
+    func line(_ s: SessionLine, _ x: SessionExtra, _ t: Timestamp) -> String {
+        var parts = ["\(s.tool) \(Txt.shortId(s.id))", s.title.map { "\"\(Txt.oneLine($0, 60))\"" } ?? "(untitled)"]
+        parts.append((s.project ?? "?") + (s.gitBranch.map { " (\($0))" } ?? ""))
+        if let st = s.status {
+            var label = ["waiting_input": "waiting for input", "waiting_permission": "waiting for permission"][st] ?? st
+            if st == "waiting_input", let d = s.drivenBy { label = d.isEmpty ? "waiting for another session" : "waiting for session \(d)" }
+            parts.append(label + (x.statusAt.map { " \(Txt.dur(t - $0))" } ?? ""))
+        }
+        if let l = s.lastAt { parts.append("last active \(Txt.when(l, now: t))") }
+        parts.append("\(Txt.tokens(s.tokens.total)) tokens, working \(Txt.dur(s.workingSec))")
+        if let cmd = Self.resumeCommand(id: s.id, tool: s.tool, cwd: x.cwd) { parts.append("resume: " + cmd) }
+        return "- " + parts.joined(separator: " · ")
+    }
+
+    // MARK: status
+
+    func status(_ a: MCPArgs) throws -> String {
+        var out = ["limits:"] + (try limits(a)).split(separator: "\n").map { "- " + $0 }
+        let t = now()
+        let live = try reports.sessions(limit: 50, now: t)
+        let wait = try live.filter(Self.waiting).map { ($0, try extra($0.id)) }.sorted { ($0.1.statusAt ?? 0) < ($1.1.statusAt ?? 0) }
+        out.append("sessions: \(wait.count) waiting for the user, \(live.filter { $0.status == "working" }.count) working"
+                   + (wait.isEmpty ? "" : ":"))
+        out += wait.map { line($0.0, $0.1, t) }
+        if let tasks {
+            // The plan is a part: its failure (Jira, config) must not hide the rest.
+            do { out.append("to log today: " + (try tasks.worklogBrief())) }
+            catch let e as MCPToolError { out.append("to log today: " + e.message) }
+            catch { out.append("to log today: not known (\(error))") }
         }
         return out.joined(separator: "\n")
     }
@@ -206,14 +239,15 @@ final class ReportTools {
     // MARK: day / week / range
 
     func day(_ a: MCPArgs) throws -> String {
-        let d = try a.day("date") ?? Time.dayString(now())
+        let d = try a.day("date", old: "day") ?? Time.dayString(now())
         let r = try reports.day(d)
         if r.tokens.total == 0 && r.sessionSec == 0 && r.sessions.isEmpty { return "\(d): no activity recorded." }
-        var out = ["\(d) (\(Txt.weekday(d))): " + Txt.tokenLine(r.tokens) + ", \(r.toolCalls) tool calls",
-                   "time: sessions \(Txt.dur(r.sessionSec)), the user \(Txt.dur(r.userSec)); \(r.sessions.count) sessions"]
+        var out: [String] = ["\(d) (\(Txt.weekday(d))): " + Txt.tokenLine(r.tokens) + ", \(r.toolCalls) tool calls",
+                   "cost: \(Txt.usd(r.cost, unpriced: r.unpriced)) \(Txt.apiNote)",
+                   "time: sessions \(Txt.dur(r.sessionSec)), the user \(Txt.dur(r.userSec)); \(Txt.count(r.sessions.count, "session"))"]
         if !r.models.isEmpty {
             out.append("models: " + r.models.prefix(5).map {
-                "\($0.model) \(Txt.tokens($0.tokens.total)) (\(Txt.share($0.tokens.total, r.tokens.total)))"
+                "\($0.model) \(Txt.tokens($0.tokens.total)) (\(Txt.share($0.tokens.total, r.tokens.total)), \(Txt.usd($0.cost, unpriced: $0.unpriced)))"
             }.joined(separator: ", "))
         }
         if !r.projects.isEmpty { out.append("projects: " + Txt.projects(r.projects.prefix(6))) }
@@ -232,28 +266,46 @@ final class ReportTools {
                            + "\(s.project ?? "?") · \(Txt.tokens(s.tokens.total)) tokens, working \(Txt.dur(s.workingSec))")
             }
         }
-        if let sum = try summary(d, markdown: false) { out.append("summary: " + Txt.oneLine(sum, 600)) }
+        if let k = try kept(d) { out.append("summary\(k.mark):\n" + k.text(markdown: false)) }
         return out.joined(separator: "\n")
     }
 
-    func summary(_ d: String, markdown: Bool = true) throws -> String? {
-        // One written by an AI over one made without; a stored doc as Markdown, free text from before as it is.
-        let t = try store.db.one("SELECT text FROM summary WHERE day=? ORDER BY engine = 'none', created DESC LIMIT 1",
-                                 [.text(d)]) { $0.text(0) } ?? nil
-        return t.map { SummaryDoc.decode($0)?.text(markdown: markdown) ?? $0 }
+    struct Kept {
+        let doc: SummaryDoc?
+        let raw: String
+        let created: Timestamp
+        /// Made without AI though one is set up: why.
+        let whyNoAI: String?
+        /// A stored doc as text or Markdown, free text from before as it is.
+        func text(markdown: Bool) -> String { doc?.text(markdown: markdown) ?? raw }
+        var mark: String { whyNoAI.map { " (without AI: \($0))" } ?? "" }
+    }
+
+    /// The kept summary of a day or a range key (`SummaryDoc.key`): one written by an AI over one made without.
+    func kept(_ key: String) throws -> Kept? {
+        guard let (engine, raw, created) = try store.db.one(
+            "SELECT engine, text, created FROM summary WHERE day=? ORDER BY engine = 'none', created DESC LIMIT 1", [.text(key)],
+            { ($0.text(0) ?? "", $0.text(1) ?? "", $0.real(2)) }) else { return nil }
+        return Kept(doc: SummaryDoc.decode(raw), raw: raw, created: created,
+                    whyNoAI: engine == "none" ? try DaySummary.whyNoAI(store, key) : nil)
     }
 
     func week(_ a: MCPArgs) throws -> String {
-        let end = try a.day("start").flatMap { Time.addDays($0, 6) } ?? Time.dayString(now())
+        let from = try a.day("from", old: "start"), to = try a.day("to")
+        if from != nil && to != nil { throw MCPToolError("from or to, not both: a week is seven days") }
+        var end = Time.dayString(now())
+        if let from, let e = Time.addDays(from, 6) { end = e } else if let to { end = to }
         let w = try reports.week(ending: end)
-        var out = ["\(w.from) … \(w.to): " + Txt.tokenLine(w.tokens)
+        var out: [String] = ["\(w.from) … \(w.to): " + Txt.tokenLine(w.tokens)
                    + " (\(Txt.change(w.tokens.total, w.previous.total)) vs the 7 days before: \(Txt.tokens(w.previous.total)))",
+                   "cost: \(Txt.usd(w.cost, unpriced: w.unpriced)) (the 7 days before: \(Txt.usd(w.previousCost, unpriced: w.previousUnpriced))) "
+                   + Txt.apiNote,
                    "time: sessions \(Txt.dur(w.sessionSec)) (before \(Txt.dur(w.previousSessionSec))), the user "
                    + "\(Txt.dur(w.userSec)) (before \(Txt.dur(w.previousUserSec)))",
                    "days:"]
         for d in w.days {
-            out.append("- \(d.day) \(Txt.weekday(d.day)): \(Txt.tokens(d.tokens.total)) tokens, sessions \(Txt.dur(d.sessionSec)), "
-                       + "the user \(Txt.dur(d.userSec))")
+            out.append("- \(d.day) \(Txt.weekday(d.day)): \(Txt.tokens(d.tokens.total)) tokens, \(Txt.usd(d.cost, unpriced: d.unpriced)), "
+                       + "sessions \(Txt.dur(d.sessionSec)), the user \(Txt.dur(d.userSec))")
         }
         if !w.projects.isEmpty { out.append("top projects: " + Txt.projects(w.projects.prefix(5))) }
         return out.joined(separator: "\n")
@@ -268,24 +320,29 @@ final class ReportTools {
             guard days.count < 366, let n = Time.addDays(last, 1) else { throw MCPToolError("at most 366 days") }
             days.append(n)
         }
-        var tokens = TokenTotals(), ss = 0.0, us = 0.0, calls = 0
-        var models: [String: TokenTotals] = [:], projects: [ProjectLine] = [], perDay: [(String, TokenTotals, Double)] = []
+        var tokens = TokenTotals(), ss = 0.0, us = 0.0, calls = 0, cost = 0.0, unpriced = 0
+        var models: [String: ModelLine] = [:], projects: [ProjectLine] = [], perDay: [(String, TokenTotals, Double)] = []
         for d in days {
             let r = try reports.day(d, withSessions: false)
-            tokens.add(r.tokens); ss += r.sessionSec; us += r.userSec; calls += r.toolCalls
-            for m in r.models { models[m.model, default: TokenTotals()].add(m.tokens) }
+            tokens.add(r.tokens); ss += r.sessionSec; us += r.userSec; calls += r.toolCalls; cost += r.cost; unpriced += r.unpriced
+            for m in r.models {
+                models[m.model, default: ModelLine(model: m.model, tokens: TokenTotals())].tokens.add(m.tokens)
+                models[m.model]!.cost += m.cost; models[m.model]!.unpriced += m.unpriced
+            }
             for p in r.projects {
                 if let i = projects.firstIndex(where: { $0.tool == p.tool && $0.project == p.project }) {
                     projects[i].tokens.add(p.tokens); projects[i].sessionSec += p.sessionSec; projects[i].toolCalls += p.toolCalls
+                    projects[i].cost += p.cost; projects[i].unpriced += p.unpriced
                 } else { projects.append(p) }
             }
             if r.tokens.total > 0 || r.sessionSec > 0 { perDay.append((d, r.tokens, r.sessionSec)) }
         }
-        var out = ["\(from) … \(to) (\(days.count) days, \(perDay.count) active): " + Txt.tokenLine(tokens) + ", \(calls) tool calls",
+        var out: [String] = ["\(from) … \(to) (\(days.count) days, \(perDay.count) active): " + Txt.tokenLine(tokens) + ", \(calls) tool calls",
+                   "cost: \(Txt.usd(cost, unpriced: unpriced)) \(Txt.apiNote)",
                    "time: sessions \(Txt.dur(ss)), the user \(Txt.dur(us))"]
         if !models.isEmpty {
-            out.append("models: " + models.sorted { $0.value.total > $1.value.total }.prefix(5).map {
-                "\($0.key) \(Txt.tokens($0.value.total)) (\(Txt.share($0.value.total, tokens.total)))"
+            out.append("models: " + models.values.sorted { $0.tokens.total > $1.tokens.total }.prefix(5).map {
+                "\($0.model) \(Txt.tokens($0.tokens.total)) (\(Txt.share($0.tokens.total, tokens.total)), \(Txt.usd($0.cost, unpriced: $0.unpriced)))"
             }.joined(separator: ", "))
         }
         projects.sort { ($0.tokens.total, $0.sessionSec) > ($1.tokens.total, $1.sessionSec) }
@@ -297,6 +354,38 @@ final class ReportTools {
                 .map { "\($0.0) \(Txt.tokens($0.1.total))" }.joined(separator: ", "))
         }
         return out.joined(separator: "\n")
+    }
+
+    // MARK: summary of a week or a month
+
+    func periodSummary(_ a: MCPArgs) throws -> String {
+        let period = try a.string("period") ?? "week"
+        guard ["week", "month"].contains(period) else { throw MCPToolError("period must be week or month") }
+        let raw = try a.string("date") ?? a.string("day")
+        let month = period == "month" && raw?.count == 7 ? raw : nil
+        let d = month == nil ? try a.day("date", old: "day") ?? Time.dayString(now()) : ""
+        guard let (from, to) = period == "week" ? DaySummary.week(of: d) : DaySummary.month(month ?? String(d.prefix(7))) else {
+            throw MCPToolError("date must be a date YYYY-MM-DD" + (period == "month" ? " or a month YYYY-MM" : ""))
+        }
+        let head = "\(period) \(from) … \(to)"
+        if let k = try kept(SummaryDoc.key(from, to)) {
+            return "\(head), summary written \(Txt.when(k.created, now: now()))\(k.mark):\n" + k.text(markdown: false)
+        }
+        var docs: [SummaryDoc] = [], noAI: [String] = []
+        for day in DaySummary.range(from, to) {
+            guard let k = try kept(day), let doc = k.doc else { continue }
+            docs.append(doc)
+            if k.whyNoAI != nil { noAI.append(day) }
+        }
+        guard !docs.isEmpty else {
+            return "\(head): no summaries kept. The service writes a day's summary each evening ([summary] time); "
+                + "zagon summary --\(period) writes this one (AI calls)."
+        }
+        let doc = DaySummary.merge(docs, from: from, to: to, Words(en: docs[0].lang != "ru"))
+        // ponytail: the days' cards joined without AI; zagon summary --week / --month writes a real one.
+        let made = noAI.isEmpty ? "" : " (made without AI: \(noAI.joined(separator: ", ")))"
+        return "\(head): no summary of the period kept; the \(Txt.count(docs.count, "day summary", "day summaries")) of it merged "
+            + "without AI\(made):\n" + doc.text(markdown: false)
     }
 
     // MARK: search
@@ -330,7 +419,7 @@ final class ReportTools {
     // MARK: export_day
 
     func exportDay(_ a: MCPArgs) throws -> String {
-        let d = try a.day("date") ?? Time.dayString(now())
+        let d = try a.day("date", old: "day") ?? Time.dayString(now())
         let r = try reports.day(d)
         let md = try markdown(r)
         guard Sys.mkdirs(exportDir), Sys.writeFile(exportDir + "/\(d).md", Array(md.utf8), mode: 0o600) else {
@@ -345,7 +434,11 @@ final class ReportTools {
         var md = "# \(r.day) (\(Txt.weekday(r.day)))\n\n"
         md += "- Tokens: \(Txt.tokenLine(r.tokens)), \(r.toolCalls) tool calls\n"
         md += "- Time: sessions \(Txt.dur(r.sessionSec)), you \(Txt.dur(r.userSec))\n"
-        if let s = try summary(r.day) { md += "\n## What was done\n\n\(s)\n" }
+        if let k = try kept(r.day) {
+            md += "\n## What was done\n\n"
+            if let why = k.whyNoAI { md += "_Made without AI: \(why)._\n\n" }
+            md += k.text(markdown: true) + "\n"
+        }
         if !r.sessions.isEmpty {
             md += "\n## Sessions\n\n| Session | Tool | Project | Branch | Tokens | Working |\n|---|---|---|---|---:|---:|\n"
             for s in r.sessions {
@@ -386,9 +479,20 @@ enum Txt {
     }
 
     static func projects<S: Sequence>(_ ps: S) -> String where S.Element == ProjectLine {
-        ps.map { "\($0.project.isEmpty ? "?" : $0.project) (\($0.tool)) \(tokens($0.tokens.total)), \(dur($0.sessionSec))" }
+        ps.map { "\($0.project.isEmpty ? "?" : $0.project) (\($0.tool)) \(tokens($0.tokens.total)), \(usd($0.cost, unpriced: $0.unpriced)), \(dur($0.sessionSec))" }
             .joined(separator: "; ")
     }
+
+    /// USD at API list prices (as `zagon today`); tokens of models with no known price add "?": "$ ?" when nothing
+    /// was priced, "$12+?" when part was.
+    static func usd(_ x: Double, unpriced: Int = 0) -> String {
+        let s = x > 0 && x < 1 ? "<$1" : "$\(Int(min(max(x, 0), 1e12).rounded()))"
+        return unpriced == 0 ? s : x == 0 ? "$ ?" : s + "+?"
+    }
+    static let apiNote = "at API list prices (for comparison; a subscription is billed differently)"
+
+    /// "1 session", "2 sessions".
+    static func count(_ n: Int, _ one: String, _ many: String? = nil) -> String { "\(n) " + (n == 1 ? one : many ?? one + "s") }
 
     // Clamps below: values come from local files, and an absurd one must not trap an Int / time_t conversion.
     static func pct(_ p: Double) -> String { "\(Int(min(max(p, -1e6), 1e6).rounded()))%" }

@@ -16,7 +16,7 @@ struct MCPCommand: ParsableCommand {
         let refresh: (() throws -> Void)? = noScan ? nil : { try common.scan(store) }
         if let e = try common.worklog(store).jiraSetupError { log("mcp: jira: \(e)") }
         let tasks = TaskTools(store: store, worklog: { try common.worklog(store) }, suggester: { try common.suggester(store) },
-                              refresh: refresh, log: log)
+                              refresh: refresh, exportDir: common.dataDir + "/exports", log: log)
         let handoff = HandoffTools(store: store, claudeDir: common.claudeDir, codexHome: common.codexDir)
         let server = ZagonMCP.server(store: store, exportDir: common.dataDir + "/exports", refresh: refresh,
                                      handoff: handoff, tasks: tasks, paths: ZagonPaths(dir: common.dataDir), log: log)

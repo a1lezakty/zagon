@@ -13,7 +13,7 @@ struct TaskMCP {
         f = try MCPFixture()
         let store = f.store
         tools = TaskTools(store: store, worklog: { DayWorklog(store: store, linker: try TaskLinker(), jira: jira) },
-                          now: { Time.parseISO("2026-10-29T12:00:00Z")! })
+                          exportDir: f.dir + "/exports", now: { Time.parseISO("2026-10-29T12:00:00Z")! })
         server = ZagonMCP.server(store: f.store, exportDir: f.dir + "/exports", tasks: tools)
     }
 
@@ -58,7 +58,7 @@ private let day = "2026-10-29"
             #expect(g.contains(want), "\(want) in \(g)")
         }
         let l = try m.call("task_list", #"{"status":"in_progress"}"#).text
-        #expect(l.hasPrefix("PROJ-1") && l.contains("1 sessions") && !l.contains("ZAG-1"), "\(l)")
+        #expect(l.hasPrefix("PROJ-1     in_progress worked 5m in 7d       1 session    Parser work") && !l.contains("ZAG-1"), "\(l)")
         // A task with no work in the last 7 days comes only with all: true.
         _ = try m.call("task_create", #"{"title":"Later","key":"OPS-5"}"#)
         #expect(try !m.call("task_list", "{}").text.contains("OPS-5"))
@@ -74,12 +74,43 @@ private let day = "2026-10-29"
         #expect(c.isError && c.text.contains("Jira is not connected") && c.text.contains("nothing was written"))
     }
 
+    /// worklog_text / worklog_skip on the real plan; status says what is left to log.
+    @Test func planEdits() throws {
+        let m = try TaskMCP()
+        _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)
+        _ = try m.call("worklog_plan", #"{"date":"\#(day)"}"#)
+        let id = try #require(Worklog(store: m.f.store).rows(day: day).first { $0.state == "planned" }?.id)
+        let st = try m.call("status", "{}").text
+        #expect(st.contains("\nto log today: 2026-10-29: worked 7m · sessions 7m · Jira not connected · to log to Jira 5m") && st.contains("(1 row; worklog_plan shows them)"), "\(st)")
+        let t = try m.call("worklog_text", #"{"id":\#(id),"text":"Split the parser","confirm":true}"#)
+        #expect(!t.isError && t.text.contains("#\(id)") && t.text.contains("Split the parser") && t.text.contains("[manual]"), "\(t.text)")
+        #expect(try m.call("worklog_plan", #"{"date":"\#(day)"}"#).text.contains("Split the parser"))
+        #expect(try m.call("worklog_text", #"{"id":\#(id + 100),"text":"x","confirm":true}"#).text.contains("No plan row"))
+        #expect(try m.call("worklog_text", #"{"id":\#(id),"text":"","confirm":true}"#).text.contains("[manual]") == false)
+        let s = try m.call("worklog_skip", #"{"ids":[\#(id)],"confirm":true}"#).text
+        #expect(s.hasPrefix("skipped #\(id) 2026-10-29 PROJ-1 "), "\(s)")
+        #expect(try Worklog(store: m.f.store).rows(day: day).first { $0.id == id }?.state == "skipped")
+        // A row a commit claimed meanwhile is not skipped.
+        try m.f.store.db.run("UPDATE worklog_plan SET state = 'writing' WHERE id = ?", [.int(Int64(id))])
+        #expect(try Worklog(store: m.f.store).skip(id) == nil)
+        #expect(try Worklog(store: m.f.store).rows(day: day).first { $0.id == id }?.state == "writing")
+    }
+
     @Test func reconcileWithoutJira() throws {
         let m = try TaskMCP()
         _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)
-        let r = try m.call("worklog_reconcile", #"{"from":"\#(day)","to":"2026-11-05"}"#)
+        let r = try m.call("worklog_reconcile", #"{"from":"\#(day)","to":"2026-11-05","format":"md"}"#)
         #expect(!r.isError && r.text.hasPrefix("# Worklogs against sessions: 2026-10-29 – 2026-10-29") && r.text.contains("| PROJ-1 | PROJ-1 | Parser work |")
                 && r.text.contains("Jira not connected"), "\(r.text)")
+        // text by default; an answer over the limit goes to a file, with the totals per task.
+        let t = try m.call("worklog_reconcile", #"{"from":"\#(day)"}"#).text
+        #expect(t.hasPrefix("2026-10-29 – 2026-10-29: worked ") && t.contains("\ndays:\n"), "\(t)")
+        m.tools.maxInline = 100
+        let big = try m.call("worklog_reconcile", #"{"from":"\#(day)"}"#).text
+        let path = m.f.dir + "/exports/reconcile-2026-10-29-2026-10-29.txt"
+        #expect(big.hasPrefix("Wrote \(path) (\(t.utf8.count) bytes, text)") && big.contains("PROJ-1") && !big.contains("days:"), "\(big)")
+        #expect(try String(contentsOfFile: path, encoding: .utf8) == t)
+        m.tools.maxInline = 24_000
         let j = try m.call("worklog_reconcile", #"{"from":"\#(day)","format":"json"}"#).text
         #expect(JValue.parse(j)?["tasks"]?.array?.first?["status"]?.string == "only_sessions", "\(j)")
         #expect(try m.call("worklog_reconcile", #"{"from":"\#(day)","format":"xml"}"#).isError)
@@ -117,6 +148,53 @@ struct TaskMCPJiraTests {
         #expect(again.contains("logged") && again.contains("in Jira 5m"), "\(again)")
         #expect(try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#).text == "Nothing to write to Jira for \(day).")
         #expect(try m.call("worklog_commit", #"{"date":"\#(day)","confirm":false}"#).isError)
+    }
+
+    /// Edits only on rows still as shown; status shows no rows; a skipped row is simply not written.
+    @Test func editsOfAShownPlanOnly() throws {
+        let mock = try JiraMock(state: Self.state)
+        let m = try TaskMCP(jira: try JiraClient(mock.config))
+        _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)
+        #expect(try m.call("status", "{}").text.contains("to log today: 2026-10-29"))
+        let early = try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#)
+        #expect(early.isError && early.text.contains("Call worklog_plan for \(day) first"), "\(early.text)")
+        let id = try #require(Worklog(store: m.f.store).rows(day: day).first?.id)
+        let unseen = try m.call("worklog_skip", #"{"ids":[\#(id)],"confirm":true}"#)
+        #expect(unseen.isError && unseen.text.contains("was not shown here") && unseen.text.hasSuffix("Nothing was skipped."), "\(unseen.text)")
+        // The row's Jira issue changed after the plan was shown: no new text, and commit wants the plan again.
+        _ = try m.call("worklog_plan", #"{"date":"\#(day)"}"#)
+        _ = try m.call("task_update", #"{"ref":"PROJ-1","jira_key":"PROJ-2"}"#)
+        let t = try m.call("worklog_text", #"{"id":\#(id),"text":"Elsewhere","confirm":true}"#)
+        #expect(t.isError && t.text.contains("changed since worklog_plan showed it"), "\(t.text)")
+        #expect(try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#).text.contains("Call worklog_plan for \(day) first"))
+        _ = try m.call("task_update", #"{"ref":"PROJ-1","jira_key":"PROJ-1"}"#)
+        _ = try m.call("worklog_plan", #"{"date":"\#(day)"}"#)
+        // A row shown for Jira that changed since: not skipped; with it, none of the others either.
+        _ = try m.call("task_update", #"{"ref":"PROJ-1","jira_key":"PROJ-2"}"#)
+        let moved = try m.call("worklog_skip", #"{"ids":[\#(id)],"confirm":true}"#)
+        #expect(moved.isError && moved.text.contains("changed since worklog_plan showed it"), "\(moved.text)")
+        _ = try m.call("task_update", #"{"ref":"PROJ-1","jira_key":"PROJ-1"}"#)
+        _ = try m.call("worklog_plan", #"{"date":"\#(day)"}"#)
+        let mixed = try m.call("worklog_skip", #"{"ids":[\#(id), \#(id + 100)],"confirm":true}"#)
+        #expect(mixed.isError && mixed.text == "#\(id + 100): no planned row\nNothing was skipped.", "\(mixed.text)")
+        #expect(try Worklog(store: m.f.store).rows(day: day).first { $0.id == id }?.state == "planned")
+        #expect(try !m.call("worklog_skip", #"{"ids":[\#(id)],"confirm":true}"#).isError)
+        #expect(try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#).text == "Nothing to write to Jira for \(day).")
+        #expect((try mock.state()["issues"] as! [String: [String: Any]])["PROJ-1"]!["worklogs"] == nil)
+    }
+
+    /// A text set through worklog_text after the plan was shown counts as shown: commit writes it.
+    @Test func commitWritesTheEditedText() throws {
+        let mock = try JiraMock(state: Self.state)
+        let m = try TaskMCP(jira: try JiraClient(mock.config))
+        _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)
+        _ = try m.call("worklog_plan", #"{"date":"\#(day)"}"#)
+        let id = try #require(Worklog(store: m.f.store).rows(day: day).first?.id)
+        #expect(try !m.call("worklog_text", #"{"id":\#(id),"text":"Split the parser","confirm":true}"#).isError)
+        let ok = try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#)
+        #expect(!ok.isError && ok.text.hasSuffix("1 worklogs written to Jira"), "\(ok.text)")
+        let ws = try #require((try mock.state()["issues"] as! [String: [String: Any]])["PROJ-1"]!["worklogs"] as? [[String: Any]])
+        #expect(ws.count == 1 && ws[0]["comment"] as? String == "Split the parser")
     }
 
     /// Anything that changes a shown row before the commit (its Jira issue, new work re-planned by another process,

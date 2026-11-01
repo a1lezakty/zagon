@@ -699,7 +699,8 @@ struct ChannelTests {
         #expect(prompt.hasPrefix("Below is a digest") && prompt.contains("[1] Project repo (Claude), session “Parser fixes”"))
         #expect(m2.title == "Day summary" && m2.buttons == [[Message.Button("Details", "day:2026-10-30")]])
         #expect(m2.text.hasPrefix("Fri, October 30. Sessions worked 15 min") && m2.text.contains("\n\n▸ repo · Parser fixes — 15 min")
-                && m2.text.contains(" tokens.\nWaited for you longest: repo — 36 min.\n\nProjects: 1, sessions: 1, commits: 1."))
+                && m2.text.contains(" tokens.\nWaited for you longest: repo — 36 min.\nSummary without AI: claude: no answer in ")
+                && m2.text.contains(" s\n\nProjects: 1, sessions: 1, commits: 1."), "\(m2.text)")
     }
 }
 
