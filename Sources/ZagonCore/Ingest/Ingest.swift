@@ -624,7 +624,9 @@ public final class Ingest {
     /// Distinct task keys in a typed message, upper-cased; a match glued to a letter or digit before it is not a key.
     /// A line that also holds a clock range (`09:00–10:15`) gives none: a pasted worklog or plan talks about time
     /// already spent, it does not ask to work on those tasks.
-    func taskKeys(_ text: String) -> [String] {
+    func taskKeys(_ text: String) -> [String] { Self.taskKeys(text, keys) }
+
+    static func taskKeys(_ text: String, _ keys: Regex<AnyRegexOutput>?) -> [String] {
         guard let keys else { return [] }
         var out: [String] = []
         // A block (a paragraph, or a numbered item up to the next) that holds a clock range is a pasted worklog list:
@@ -647,8 +649,8 @@ public final class Ingest {
         return out
     }
 
-    let clockRange = #/\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}/#
-    let itemStart = #/^\s*\d{1,2}[.)]\s/#
+    nonisolated(unsafe) static let clockRange = #/\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}/#
+    nonisolated(unsafe) static let itemStart = #/^\s*\d{1,2}[.)]\s/#
 
     /// The message without what the agent's harness added to it (`<system-reminder>` spans: memory, CLAUDE.md, notes
     /// of the tool); an unclosed span runs to the end.

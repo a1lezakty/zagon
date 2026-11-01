@@ -23,7 +23,7 @@ public struct ZagonPaths: Sendable {
 }
 
 /// `zagon hook <tool> <event>` and `zagon statusline` write one compact NDJSON line per call to
-/// `spool/<yyyy-mm-dd>.ndjson` (UTC day). Only ids, paths, event names and numbers: never prompt text or tool input.
+/// `spool/<yyyy-mm-dd>.ndjson` (UTC day; Cursor's agent: `<yyyy-mm-dd>.cursor.ndjson`). Only ids, paths, event names and numbers: never prompt text or tool input.
 public enum HookSpool {
     /// Hook payload fields copied to the spool (everything else, e.g. `prompt`, `tool_input`, is dropped).
     static let hookKeys: Set<String> = ["session_id", "cwd", "hook_event_name", "notification_type", "tool_name",
@@ -54,7 +54,8 @@ public enum HookSpool {
         let payload = isatty(stdinFD) == 1 ? [] : Sys.readAll(fd: stdinFD)
         let ts = Sys.now()
         if fromOtherAgent(payload) {
-            if let line = cursorLine(event: event, payload: payload, ts: ts) {
+            let keys = event == "UserPromptSubmit" ? Settings.keyPattern(paths) : nil
+            if let line = cursorLine(event: event, payload: payload, ts: ts, keyPattern: keys) {
                 append(line, paths: paths, ts: ts, name: ".cursor")
                 if !Sys.exists(paths.cursorHooks) { Sys.append(paths.cursorHooks, Array("\(fmt(ts))\n".utf8)) }
             }
@@ -85,11 +86,12 @@ public enum HookSpool {
     /// Cursor's agent runs these hooks too (Third-Party Imports, on by default; cursor.com/docs/hooks) with its own
     /// input: `conversation_id`, `workspace_roots`, `model`, `cursor_version`. Kept as tool `cursor`: the event is the
     /// Claude name the hook was installed for (Cursor maps `Stop` → `stop`, `UserPromptSubmit` → `beforeSubmitPrompt`…).
-    /// Only ids, the first workspace root (else `cwd`), the model and the tool name; never `prompt`, `user_email` or tool
-    /// input / output. nil = not Cursor (no `cursor_version`) or no conversation id.
+    /// Only ids, the first workspace root (else `cwd`), the model, the tool name and the task keys of the prompt
+    /// (`keyPattern`, as Ingest finds them; Cursor's transcript is read only for the time before its hooks); never
+    /// `prompt`, `user_email` or tool input / output. nil = not Cursor (no `cursor_version`) or no conversation id.
     /// ponytail: field names from Cursor's docs, unconfirmed on a live Cursor; unknown fields are ignored, missing ones
     /// only leave the line without them.
-    static func cursorLine(event: String, payload: [UInt8], ts: Double) -> String? {
+    static func cursorLine(event: String, payload: [UInt8], ts: Double, keyPattern: String? = nil) -> String? {
         guard let v = JValue.parse(payload), v["cursor_version"] != nil,
               let sid = [v["conversation_id"], v["session_id"]].lazy.compactMap({ $0?.string }).first(where: { !$0.isEmpty })
         else { return nil }
@@ -100,6 +102,10 @@ public enum HookSpool {
         let fields = [("cwd", roots.first ?? v["cwd"]?.string), ("model", v["model"]?.string), ("tool_name", v["tool_name"]?.string),
                       ("transcript_path", v["transcript_path"]?.string)]
         for (k, val) in fields { if let val, !val.isEmpty { m.append(.init(k, .string(String(val.prefix(maxField))))) } }
+        if let p = v["prompt"]?.string, let re = keyPattern.flatMap({ try? Regex($0) }) {
+            let keys = Ingest.taskKeys(Ingest.typedText(p), re).prefix(32).joined(separator: " ")
+            if !keys.isEmpty { m.append(.init("keys", .string(String(keys.prefix(maxField))))) }
+        }
         return JValue.object(m).compact
     }
 

@@ -16,7 +16,11 @@ import Testing
         #expect(s("Tuesday, May 5, 2026, 18:07 (GMT)") == t1)
         #expect(s("Tuesday, May 5, 2026, 11:37 PM (UTC+5:30)") == t1)
         for bad in ["", "Tuesday, May 5, 2026", "Tuesday, Foo 5, 2026, 6:07 PM (UTC)", "Tuesday, May 5, 2026, 13:07 PM (UTC)",
-                    "Tuesday, May 5, 2026, 6:07 PM (Europe/Berlin)", "Tuesday, May 5, 2026, 6:07 PM (UTC*2)"] {
+                    "Tuesday, May 5, 2026, 6:07 PM (Europe/Berlin)", "Tuesday, May 5, 2026, 6:07 PM (UTC*2)",
+                    // no overflow on any number
+                    "Tuesday, May 5, 99999999999999999, 6:07 PM (UTC)", "Tuesday, May 5, -9223372036854775808, 6:07 PM (UTC)",
+                    "Tuesday, May 5, 2026, 6:07 PM (UTC+9999999999999999)", "Tuesday, May 5, 2026, 6:07 PM (UTC+5:99)",
+                    "Tuesday, May 99999999999999999999, 2026, 6:07 PM (UTC)"] {
             #expect(s(bad) == nil, "\(bad)")
         }
     }
@@ -35,14 +39,19 @@ import Testing
         try FileManager.default.createDirectory(atPath: proj, withIntermediateDirectories: true)
         let real = Sys.realPath(proj) ?? proj
         let slug = String(real.dropFirst().map { $0.isLetter || $0.isNumber ? $0 : "-" })
-        #expect(CursorTranscriptParser.path(ofSlug: slug, home: "/nonexistent") == real)
-        #expect(CursorTranscriptParser.path(ofSlug: slug + "-gone", home: "/nonexistent") == nil)
+        #expect(CursorTranscriptParser.folder(ofSlug: slug, home: "/nonexistent") == (real, "web-ui"))
+        #expect(CursorTranscriptParser.folder(ofSlug: slug + "-gone-app", home: "/nonexistent") == (nil, "gone-app"))
+        #expect(CursorTranscriptParser.folder(ofSlug: "nowhere-at-all", home: "/nonexistent") == (nil, "nowhere-at-all"))
         // A folder macOS guards is not looked into (it would ask the user for access).
         let desk = tmp + "/Desktop/app"
         try FileManager.default.createDirectory(atPath: desk, withIntermediateDirectories: true)
         let deskReal = Sys.realPath(desk) ?? desk
-        #expect(CursorTranscriptParser.path(ofSlug: String(deskReal.dropFirst().map { $0.isLetter || $0.isNumber ? $0 : "-" }),
-                                            home: Sys.realPath(tmp) ?? tmp) == nil)
+        #expect(CursorTranscriptParser.folder(ofSlug: String(deskReal.dropFirst().map { $0.isLetter || $0.isNumber ? $0 : "-" }),
+                                              home: Sys.realPath(tmp) ?? tmp) == (nil, "app"))
+        // Nor through a link to it.
+        _ = symlink(deskReal, tmp + "/link")
+        let linkSlug = String(((Sys.realPath(tmp) ?? tmp) + "/link").dropFirst().map { $0.isLetter || $0.isNumber ? $0 : "-" })
+        #expect(CursorTranscriptParser.folder(ofSlug: linkSlug, home: Sys.realPath(tmp) ?? tmp) == (nil, "link"))
     }
 
     /// A transcript as Cursor 3.x writes it: no times except `<timestamp>` before some typed messages.
@@ -82,17 +91,19 @@ import Testing
         let store = try Store(path: ":memory:")
         let stats = try Ingest(store: store, sources: CursorSource.specs(paths: paths)).scan()
         #expect(stats.badLines == 1)
-        // Turns: each stamped message until a second before the next one, the last until the file's last write.
-        #expect(try working(store, "cursor:c-1") == [[t1, t2 - 1], [t2, t3 - 1], [t3, t3 + 300]])
+        // Turns: each stamped message until a second before the next one (at most 10 minutes), the last until the
+        // file's last write.
+        let w = try working(store, "cursor:c-1")
+        #expect(w == [[t1, t2 - 1], [t2, t2 + 600], [t3, t3 + 300]])
         let s = try #require(try store.db.one("SELECT tool, title, project, cwd, user_msgs FROM session WHERE id = 'cursor:c-1'") {
             [$0.text(0), $0.text(1), $0.text(2), $0.text(3), "\($0.int(4))"]
         })
-        #expect(s == ["cursor", "Fix PROJ-7 login", "proj", nil, "3"])
+        #expect(s == ["cursor", "Fix PROJ-7 login", "gone-proj", nil, "3"])
         var keys: [String] = []
         try store.db.query("SELECT key FROM task_key WHERE session_id = 'cursor:c-1' ORDER BY at") { keys.append($0.text(0) ?? "") }
         #expect(keys == ["PROJ-7"])  // the message without a time is not placed, so its key is not either
         #expect(try store.db.one("SELECT count(*) FROM session WHERE id LIKE '%s-1%'") { $0.int(0) } == 0)
-        #expect(try store.db.one("SELECT sum(session_sec) FROM day_agg WHERE tool = 'cursor'") { $0.real(0) } == 1858)
+        #expect(try store.db.one("SELECT sum(session_sec) FROM day_agg WHERE tool = 'cursor'") { $0.real(0) } == 1199)
     }
 
     @Test func transcriptsStopWhereHooksBegin() throws {
@@ -115,14 +126,38 @@ import Testing
 
     func feed(_ paths: ZagonPaths, _ event: String, _ ts: Double, _ extra: String = "") {
         let p = #"{"conversation_id":"c-9","generation_id":"g","model":"gpt-5","hook_event_name":"x","cursor_version":"3.1.0","workspace_roots":["/w/app"],"user_email":null,"transcript_path":null\#(extra)}"#
-        HookSpool.append(HookSpool.cursorLine(event: event, payload: Array(p.utf8), ts: ts)!, paths: paths, ts: ts, name: ".cursor")
+        HookSpool.append(HookSpool.cursorLine(event: event, payload: Array(p.utf8), ts: ts, keyPattern: IngestOptions.defaultKeyPattern)!,
+                         paths: paths, ts: ts, name: ".cursor")
+    }
+
+    /// While the answer is written (lines without a time), the last turn grows with the file.
+    @Test func lastTurnGrowsWithTheFile() throws {
+        let home = makeTempDir(), paths = ZagonPaths(home: home, dir: home + "/z")
+        let dir = home + "/.cursor/projects/p/agent-transcripts/c-2"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let path = dir + "/c-2.jsonl"
+        try (#"{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Tuesday, May 5, 2026, 6:07 PM (UTC)</timestamp><user_query>go</user_query>"}]}}"# + "\n")
+            .write(toFile: path, atomically: false, encoding: .utf8)
+        func touch(_ t: Double) throws { try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: t)], ofItemAtPath: path) }
+        try touch(t1 + 5)
+        let store = try Store(path: ":memory:"), ingest = Ingest(store: store, sources: CursorSource.specs(paths: paths))
+        try ingest.scan()
+        #expect(try working(store, "cursor:c-2") == [[t1, t1 + 5]])
+        Sys.append(path, Array(#"{"role":"assistant","message":{"content":[{"type":"text","text":"x"}]}}"#.utf8) + [0x0A])
+        try touch(t1 + 200)
+        try ingest.scan()
+        #expect(try working(store, "cursor:c-2") == [[t1, t1 + 200]])
+        Sys.append(path, Array(#"{"role":"assistant","message":{"content":[{"type":"text","text":"y"}]}}"#.utf8) + [0x0A])
+        try touch(t1 + 5000)  // reopened much later: the turn keeps its length
+        try ingest.scan()
+        #expect(try working(store, "cursor:c-2") == [[t1, t1 + 200]])
     }
 
     @Test func hooksGiveExactTurnsAndStatus() throws {
         let home = makeTempDir(), paths = ZagonPaths(home: home, dir: home + "/z")
         let t = 1778004000.0
         feed(paths, "SessionStart", t - 50, #","session_id":"other-id","composer_mode":"agent""#)
-        feed(paths, "UserPromptSubmit", t, #","prompt":"words","attachments":[]"#)
+        feed(paths, "UserPromptSubmit", t, #","prompt":"please fix PROJ-4 and proj-5 today","attachments":[]"#)
         feed(paths, "PostToolUse", t + 60, #","tool_name":"Shell","tool_input":{"command":"ls"},"tool_output":"{}","cwd":"/w/app/sub""#)
         feed(paths, "SubagentStop", t + 90, #","duration_ms":20000"#)
         feed(paths, "Stop", t + 120, #","status":"completed","loop_count":0"#)
@@ -138,6 +173,10 @@ import Testing
         })
         #expect(s == ["cursor", "gpt-5", "/w/app", "app", "waiting_input", "2"])
         #expect(try store.db.one("SELECT count(*) FROM session") { $0.int(0) } == 1)
+        // The prompt's task keys link the session to its task; its words are not kept.
+        #expect(try store.db.one("SELECT group_concat(key) FROM task_key WHERE session_id = 'cursor:c-9'") { $0.text(0) } == "PROJ-4")
+        let spool = spoolLines(paths.dir).joined()
+        #expect(spool.contains(#""keys":"PROJ-4""#) && !spool.contains("please") && !spool.contains("today"))
         // The daemon reads Cursor's spool files as a source too.
         let d = Daemon(ingest: Ingest(store: store, sources: sources), options: { var o = Daemon.Options(); o.spoolDir = paths.spool; return o }(),
                        log: { _ in })

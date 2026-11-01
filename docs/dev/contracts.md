@@ -46,15 +46,21 @@ inode) is a new file.
 Cursor's agent (`Cursor/CursorSource.swift`, tool `cursor`): sessions and time only, never tokens or limits (Cursor
 keeps them on its servers; Zagon reads no credentials). Two sources, both `CursorSource.specs`:
 
-- hooks: `spool/<UTC day>.cursor.ndjson` (see Live status from hooks). `UserPromptSubmit` is a typed message (no
-  text), `PostToolUse` / `SubagentStop` / `PreCompact` / `Stop` are agent events, so turns are exact; each line also
-  gives `SessionMeta` (cwd = the first workspace root, model). The daemon passes these files to `Ingest.update` too.
+- hooks: `spool/<UTC day>.cursor.ndjson` (see Live status from hooks). `UserPromptSubmit` is a typed message whose
+  text is only the prompt's task keys (found by the hook as Ingest finds them, no brief keys), `PostToolUse` /
+  `SubagentStop` / `PreCompact` / `Stop` are agent events, so turns are exact; each line also gives `SessionMeta`
+  (cwd = the first workspace root, model). The daemon passes these files to `Ingest.update` too. Each file is its own
+  TurnBuilder: a turn across UTC midnight loses the stretch between its last event before and its first after.
+  These files are kept 40 days (SpoolIngest; other spool files 7): they are the only record of this time.
 - transcripts: `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl` (sub-agent logs and old `.txt` are
   left out). Lines hold no times; a typed message (`<user_query>`, its text for keys and search) is placed only when
   a `<timestamp>` tag (minutes, `UTC±h[:mm]`) precedes it, and its turn ends a second before the next placed one, the
-  last at the file's mtime (TurnBuilder's `session_gap` still cuts longer gaps): approximate time. Title = the first
-  line of the first typed message (rank 0). The folder is found by matching the slug (`/` and other non-alphanumerics
-  as `-`) against folder entries, never inside folders macOS guards; unknown = no cwd, project = the slug's last part.
+  last at the file's mtime (also when only answer lines came since), each at most 10 minutes, and none when that end
+  is over 30 minutes away: approximate time. The stamp is the last `<timestamp>` before the last `<user_query>`. Title
+  = the first line of the first typed message (rank 0). The folder is found by matching the slug (`/` and other
+  non-alphanumerics as `-`) against folder entries, never inside folders macOS guards and never through a link;
+  unknown = no cwd, project = the part of the slug no folder matched. Sub-agent logs are not read. Archive copies
+  neither source (Claude Code and Codex only).
   Only messages more than a minute before `<data-dir>/cursor-hooks` (the first Cursor hook's time, written once by
   `zagon hook`) count: after that the hooks do, and the two never overlap.
 

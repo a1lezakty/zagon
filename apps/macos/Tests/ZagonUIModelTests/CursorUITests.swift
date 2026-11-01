@@ -40,7 +40,7 @@ final class CursorUITests: XCTestCase {
 
         let day = DayVM(p.day(now), f)
         XCTAssertGreaterThanOrEqual(p.day(now).cursorSec, 120)
-        XCTAssertTrue(day.limitNotes.contains { $0.text.hasPrefix("Cursor ") && $0.text.contains("approximate") },
+        XCTAssertTrue(day.limitNotes.contains { $0.text.hasPrefix("Cursor ") && $0.text.contains("no tokens") },
                       "\(day.limitNotes.map(\.text))")
     }
 }
