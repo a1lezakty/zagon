@@ -63,7 +63,9 @@ enum Z {
     static let alarmButton = Color(dark: 0x3A2C2D, light: 0xFADCD8)
     static let alarmSub = Color(dark: 0xB9AEB0, light: 0x7A5D5A)
     static let alarmInk = Color(dark: 0xF0D9D6, light: 0x5C2A25)
-    /// Banners: amber (forecasts) and blue (notes).
+    /// Banners: amber (forecasts) and blue (notes), and their bold fragment.
+    static let blueBanner = Color(dark: 0x1E2633, light: 0xEAF1FD)
+    static let bannerBold = Color(dark: 0xFFFFFF, light: 0x1C1C1F)
     static let amberFill = Color(dark: 0x2B2A24, light: 0xFFF6E0)
     static let amberBorder = Color(dark: 0x4A4330, light: 0xEDD394)
     static let amberInk = Color(dark: 0xEDE6D6, light: 0x4A3B12)
@@ -399,7 +401,7 @@ struct Banner: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Dot(color: dot).padding(.top, 5)
-            (Text(text.before) + Text(text.bold).bold().foregroundColor(Z.text) + Text(text.after))
+            (Text(text.before) + Text(text.bold).bold().foregroundColor(Z.bannerBold) + Text(text.after))
                 .font(.system(size: 13)).foregroundColor(ink).lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
@@ -414,7 +416,7 @@ struct Banner: View {
     }
 
     static func blue(_ e: Emphasis) -> Banner {
-        Banner(text: e, dot: Z.week, fill: Z.blueFill, border: Z.blueBorder, ink: Z.blueText)
+        Banner(text: e, dot: Z.week, fill: Z.blueBanner, border: Z.blueBorder, ink: Z.blueText)
     }
 }
 

@@ -282,7 +282,8 @@ struct SettingsScreen: View {
                 }
             }
             HStack(alignment: .top, spacing: 12) {
-                Text(f.t("settings.colors.preview")).font(.system(size: 13)).foregroundColor(Z.body).frame(width: 90, alignment: .leading)
+                Text(f.t("settings.colors.preview")).font(.system(size: 13)).foregroundColor(Z.body).lineLimit(1).minimumScaleFactor(0.75)
+                    .frame(width: 90, alignment: .leading)
                 ColorPreview(claude: app.colors(.claude), codex: app.colors(.codex), colored: !app.monoIcon, f: f)
             }
             HStack(spacing: 12) {
