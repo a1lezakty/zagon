@@ -188,8 +188,9 @@ public final class Ingest {
         try db.transaction {
             var f: FileRow
             var known = try loadFile(name)
+            let compressible = packed || source.accepts(rel + ".zst")
             if known == nil, let m = try movedFile(tool: source.tool, inode: ino, size: size, fd: fd)
-                ?? otherRoot(name: name, packed: packed, source: source, size: size, fd: fd) {
+                ?? (compressible ? otherRoot(name: name, packed: packed, source: source, size: size, fd: fd) : nil) {
                 // Renamed or moved between roots of this tool (Codex sessions/ -> archived_sessions/), maybe compressed or
                 // unpacked on the way: the same file, so only the path changes; its contribution stays and tailing
                 // continues from the stored offset.
@@ -200,7 +201,7 @@ public final class Ingest {
             var wasPacked = false
             if let row = known {
                 f = row
-                wasPacked = try (packed || source.accepts(rel + ".zst")) && isPacked(f.id)
+                wasPacked = try compressible && isPacked(f.id)
                 // Another inode is another file, except across the two forms (the same bytes: Codex compressing or
                 // unpacking) where the bytes before the offset decide.
                 let replaced = (f.inode != ino && !packed && !wasPacked) || size < f.offset || !tailMatches(fd, f)
@@ -299,7 +300,7 @@ public final class Ingest {
     func recountGone() throws {
         var due: [(id: Int64, path: String)] = []
         try db.query("SELECT id, path FROM source_file WHERE recount = 1") { if let p = $0.text(1) { due.append(($0.int64(0), p)) } }
-        due = due.filter { !Sys.exists($0.path) }
+        due = due.filter { !Sys.exists($0.path) && !Sys.exists($0.path + ".zst") }  // a packed row waits for its .zst
         guard !due.isEmpty else { return }
         // Unpacked next to the database (the copy's protection, not /tmp), read like the original, removed; a copy left
         // by a crash is removed first.
@@ -364,9 +365,9 @@ public final class Ingest {
         try db.query("SELECT path FROM source_file WHERE tool=? AND inode=?", [.text(tool.rawValue), .int(Int64(inode))]) {
             if let p = $0.text(0) { paths.append(p) }
         }
+        func linked(_ p: String) -> Bool { var sb = stat(); return stat(p, &sb) == 0 && Int(sb.st_ino) == inode }
         for old in paths {
-            var sb = stat()
-            if stat(old, &sb) == 0, Int(sb.st_ino) == inode { continue }
+            if linked(old) || linked(old + ".zst") { continue }  // a packed row's file is `<path>.zst`
             if let row = try loadFile(old), size >= row.offset, tailMatches(fd, row) { return row }
         }
         return nil
@@ -402,8 +403,9 @@ public final class Ingest {
     /// process until the file changes (`unpackFailed`).
     func unpack(_ path: String) -> (fd: Int32, size: Int)? {
         let dbFile = ((try? db.one("SELECT file FROM pragma_database_list WHERE name = 'main'") { $0.text(0) }) ?? nil) ?? ""
-        let tmp = (dbFile.isEmpty ? (Sys.env("TMPDIR") ?? "/tmp") + "/zagon" : dbFile) + ".unzst-\(getpid())"
-        unlink(tmp)
+        // A name of its own per call: two threads (or stores) of one process must not take each other's.
+        let tmp = (dbFile.isEmpty ? (Sys.env("TMPDIR") ?? "/tmp") + "/zagon" : dbFile)
+            + ".unzst-\(getpid())-\(UInt64.random(in: 0...UInt64.max))"
         let fd = open(tmp, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { return nil }
         unlink(tmp)
