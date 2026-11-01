@@ -10,7 +10,7 @@ import Darwin
 
 /// Questions on the terminal; a secret is typed without echo and never taken from arguments.
 enum Prompt {
-    /// The terminal as it was before a secret was asked (restored on Ctrl-C).
+    /// The terminal as it was before a secret was asked (restored when a signal ends the command).
     nonisolated(unsafe) static var saved = termios()
 
     /// A line after the question; `fallback` (shown in brackets) when it is empty. End of input stops the command.
@@ -26,21 +26,29 @@ enum Prompt {
 
     static func yes(_ q: String) throws -> Bool { ["y", "yes"].contains(try ask(q + " [y/N]").lowercased()) }
 
-    /// A line typed without echo on a terminal.
+    /// A line typed without echo on a terminal. A signal that ends the command puts the echo back first; Ctrl-Z is
+    /// ignored meanwhile (the shell would bring the command back with echo on).
     static func secret(_ q: String) throws -> String {
         print(q + ": ", terminator: "")
         fflush(nil)
         var old = termios()
         let tty = isatty(0) == 1 && tcgetattr(0, &old) == 0
+        // The CLI leaves these signals at their defaults, so the defaults are what is put back.
+        let ends = [SIGINT, SIGTERM, SIGHUP, SIGQUIT]
         if tty {
             saved = old
             var t = old
             t.c_lflag &= ~tcflag_t(ECHO)
-            signal(SIGINT) { _ in _ = tcsetattr(0, TCSANOW, &Prompt.saved); _exit(130) }
+            for e in ends { signal(e) { s in _ = tcsetattr(0, TCSANOW, &Prompt.saved); _exit(128 + s) } }
+            signal(SIGTSTP, SIG_IGN)
             _ = tcsetattr(0, TCSAFLUSH, &t)
         }
         let l = readLine()
-        if tty { _ = tcsetattr(0, TCSAFLUSH, &old); signal(SIGINT, SIG_DFL); print() }
+        if tty {
+            _ = tcsetattr(0, TCSAFLUSH, &old)
+            for e in ends + [SIGTSTP] { signal(e, SIG_DFL) }
+            print()
+        }
         guard let l else { throw ExitCode(1) }
         return l.filter { !$0.isWhitespace }
     }
@@ -106,7 +114,10 @@ extension NotifyCommand {
             var sent: [Bool] = []
             if try channel == "telegram" || channel == nil && Prompt.yes("Set up Telegram?") { sent.append(try telegram(paths, curl)) }
             if try channel == "ntfy" || channel == nil && Prompt.yes("Set up ntfy?") { sent.append(try ntfy(paths)) }
-            if !sent.isEmpty { print("The service reads this when it starts: restart it (e.g. systemctl --user restart zagon).") }
+            if !sent.isEmpty {
+                print("The service reads this when it starts: restart it (systemctl --user restart zagon; a system service: "
+                      + "sudo systemctl restart zagon-\(Sys.env("USER") ?? "<user>")).")
+            }
             if sent.contains(false) { throw ExitCode(1) }
         }
 
@@ -116,6 +127,7 @@ extension NotifyCommand {
             let m = Message(title: w.t("[тест Zagon]", "[Zagon test]"), text: w.t("Проверка связи: уведомления Zagon работают.", "Connection check: Zagon notifications work."))
             let ok = c.channels(paths).first { $0.name == name }?.send(m) ?? false
             print("Test message: " + (ok ? "sent" : "FAILED"))
+            if !c.enabled { print("Notifications are off on this host ([notify] enabled = false): only the bot answers.") }
             return ok
         }
 
@@ -133,11 +145,11 @@ extension NotifyCommand {
             let bot = ZagonCore.Setup.Bot(curl: curl, api: saved.telegramAPI, token: token!)
             let name: String
             do { name = try bot.name() } catch { throw fail("\(error); nothing saved") }
+            if typed.isEmpty { print("If the Zagon service runs with this bot, stop it meanwhile: two programs cannot read one bot.") }
             print("Bot \(name). Now write /start to \(name) in Telegram (in a group: /start@\(name.dropFirst())). Waiting up to 3 minutes…")
             var chat: String?
             do {
-                let start = Sys.now()
-                if let c = try bot.waitForChat(since: start, deadline: start + 180) {
+                if let c = try bot.waitForChat(deadline: Sys.now() + 180) {
                     print("Message from \(c.name) (chat \(c.id)).")
                     if try Prompt.yes("Send notifications to this chat?") { chat = c.id }
                 } else { print("No message came.") }
@@ -163,7 +175,7 @@ extension NotifyCommand {
                 throw fail("a topic is letters, digits, - and _")
             }
             let url = try Prompt.ask("Server", saved.ntfyURL)
-            guard url.hasPrefix("https://") || url.hasPrefix("http://") else { throw fail("the server must be https://…") }
+            guard url.hasPrefix("https://") || url.hasPrefix("http://") else { throw fail("the server is https://… (http:// sends in clear)") }
             do { try ZagonCore.Setup.saveNtfy(paths, topic: topic, url: url) } catch { throw fail("\(error)") }
             print("Saved: [ntfy] in \(paths.config). Subscribe to \(topic) in the ntfy app (server \(url)).")
             return test(paths, "ntfy")

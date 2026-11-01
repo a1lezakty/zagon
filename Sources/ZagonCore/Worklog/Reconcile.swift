@@ -127,6 +127,12 @@ public struct Reconcile: Codable, Sendable {
 }
 
 extension DayWorklog {
+    /// Days are compared as strings: `2026-10-1` becomes `2026-10-01`; a date that does not exist (02-31) is refused.
+    static func normDay(_ s: String) throws -> String {
+        guard let p = Time.parseDay(s), let d = Time.addDays(s, 0), Time.parseDay(d)?.2 == p.2 else { throw TaskError("\(s): dates must be YYYY-MM-DD") }
+        return d
+    }
+
     /// Your time per task and day (`TaskTime`, as `log plan` counts it; links refreshed first) against your worklogs
     /// started in the range, matched by Jira key and local day. Days after `today` are not counted, days before
     /// `Reconcile.coverageFrom` are not reconciled. Jira: the `worklogAuthor` search (paged) with each issue's worklogs
@@ -134,12 +140,7 @@ extension DayWorklog {
     /// did not find are read directly, as the search index lags a new worklog by minutes. A Jira failure leaves the
     /// sessions part.
     public func reconcile(from: String, to requested: String, today: String = Time.dayString(Time.now())) throws -> Reconcile {
-        // Days are compared as strings: `2026-10-1` becomes `2026-10-01`; a date that does not exist (02-31) is refused.
-        func norm(_ s: String) throws -> String {
-            guard let p = Time.parseDay(s), let d = Time.addDays(s, 0), Time.parseDay(d)?.2 == p.2 else { throw TaskError("\(s): dates must be YYYY-MM-DD") }
-            return d
-        }
-        let (from, requested, today) = (try norm(from), try norm(requested), try norm(today))
+        let (from, requested, today) = (try Self.normDay(from), try Self.normDay(requested), try Self.normDay(today))
         let to = min(requested, today)
         guard from <= to else { throw TaskError(from > today ? "from \(from) is after today" : "from \(from) is after to \(to)") }
         var days = [from]

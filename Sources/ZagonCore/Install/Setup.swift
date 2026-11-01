@@ -26,11 +26,14 @@ public enum Setup {
         guard ok, rename(tmp, target) == 0 else { unlink(tmp); throw Failure("cannot write \(path)") }
     }
 
-    /// Sets keys of one `[section]` in config.toml in this order (nil removes a key); the file stays 0600. A config.toml
-    /// that exists but cannot be read is left alone.
-    public static func setConfig(_ paths: ZagonPaths, _ section: String, _ keys: [(String, String?)]) throws {
+    /// Sets keys of one `[section]` in config.toml in this order (nil removes a key); a new file is 0600, an existing
+    /// one keeps its mode. A config.toml that exists but cannot be read is left alone, and so is the `secret` (written
+    /// only once config.toml has been read: a new token must not meet the old keys).
+    public static func setConfig(_ paths: ZagonPaths, _ section: String, _ keys: [(String, String?)],
+                                 secret: (path: String, text: String)? = nil) throws {
         let cur = Sys.readFile(paths.config).map { String(decoding: $0, as: UTF8.self) }
         if cur == nil, Sys.exists(paths.config) { throw Failure("cannot read \(paths.config)") }
+        if let secret { try writeSecret(secret.path, secret.text) }
         // A new key goes right under the header: put in reverse, they read in the given order.
         let new = keys.reversed().reduce(cur ?? "") { TOMLLite.setting($0, section: section, key: $1.0, to: $1.1) }
         guard new != cur else { return }
@@ -73,10 +76,8 @@ public enum Setup {
     /// too), nil keeps the saved token file.
     public static func saveJira(_ paths: ZagonPaths, url: String, email: String, token: String?) throws {
         let file = paths.dir + "/jira-token"
-        if let token { try writeSecret(file, token + "\n") }
-        var keys: [(String, String?)] = [("url", url), ("email", email)]
-        if token != nil { keys.append(("token_file", file)) }
-        try setConfig(paths, "jira", keys)
+        try setConfig(paths, "jira", [("url", url), ("email", email)] + (token != nil ? [("token_file", file)] : []),
+                      secret: token.map { (file, $0 + "\n") })
     }
 
     // MARK: Telegram and ntfy
@@ -111,27 +112,27 @@ public enum Setup {
             public var id: String, name: String
         }
 
-        /// Waits for a message to the bot sent at `since` or later (getUpdates, long polls until `deadline`); nil when
-        /// none came. Updates before it are confirmed (a fresh bot's backlog), the message itself is not.
-        public func waitForChat(since: Double, deadline: Double, now: () -> Double = { Sys.now() }) throws -> Chat? {
+        /// Waits for a message to the bot (getUpdates, long polls until `deadline`); nil when none came. What waits
+        /// already is the backlog: confirmed and skipped, so the first message after it is the user's (no clock is
+        /// compared: a server's may be off). The message itself is not confirmed.
+        public func waitForChat(deadline: Double, now: () -> Double = { Sys.now() }) throws -> Chat? {
             var offset: Int?
             while now() < deadline {
                 // No `allowed_updates`: Telegram would keep that filter for the service's bot (its buttons need callbacks).
                 var body: [JValue.Member] = [.init("timeout", .number(offset == nil ? "0" : String(Int(min(25, max(1, deadline - now()))))))]
                 if let offset { body.append(.init("offset", .number(String(offset)))) }
                 let r = try call("getUpdates", .object(body), timeout: 40)
-                if let c = Bot.chat(r, since: since) { return c }
+                if offset != nil, let c = Bot.chat(r) { return c }
                 for u in r.array ?? [] { if let id = u["update_id"]?.double { offset = max(offset ?? 0, Int(id) + 1) } }
                 if offset == nil { offset = 0 }
             }
             return nil
         }
 
-        /// The chat of the newest message (private chat, group or channel) sent at `since` or later.
-        static func chat(_ updates: JValue, since: Double) -> Chat? {
+        /// The chat of the newest message (private chat, group or channel).
+        static func chat(_ updates: JValue) -> Chat? {
             for u in (updates.array ?? []).reversed() {
-                guard let m = u["message"] ?? u["channel_post"], (m["date"]?.double ?? 0) >= since - 5,
-                      let c = m["chat"], case .number(let id)? = c["id"] else { continue }
+                guard let m = u["message"] ?? u["channel_post"], let c = m["chat"], case .number(let id)? = c["id"] else { continue }
                 let first = c["first_name"]?.string ?? "", last = c["last_name"]?.string ?? ""
                 let name = c["title"]?.string ?? c["username"].flatMap { $0.string.map { "@" + $0 } }
                     ?? (first + (last.isEmpty ? "" : " " + last))
@@ -144,8 +145,8 @@ public enum Setup {
     /// `[telegram] token_file, chat_id`; a typed `token` goes to `<data dir>/telegram-token`, nil keeps the saved one.
     public static func saveTelegram(_ paths: ZagonPaths, token: String?, chatId: String) throws {
         let file = paths.dir + "/telegram-token"
-        if let token { try writeSecret(file, token + "\n") }
-        try setConfig(paths, "telegram", (token != nil ? [("token_file", file)] : []) + [("chat_id", chatId)])
+        try setConfig(paths, "telegram", (token != nil ? [("token_file", file)] : []) + [("chat_id", chatId)],
+                      secret: token.map { (file, $0 + "\n") })
     }
 
     /// A topic nobody guesses (anyone who knows a topic reads it): `zagon-` and 16 random letters and digits.

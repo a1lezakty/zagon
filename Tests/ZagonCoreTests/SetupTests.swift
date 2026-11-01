@@ -50,16 +50,16 @@ import Testing
         #expect(Setup.jiraURL("https://jira.example.com/jira/") == "https://jira.example.com/jira")
     }
 
-    @Test func chatOfTheNewestMessageSinceTheStart() throws {
+    @Test func chatOfTheNewestMessage() throws {
         let u = try #require(JValue.parse(#"""
             [{"update_id": 1, "message": {"date": 100, "chat": {"id": 5, "first_name": "Old"}}},
              {"update_id": 2, "message": {"date": 1000, "chat": {"id": -1001234567890123, "title": "Team"}}},
              {"update_id": 3, "message": {"date": 1001, "chat": {"id": 42, "first_name": "Ann", "last_name": "Lee"}}},
              {"update_id": 4, "callback_query": {"id": "x"}}]
             """#))
-        #expect(Setup.Bot.chat(u, since: 1000) == .init(id: "42", name: "Ann Lee"))
-        #expect(Setup.Bot.chat(.array(Array(u.array!.prefix(2))), since: 1000) == .init(id: "-1001234567890123", name: "Team"))
-        #expect(Setup.Bot.chat(u, since: 2000) == nil)
+        #expect(Setup.Bot.chat(u) == .init(id: "42", name: "Ann Lee"))
+        #expect(Setup.Bot.chat(.array(Array(u.array!.prefix(2)))) == .init(id: "-1001234567890123", name: "Team"))
+        #expect(Setup.Bot.chat(.array(Array(u.array!.suffix(1)))) == nil)
     }
 }
 
@@ -77,17 +77,25 @@ struct SetupMockTests {
         #expect(throws: JiraError.self) { try Setup.checkJira(url: "http://jira.example.com", email: "a@b", token: "t", saved: nil) }
     }
 
+    /// What waits already is a backlog: confirmed and skipped; the message after it is the user's, whatever its date.
     @Test func botWaitsForAMessage() throws {
-        let dir = makeTempDir(), mock = try MockHTTP(dir: dir), now = Sys.now()
-        try #"[{"update_id": 7, "message": {"date": \#(Int(now)), "chat": {"id": 42, "first_name": "Me"}}}]"#
-            .write(toFile: dir + "/updates.json", atomically: true, encoding: .utf8)
+        let dir = makeTempDir(), mock = try MockHTTP(dir: dir), log = mock.log, updates = dir + "/updates.json"
+        try #"[{"update_id": 7, "message": {"date": 100, "chat": {"id": 5, "first_name": "Old"}}}]"#
+            .write(toFile: updates, atomically: true, encoding: .utf8)
+        // After the second poll (the backlog has been read), the user writes; the date is far off this machine's clock.
+        let writer = Thread {
+            while ((try? String(contentsOfFile: log, encoding: .utf8)) ?? "").components(separatedBy: "getUpdates").count < 3 { usleep(5000) }
+            try? #"[{"update_id": 9, "message": {"date": 5, "chat": {"id": 42, "first_name": "Me"}}}]"#
+                .write(toFile: updates, atomically: true, encoding: .utf8)
+        }
+        writer.start()
         let bot = Setup.Bot(curl: try #require(Curl()), api: "http://127.0.0.1:\(mock.port)/", token: "123:SECRET")
         #expect(try bot.name() == "@?")
-        #expect(try bot.waitForChat(since: now, deadline: now + 10) == .init(id: "42", name: "Me"))
-        let r = mock.requests
-        #expect(r.map(\.path) == ["/bot123:SECRET/getMe", "/bot123:SECRET/getUpdates"])
-        let body = try #require(JValue.parse(r[1].body))
-        #expect(body["timeout"] == .number("0") && body["offset"] == nil && body["allowed_updates"] == nil)
+        #expect(try bot.waitForChat(deadline: Sys.now() + 10) == .init(id: "42", name: "Me"))
+        let r = mock.requests.filter { $0.path.hasSuffix("/getUpdates") }.compactMap { JValue.parse($0.body) }
+        #expect(mock.requests.first?.path == "/bot123:SECRET/getMe" && r.count >= 3)
+        #expect(r.first?["timeout"] == .number("0") && r.first?["offset"] == nil)
+        #expect(r.dropFirst().allSatisfy { $0["offset"] == .number("8") } && r.allSatisfy { $0["allowed_updates"] == nil })
     }
 
     /// The day of `JiraClientTests.state` (2026-10-29, UTC): PROJ-1 worked 05:00–09:00, Jira has 06:00–07:00 on PROJ-1
@@ -125,6 +133,22 @@ struct SetupMockTests {
         let (kept, why) = try off.hours(from: "2026-10-29", to: "2026-10-29", today: "2026-10-29")
         #expect(why == "jira token: cannot read")
         #expect(kept.reduce(0) { $0 + $1.seconds } == Int(3 * H) && kept.filter { $0.state == "logged" }.map(\.start) == [r.start])
+
+        // A write that never reached Jira (left `writing`) is settled and planned again, not lost.
+        let other = try #require(try Worklog(store: f.store).rows(day: "2026-10-29").first { $0.state == "planned" })
+        try Worklog(store: f.store).mark(other.id, state: "writing")
+        let settled = try w.hours(from: "2026-10-29", to: "2026-10-29", today: "2026-10-29").lines
+        #expect(settled.filter { $0.start == other.start }.map(\.state) == ["planned"])
+        #expect(settled.reduce(0) { $0 + $1.seconds } == again.reduce(0) { $0 + $1.seconds })
+    }
+
+    /// `2026-10-1` is `2026-10-01` (no plan rows under another key); a date that does not exist is refused.
+    @Test func hoursDatesAreNormalized() throws {
+        let f = try day(), w = DayWorklog(store: f.store, linker: try TaskLinker(), jira: nil)
+        let lines = try w.hours(from: "2026-10-1", to: "2026-10-31", today: "2026-10-29").lines
+        #expect(lines.reduce(0) { $0 + $1.seconds } == Int(4 * H) && lines.allSatisfy { $0.day == "2026-10-29" && $0.state == "planned" })
+        #expect(try f.store.db.one("SELECT count(*) FROM worklog_plan WHERE length(day) != 10") { $0.int(0) } == 0)
+        #expect(throws: TaskError.self) { try w.hours(from: "2026-02-30", to: "2026-03-02", today: "2026-10-29") }
     }
 }
 
@@ -154,5 +178,7 @@ struct SetupMockTests {
 
             """)
         #expect(HoursText.duration(36 * 3600 + 61) == "36:01:01" && HoursText.hours(0) == "0.00" && HoursText.hours(17) == "0.00")
+        #expect(HoursText.safe("=1+1") == "'=1+1" && HoursText.safe("- fixed") == "'- fixed" && HoursText.safe("@x") == "'@x")
+        #expect(HoursText.safe("plain") == "plain" && HoursText.safe("") == "")
     }
 }
