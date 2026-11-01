@@ -175,7 +175,8 @@ extension AppState {
     private func store(_ cache: inout TaskCache, _ s: TaskBackend.Source, _ day: String, _ plan: WorklogPlan, _ epoch: Int,
                        retry: @escaping () -> Void) -> Bool {
         guard epoch == planEpoch, plan.comments == planComments(s, day) else {
-            if s == currentTaskSource { DispatchQueue.main.async(execute: retry) }
+            // Later on the main queue (the cache being stored is written after this), where `retry` was made.
+            if s == currentTaskSource { let later = MainOnly(retry); DispatchQueue.main.async { later.run() } }
             return false
         }
         cache.plans[day] = plan
@@ -286,8 +287,9 @@ extension AppState {
             for (name, b) in backends {
                 do { try write(b) } catch { failed.append(f.t("settings.wl.notSaved", name, Remote.scrubHomes(String(describing: error)))) }
             }
+            let notSaved = failed  // a constant crosses to the main actor, the var does not
             await MainActor.run {
-                if !failed.isEmpty { self.worklogConfigMessage = failed.joined(separator: "\n") } else if all { self.worklogConfigMessage = nil }
+                if !notSaved.isEmpty { self.worklogConfigMessage = notSaved.joined(separator: "\n") } else if all { self.worklogConfigMessage = nil }
                 for s in self.taskCache.keys { self.taskCache[s]?.plans = [:]; self.taskCache[s]?.reconciles = [:] }
                 self.planEpoch += 1
                 self.loadWorklogConfig()
@@ -367,4 +369,10 @@ struct SourceBar: View {
             }
         }
     }
+}
+
+/// A closure made on the main thread and run there later (`DispatchQueue.main.async` wants a Sendable one).
+private struct MainOnly: @unchecked Sendable {
+    let run: () -> Void
+    init(_ run: @escaping () -> Void) { self.run = run }
 }

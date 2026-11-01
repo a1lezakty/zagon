@@ -49,6 +49,8 @@ import Testing
         #expect(got == data)
         #expect(limits(dir).count == 1)  // the same reading twice is spooled once
         #expect(limits(dir).first?.contains(#""five_hour_pct":42.4,"five_hour_resets_at":1793000000"#) == true)
+        let seen = ClaudeWrap.panelSeen(paths: ZagonPaths(home: dir, dir: dir))
+        #expect(seen.run != nil && seen.reading != nil)
     }
 
     /// `$$` of `sh -c` is the pid of the process started: zagon itself when it execs.
@@ -60,6 +62,7 @@ import Testing
         try p.wait()
         #expect(got.hasPrefix("\(p.pid)\n"))
         #expect(limits(dir).isEmpty)
+        #expect(ClaudeWrap.panelSeen(paths: ZagonPaths(home: dir, dir: dir)).run == nil)
         let q = try wrap(["/bin/sh", "-c", "echo $$", "sh", "--output-format", "stream-json"], dir: dir)
         let pid = String(decoding: try q.readOutput(), as: UTF8.self)
         #expect(try q.wait() == 0)

@@ -125,6 +125,8 @@ public struct SessionRowVM: Sendable, Identifiable, Equatable {
     public var subtitle: String
     public var time: String
     public var command: String
+    /// Where its handoff is made (`TaskBackend.handoff` with `id`): the ssh alias, nil = this Mac.
+    public var server: String? = nil
 }
 
 public struct MainVM: Sendable {
@@ -187,7 +189,7 @@ public struct MainVM: Sendable {
         let sessions = p.liveSessions().sorted { $0.since < $1.since }
         func row(_ s: LiveSession, _ detail: String) -> SessionRowVM {
             SessionRowVM(id: s.id, title: s.title, subtitle: s.host + " · " + detail,
-                         time: f.duration(f.now.timeIntervalSince(s.since)), command: s.command)
+                         time: f.duration(f.now.timeIntervalSince(s.since)), command: s.command, server: s.server)
         }
         // A worker driven by another session waits for that session, not for you: listed with the idle ones.
         func driven(_ s: LiveSession) -> Bool { s.status == .waitingInput && s.drivenBy != nil }
@@ -829,8 +831,8 @@ public struct WorklogVM: Sendable {
         segments = w.rows.map { r in
             let isLogged = r.destination == .alreadyLogged
             return WorklogSegmentVM(x: r.start.timeIntervalSince(origin) / span0, width: r.sec / span0,
-                                    label: isLogged ? "" : r.sec >= 3600 ? r.key + " · " + f.duration(r.sec)
-                                        : String(r.key.prefix { $0 != "-" }),
+                                    // The whole key: PROJ-21 and PROJ-12 side by side must not both read "PROJ".
+                                    label: isLogged ? "" : r.sec >= 3600 ? r.key + " · " + f.duration(r.sec) : r.key,
                                     color: isLogged ? Palette.control : Palette.series(keys.firstIndex(of: r.key) ?? 0),
                                     logged: isLogged)
         }

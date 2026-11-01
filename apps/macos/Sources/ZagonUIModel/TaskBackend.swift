@@ -65,6 +65,12 @@ public struct TaskBackend: Sendable {
 
     struct Digest: Decodable { var commitDigest: String? }
 
+    /// `zagon handoff --to clipboard <session>` where the session ran: its summary to continue it in a new session,
+    /// built by the same core as the CLI's. The zagon of a Mac puts it on the clipboard itself (""), a server's prints it.
+    public func handoff(_ session: String) throws -> String {
+        String(decoding: try call(["handoff", "--to", "clipboard", "--", session], timeout: 60).out, as: UTF8.self)
+    }
+
     /// Also what is in Jira with no work here (`worked` false); a zagon from before `--all` sends only its list.
     public func list() throws -> [TaskListLine] {
         do { return try decode(["task", "list", "--all", "--json"]).0 }

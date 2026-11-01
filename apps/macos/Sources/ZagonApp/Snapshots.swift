@@ -181,6 +181,33 @@ enum Snapshots {
             state.toast = nil
             state.cli = connected
         }
+        if prefix.isEmpty {
+            // What needs the user: Claude's tools left out (no claude anywhere), notifications denied in macOS, a server
+            // without zagon (the row and the toast with the install command), Jira not connected under the plan.
+            let connected = state.cli, jira = state.jira
+            state.cli = Connect.Status(ok: ["hooks: ~/.claude/settings.json"], notes: ["claude: MCP skipped (no claude CLI on PATH)"])
+            state.notifyDenied = true
+            state.sampleHostErrors = ["gpu-box": Remote.noZagon]
+            let editors = state.editors
+            state.editors = EditorPanelsVM(MockDataProvider.editorsOn, state.f)
+            state.screen = .settings
+            var root = WindowRoot().environmentObject(state).fixedSize(horizontal: false, vertical: true)
+            ok = write(root, width: 1280, "settings-states-\(lang.rawValue)", dir) && ok
+            state.toast = Toast(text: state.f.t("servers.noZagon", "gpu-box"), error: true, revealTitle: state.f.t("servers.copyInstall"),
+                                copy: Remote.installCommand)
+            ok = write(MainPanel().environmentObject(state), width: 400, "main-nozagon-\(lang.rawValue)", dir) && ok
+            state.toast = Toast(text: state.f.t("connect.doneNoMCP"))
+            ok = write(MainPanel().environmentObject(state), width: 400, "main-nomcp-\(lang.rawValue)", dir) && ok
+            state.toast = nil
+            // This Mac's plan without its Jira: the note and Connect Jira under it.
+            let local = state.hasLocalCLI, source = state.taskSource
+            state.hasLocalCLI = true; state.taskSource = .local; state.jira = nil
+            state.screen = .worklog
+            root = WindowRoot().environmentObject(state).fixedSize(horizontal: false, vertical: true)
+            ok = write(root, width: 1280, "worklog-nojira-\(lang.rawValue)", dir) && ok
+            state.hasLocalCLI = local; state.taskSource = source
+            state.cli = connected; state.jira = jira; state.notifyDenied = false; state.sampleHostErrors = [:]; state.editors = editors
+        }
         return ok
     }
 

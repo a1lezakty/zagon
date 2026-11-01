@@ -143,7 +143,7 @@ final class ReconcileTests: XCTestCase {
     func testWithoutJira() {
         let vm = ReconcileVM(.sample(now: now, zone: utc, jira: false), fmt())
         XCTAssertFalse(vm.connected)
-        XCTAssertEqual(vm.warnings, ["Jira is not connected there ([jira] in config.toml): sessions only."])
+        XCTAssertEqual(vm.warnings, ["Jira is not connected: sessions only."])
         XCTAssertEqual(vm.stats.count, 3)
         XCTAssertNil(vm.coverage?.after.range(of: "Jira worklogs"))
         XCTAssertFalse(vm.groups.contains { $0.kind == .onlyJira })

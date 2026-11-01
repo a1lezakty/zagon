@@ -452,6 +452,7 @@ public struct DaySummary {
     /// `~/.<editor>/extensions/anthropic.claude-code-<version>[-<platform>]/resources/native-binary`, the newest first.
     /// Every VS Code fork keeps its extensions so (`.vscode`, `.vscode-insiders`, `.vscode-oss` of VSCodium, `.cursor`,
     /// `.windsurf`, `.positron`, `.antigravity-ide`, the `-server` folders of remote SSH…), each in its own folder.
+    /// Also where `zagon install` finds a claude to register the MCP server with (`Installer.claudeCLI`).
     static func editorBins(home: String) -> [String] {
         let prefix = "anthropic.claude-code-"
         func version(_ d: String) -> [Int] { d.dropFirst(prefix.count).prefix { $0 != "-" }.split(separator: ".").map { Int($0) ?? 0 } }

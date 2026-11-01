@@ -368,7 +368,11 @@ final class MockHTTP {
                                         'body': base64.b64encode(body).decode()}) + '\n')
                 if self.path.endswith('/getUpdates'):
                     try:
-                        res = json.load(open(updates_file)); open(updates_file, 'w').write('[]')
+                        if os.path.exists(updates_file + '.queue'):  # a list of answers: one per call, then []
+                            q = json.load(open(updates_file + '.queue'))
+                            res = q.pop(0) if q else []; open(updates_file + '.queue', 'w').write(json.dumps(q))
+                        else:
+                            res = json.load(open(updates_file)); open(updates_file, 'w').write('[]')
                     except Exception:
                         res = []
                     out = {'ok': True, 'result': res}

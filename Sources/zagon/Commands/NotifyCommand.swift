@@ -12,7 +12,7 @@ import Darwin
 struct NotifyCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "notify", abstract: "Notifications (Telegram, ntfy) and the Telegram bot.",
-        subcommands: [Run.self, Test.self])
+        subcommands: [Run.self, Test.self, Wizard.self])
 
     /// Store, config and channels for one run.
     struct Setup {

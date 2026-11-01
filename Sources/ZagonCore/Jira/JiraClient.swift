@@ -111,8 +111,7 @@ public final class JiraClient {
     private let token: String
     private var me: String?
 
-    public init(_ config: JiraConfig) throws {
-        self.config = config
+    public convenience init(_ config: JiraConfig) throws {
         // Basic auth over plain HTTP would send the token in clear text; only a local mock may use http.
         guard Self.allowed(config.baseURL) else { throw JiraError.notSent("url must be https") }
         let path = config.tokenFile.hasPrefix("~/") ? (getenv("HOME").map { String(cString: $0) } ?? "") + config.tokenFile.dropFirst() : config.tokenFile
@@ -120,7 +119,14 @@ public final class JiraClient {
         guard let t = text.split(separator: "\n").map({ $0.trimmed(" \t\r") }).last(where: { !$0.isEmpty }) else {
             throw JiraError.token("empty file")
         }
-        token = t
+        try self.init(config, token: t)
+    }
+
+    /// With a token in hand instead of `tokenFile` (`zagon setup jira` checks a typed token before it is saved).
+    public init(_ config: JiraConfig, token: String) throws {
+        guard Self.allowed(config.baseURL) else { throw JiraError.notSent("url must be https") }
+        self.config = config
+        self.token = token
     }
 
     /// `https://` anywhere; `http://` only to this machine: the host exactly `localhost`, `127.0.0.1` or `[::1]`
