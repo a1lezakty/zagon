@@ -68,12 +68,13 @@ public struct TaskLink: Codable, Sendable {
 /// How a session got linked. `unlinked` is a manual "not this task" for the whole session that keeps automatic
 /// linking from adding it back; `worktree` = the branch checked out in the folder an interval was worked in.
 public enum LinkHow: String, Sendable, CaseIterable {
-    /// `suggested`: proposed by meaning (`TaskSuggester`), counts nowhere until accepted (then `manual`).
-    case manual, commit, message, branch, worktree, title, unlinked, suggested
+    /// `suggested`: proposed by meaning (`TaskSuggester`), counts nowhere until accepted (then `manual`); `brief`: the
+    /// key of a brief a typed message points to, reaching as a typed key. New cases go last (`nudge` is by position).
+    case manual, commit, message, branch, worktree, title, unlinked, suggested, brief
     /// Where several links cover one moment the strongest win: by hand, then a commit or a typed key of that time,
     /// then a branch or the session title.
     public var rank: Int {
-        switch self { case .manual: 4; case .commit, .message: 3; case .branch, .worktree, .title: 2; case .unlinked, .suggested: 0 }
+        switch self { case .manual: 4; case .commit, .message, .brief: 3; case .branch, .worktree, .title: 2; case .unlinked, .suggested: 0 }
     }
     /// The key of `task_session` has no `how`: a period link is stored a fraction of a millisecond early, each kind by
     /// its own amount (times are on a millisecond grid), so one kind never merges into or replaces another;

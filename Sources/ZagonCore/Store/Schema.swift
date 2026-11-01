@@ -1,6 +1,12 @@
 /// Schema migrations; `PRAGMA user_version` = number of applied entries. Append only, never edit a shipped entry.
 enum Schema {
-    static let migrations: [String] = [v1, v2, v3, v4, v5, v6]
+    static let migrations: [String] = [v1, v2, v3, v4, v5, v6, v7]
+
+    /// v7: where a task key came from (`how`): NULL = typed in the message, 'brief' = the title of a brief the
+    /// message points to.
+    static let v7 = """
+    ALTER TABLE task_key ADD COLUMN how TEXT;
+    """
 
     /// v6: the session that typed a session's last typed message (`driver`, NULL = the human): a worker driven over
     /// `tmux send-keys` that waits for input waits for that session, not for you. Filled by the next recount of user
