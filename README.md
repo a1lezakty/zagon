@@ -260,9 +260,9 @@ opened, the menu bar, then the Day, Week and Calendar windows.
   itself is not kept. Pass `--no-index-prompts` to every command that scans (`zagon daemon`, `zagon scan`,
   `zagon mcp`, the reports) to turn that off; the Mac app always indexes.
 - Data lives in `~/.zagon` (or `$ZAGON_DIR`): `zagon.db`, `spool/`, `archive/`, `logs/`, `config.toml`, `backup/`,
-  `exports/`, `run/`, `cursor/`, `cursor-hooks` (when Cursor's hooks first fired); `jira-token` and `telegram-token` (mode
-  0600) when `zagon setup jira` / `zagon notify setup` saved them; `zagon.db.v<N>` copies that `zagon update` keeps
-  before a schema change.
+  `exports/`, `run/`, `cursor/`, `cursor-hooks` (when Cursor's hooks first fired); `jira-token` and `telegram-token`
+  (mode 0600) when `zagon setup jira` / `zagon notify setup` saved them; `zagon.db.v<N>` copies that `zagon update`
+  keeps before a schema change.
 
 ## Install on a Linux server
 
