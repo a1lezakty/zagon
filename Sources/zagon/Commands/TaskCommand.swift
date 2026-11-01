@@ -48,6 +48,13 @@ extension Common {
         if let m = TOMLLite.raw(in: configText, section: "worklog", key: "reconcile_tolerance_min").flatMap({ Int($0) }), m >= 0 {
             w.reconcileToleranceMin = m
         }
+        w.config = WorklogConfig.load(configText: configText)
+        let paths = ZagonPaths(dir: dataDir)
+        var engine = DaySummary(store: store, config: NotifyConfig.load(paths), paths: paths, claudeRoot: claudeDir)
+        engine.log = warn
+        var texts = WorklogTextBuilder(engine: engine)
+        texts.log = warn
+        w.texts = texts
         return w
     }
 }

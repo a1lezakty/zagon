@@ -175,13 +175,15 @@ extension DayWorklog {
         // "t<task id>", "j<Jira key>" (an issue that is no task here) or "-<project>|<branch>" (no task).
         var cells: [String: [String: Cell]] = [:]
         var sessionSec: [String: [String: Int]] = [:]   // day -> session -> working seconds
+        let exclude = try Worklog(store: store).exclusions(config)
+        let skip = Set(exclude.items.flatMap(\.sessions))
         for day in days where coverage.map({ day >= $0 }) ?? false {
             let (a, b) = Time.dayBounds(day)!
-            for (sid, ivs) in working {
+            for (sid, ivs) in working where !skip.contains(sid) {
                 let s = Int(Intervals.covered(ivs, from: a, to: b).rounded())
                 if s > 0 { sessionSec[day, default: [:]][sid] = s }
             }
-            for (t, l) in try TaskTime.compute(store, from: a, to: b, idleGap: idleGap, base: base).lines where l.userSec > 0 {
+            for (t, l) in try TaskTime.compute(store, from: a, to: b, idleGap: idleGap, base: base, exclude: exclude).lines where l.userSec > 0 {
                 if let t {
                     var c = cells[day]?["t\(t)"] ?? Cell(task: t, jiraKey: byId[t]?.jiraKey)
                     c.sec += l.userSec

@@ -25,10 +25,10 @@ public enum TOMLLite {
     }
 
     /// Sets (or with nil removes) `key` in `[section]` (`""` = top level); appends the section if missing. Other
-    /// lines are untouched.
-    public static func setting(_ text: String, section: String, key: String, to value: String?) -> String {
+    /// lines are untouched. `raw` is written as it is (`true`, `15`) instead of a quoted `value`.
+    public static func setting(_ text: String, section: String, key: String, to value: String?, raw: String? = nil) -> String {
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        let entry = value.map { "\(key) = " + quote($0) }
+        let entry = raw.map { "\(key) = \($0)" } ?? value.map { "\(key) = " + quote($0) }
         if let i = find(lines.map { Substring($0) }, section: section, key: key) {
             if let entry { lines[i] = entry } else { lines.remove(at: i) }
             return lines.joined(separator: "\n")
