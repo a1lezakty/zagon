@@ -143,6 +143,14 @@ enum Snapshots {
             ok = write(root, width: 1280, "\(prefix)\(screen.rawValue)-\(lang.rawValue)", dir) && ok
         }
         if prefix.isEmpty {
+            // "What to log" with the day summary row open: its editor, where the summary goes, the sessions.
+            state.screen = .worklog
+            state.worklogOpen = WorklogVM(state.provider.worklog(state.provider.now), state.f).rows.first { $0.daySummary }?.anchor
+            let root = WindowRoot().environmentObject(state).fixedSize(horizontal: false, vertical: true)
+            ok = write(root, width: 1280, "worklog-row-\(lang.rawValue)", dir) && ok
+            state.worklogOpen = nil
+        }
+        if prefix.isEmpty {
             // The worklog screen over a period: the sample with PROJ-21 open, without Jira, and with no sessions at all.
             let sample = state.sampleReconcile, now = state.f.now, zone = state.zone
             state.screen = .worklog

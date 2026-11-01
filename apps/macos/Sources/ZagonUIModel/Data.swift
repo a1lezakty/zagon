@@ -462,10 +462,64 @@ public struct WorklogRow: Sendable {
     public var end: Date
     public var text: String
     public var destination: WorklogDestination
+    /// The plan row's id there (`log text`), its task's key (`log exclude`), the Jira issue it goes to; nil: not known.
+    public var id: Int?
+    public var taskKey: String?
+    public var jiraKey: String?
+    /// Where `text` came from; nil: a zagon from before texts per row.
+    public var textSource: WorklogTextSource?
+    /// The task's longest row that day: it carries the day summary.
+    public var daySummary = false
+    public var summary: String?
+    public var summarySource: WorklogTextSource?
+    /// The day summary goes to Jira as a comment on the task, not in this worklog.
+    public var summaryAsComment = false
+    /// The sessions the row's time came from.
+    public var sessions: [WorklogSession] = []
     public var sec: Double { end.timeIntervalSince(start) }
-    public init(key: String, start: Date, end: Date, text: String, destination: WorklogDestination) {
-        self.key = key; self.start = start; self.end = end; self.text = text; self.destination = destination
+    /// What the worklog in Jira gets: the text, and the day summary under it unless that goes as a comment.
+    public var written: String {
+        guard let s = summary, !s.isEmpty, !summaryAsComment else { return text }
+        return text.isEmpty ? s : text + "\n\n" + s
     }
+    public init(key: String, start: Date, end: Date, text: String, destination: WorklogDestination, id: Int? = nil,
+                taskKey: String? = nil, jiraKey: String? = nil, textSource: WorklogTextSource? = nil, daySummary: Bool = false, summary: String? = nil,
+                summarySource: WorklogTextSource? = nil, summaryAsComment: Bool = false, sessions: [WorklogSession] = []) {
+        self.key = key; self.start = start; self.end = end; self.text = text; self.destination = destination
+        self.id = id; self.taskKey = taskKey; self.jiraKey = jiraKey; self.textSource = textSource; self.daySummary = daySummary; self.summary = summary
+        self.summarySource = summarySource; self.summaryAsComment = summaryAsComment; self.sessions = sessions
+    }
+}
+
+/// A worklog text from the day summary, typed by hand, or made of session titles (no summary yet).
+public enum WorklogTextSource: String, Sendable { case summary, manual, titles }
+
+/// A session a plan row's time came from: `role` leader | worker | single, `how` it got the task (message, brief,
+/// branch, worktree, commit, title, manual), its time on the task in the row.
+public struct WorklogSession: Sendable, Equatable {
+    public var id: String
+    public var title: String
+    public var role: String
+    public var how: String
+    public var sec: Double
+    public init(id: String, title: String, role: String, how: String, sec: Double) {
+        self.id = id; self.title = title; self.role = role; self.how = how; self.sec = sec
+    }
+}
+
+/// Time kept out of the plan (`kind` project | task | session) or with no task in a project (`kind` project).
+public struct WorklogPart: Sendable, Equatable {
+    public var kind: String
+    public var name: String
+    public var sec: Double
+    public init(kind: String, name: String, sec: Double) { self.kind = kind; self.name = name; self.sec = sec }
+}
+
+/// The day summary the texts come from: when it was made (nil: none yet) and the sessions with work after it.
+public struct WorklogSummaryInfo: Sendable, Equatable {
+    public var builtAt: Date?
+    public var newSessions: Int
+    public init(builtAt: Date?, newSessions: Int) { self.builtAt = builtAt; self.newSessions = newSessions }
 }
 
 /// A stretch where sessions of several tasks ran at once and the time was split by their activity.
@@ -492,10 +546,19 @@ public struct WorklogData: Sendable {
     public var jiraSec: Double?
     /// Why nothing can be written to Jira (not connected, did not answer); nil = it can.
     public var jiraBlocked: String?
+    /// The worklog time zone the day and the intervals are cut in; nil: not known (the app's).
+    public var zone: String?
+    /// nil: a zagon from before texts per row.
+    public var texts: WorklogSummaryInfo?
+    public var excluded: [WorklogPart] = []
+    /// Time with no task by project (then not in `notes`).
+    public var unassigned: [WorklogPart] = []
     public init(day: Date, workStart: Date?, workEnd: Date?, userSec: Double, sessionSec: Double,
-                rows: [WorklogRow], splits: [WorklogSplit], notes: [String] = [], jiraSec: Double? = nil, jiraBlocked: String? = nil) {
+                rows: [WorklogRow], splits: [WorklogSplit], notes: [String] = [], jiraSec: Double? = nil, jiraBlocked: String? = nil,
+                zone: String? = nil, texts: WorklogSummaryInfo? = nil, excluded: [WorklogPart] = [], unassigned: [WorklogPart] = []) {
         self.day = day; self.workStart = workStart; self.workEnd = workEnd; self.userSec = userSec
         self.sessionSec = sessionSec; self.rows = rows; self.splits = splits; self.notes = notes
         self.jiraSec = jiraSec; self.jiraBlocked = jiraBlocked
+        self.zone = zone; self.texts = texts; self.excluded = excluded; self.unassigned = unassigned
     }
 }

@@ -729,9 +729,45 @@ public struct WorklogRowVM: Sendable, Equatable {
     public var key: String
     public var span: String
     public var time: String
+    /// What the worklog gets (the day summary under the text, unless it goes as a comment).
     public var text: String
     public var destination: String
     public var kind: WorklogDestination
+    public var id: Int? = nil
+    public var taskKey: String? = nil
+    public var jiraKey: String? = nil
+    /// The row as it stays across reloads (an id changes when a row is planned anew): the task's day summary row, or the
+    /// task and the row's start.
+    public var anchor = ""
+    /// The text alone, and the day summary of the task's longest row.
+    public var plain = ""
+    public var source: WorklogTextSource? = nil
+    public var daySummary = false
+    public var summary: String? = nil
+    public var summarySource: WorklogTextSource? = nil
+    public var summaryAsComment = false
+    public var sessions: [WorklogSessionVM] = []
+    /// Under the sessions: what the text is about and whose time the worklog is.
+    public var explain = ""
+    /// Texts of rows still to log can be edited (a zagon with texts per row).
+    public var editable: Bool { id != nil && source != nil && kind != .alreadyLogged }
+}
+
+/// "phl-cpu · worker · 6h 50m", and "build-box · key PROJ-1 in the brief" under it.
+public struct WorklogSessionVM: Sendable, Equatable {
+    public var title: String
+    public var role: String
+    public var time: String
+    public var how: String
+}
+
+/// A line under the plan with an action: time with no task in a project ("don't log"), or kept out ("bring back").
+public struct WorklogPartVM: Sendable, Equatable {
+    public var text: String
+    public var kind: String
+    public var name: String
+    /// Time of no project cannot be kept out.
+    public var action = true
 }
 
 public struct WorklogVM: Sendable {
@@ -743,9 +779,19 @@ public struct WorklogVM: Sendable {
     public var notes: [String]
     /// "Log 2 worklogs to Jira · 1h 00m"; nil when nothing goes to Jira.
     public var commitTitle: String?
+    /// The confirmation's lines on day summaries: in which worklogs, as which comments.
+    public var commitNotes: [String] = []
     public var copyText: String
+    /// "Texts from the day summary" and "rebuilt 23:50 · 14 sessions · none newer"; nil: a zagon without texts.
+    public var textsTitle: String?
+    public var textsDetail = ""
+    /// "Worklog time zone: …"; nil: not known.
+    public var zoneLine: String?
+    public var unassigned: [WorklogPartVM] = []
+    public var excluded: [WorklogPartVM] = []
 
-    public init(_ w: WorklogData, _ f: Fmt) {
+    /// `f` is in the worklog zone; `machine`: the zone the rest of the app shows; `host`: where the sessions are.
+    public init(_ w: WorklogData, _ f: Fmt, machine: TimeZone? = nil, host: String? = nil) {
         title = f.t("worklog.title", f.dayTitle(w.day).lowercasedFirstIf(f.lang == .ru))
         let logged = w.rows.filter { $0.destination == .alreadyLogged }
         let toJira = w.rows.filter { $0.destination == .jira }
@@ -778,9 +824,43 @@ public struct WorklogVM: Sendable {
                                     logged: isLogged)
         }
         rows = w.rows.map { r in
-            WorklogRowVM(key: r.key, span: f.timeSpan(r.start, r.end), time: f.duration(r.sec), text: r.text,
-                         destination: f.t("dest.\(r.destination)"), kind: r.destination)
+            let span = f.timeSpan(r.start, r.end), key = r.taskKey ?? r.key
+            return WorklogRowVM(key: r.key, span: span, time: f.duration(r.sec), text: r.written,
+                                destination: f.t("dest.\(r.destination)"), kind: r.destination, id: r.id, taskKey: r.taskKey,
+                                jiraKey: r.jiraKey, anchor: String(Int(w.day.timeIntervalSince1970)) + "|" + key + "|"
+                                    + (r.daySummary ? "summary" : String(Int(r.start.timeIntervalSince1970))),
+                                plain: r.text, source: r.textSource, daySummary: r.daySummary, summary: r.summary,
+                                summarySource: r.summarySource, summaryAsComment: r.summaryAsComment,
+                                sessions: r.sessions.map { s in
+                                    WorklogSessionVM(title: s.title, role: WorklogVM.known(s.role, "worklog.role.", f), time: f.duration(s.sec),
+                                                     how: ([host].compactMap { $0 } + [WorklogVM.how(s.how, key: key, f)]).joined(separator: " · "))
+                                },
+                                explain: r.daySummary ? f.t("worklog.explain.summary", key, span) : f.t("worklog.explain.row", span))
         }
+        if let t = w.texts {
+            let ids = Set(w.rows.flatMap { $0.sessions.map(\.id) }.filter { !$0.isEmpty })
+            let count = ids.isEmpty ? [] : [f.t.plural("sessions", ids.count)]
+            if let b = t.builtAt {
+                textsTitle = f.t("worklog.texts.summary")
+                let at = f.calendar.isDate(b, inSameDayAs: f.now) ? f.time(b) : f.dayTitleShortWeekday(b) + ", " + f.time(b)
+                textsDetail = ([f.t("worklog.texts.built", at)] + count
+                               + [t.newSessions > 0 ? f.t.plural("worklog.texts.newer", t.newSessions) : f.t("worklog.texts.noneNewer")])
+                    .joined(separator: " · ")
+            } else {
+                textsTitle = f.t("worklog.texts.none")
+                textsDetail = ([f.t("worklog.texts.titles")] + count).joined(separator: " · ")
+            }
+        }
+        if let id = w.zone, let z = TimeZone(identifier: id) {
+            let at = w.day, label = Zones.label(z, at: at)
+            zoneLine = machine.map { $0.secondsFromGMT(for: at) == z.secondsFromGMT(for: at) } ?? true
+                ? f.t("worklog.zone.same", label) : f.t("worklog.zone", label, machine.map { Zones.label($0, at: at) } ?? "")
+        }
+        unassigned = w.unassigned.map {
+            WorklogPartVM(text: f.t("worklog.noTaskIn", f.duration($0.sec), WorklogVM.part($0, f)), kind: $0.kind, name: $0.name,
+                          action: !$0.name.isEmpty && $0.name != "—")
+        }
+        excluded = w.excluded.map { WorklogPartVM(text: f.t("worklog.excluded", f.duration($0.sec), WorklogVM.part($0, f)), kind: $0.kind, name: $0.name) }
 
         var notes = w.splits.map { s in
             f.t("worklog.split", f.timeSpan(s.start, s.end), f.t.plural("sessions", s.parts.count),
@@ -798,8 +878,38 @@ public struct WorklogVM: Sendable {
         self.notes = notes
         commitTitle = toJira.isEmpty || w.jiraBlocked != nil ? nil
             : f.t.plural("worklog.commit", toJira.count, f.duration(toJiraSec))
+        commitNotes = WorklogVM.summaryNotes(w.rows, f)
         copyText = w.rows.filter { $0.destination != .alreadyLogged }
-            .map { "\($0.key)\t\(f.timeSpan($0.start, $0.end))\t\(f.duration($0.sec))\t\($0.text)" }.joined(separator: "\n")
+            .map { "\($0.key)\t\(f.timeSpan($0.start, $0.end))\t\(f.duration($0.sec))\t\($0.written)" }.joined(separator: "\n")
+    }
+
+    /// What the confirmation says of day summaries going to Jira: under which rows' texts, and as which comments.
+    public static func summaryNotes(_ rows: [WorklogRow], _ f: Fmt) -> [String] {
+        let s = rows.filter { $0.destination == .jira && $0.daySummary && !($0.summary ?? "").isEmpty }
+        func keys(_ rs: [WorklogRow]) -> String {
+            rs.compactMap { $0.jiraKey ?? $0.taskKey }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.joined(separator: ", ")
+        }
+        let inWorklog = s.filter { !$0.summaryAsComment }, asComment = s.filter(\.summaryAsComment)
+        return (inWorklog.isEmpty ? [] : [f.t("worklog.commitSummary", keys(inWorklog))])
+            + (asComment.isEmpty ? [] : [f.t("worklog.commitComment", keys(asComment))])
+    }
+
+    /// A word the core sends (a role) in the app's language; one it does not know, as it came.
+    static func known(_ word: String, _ prefix: String, _ f: Fmt) -> String {
+        let s = f.t(prefix + word)
+        return s == prefix + word || word.isEmpty ? word : s
+    }
+
+    /// How a session got the task: "key PROJ-1 in the brief".
+    static func how(_ how: String, key: String, _ f: Fmt) -> String {
+        let s = f.t("worklog.how." + how, key)
+        return s.hasPrefix("worklog.how.") || how.isEmpty ? how : s
+    }
+
+    /// "zagon", "no project", "PROJ-1", "session 3f0c9a2e".
+    static func part(_ p: WorklogPart, _ f: Fmt) -> String {
+        if p.kind == "session" { return f.t("worklog.sessionId", String(p.name.prefix(8))) }
+        return p.name == "—" || p.name.isEmpty ? f.t("worklog.noProject") : p.name
     }
 
     /// Pending rows that intersect a logged row or another pending row (exact duplicates included).

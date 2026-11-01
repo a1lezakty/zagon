@@ -24,7 +24,8 @@ final class TaskBackendTests: XCTestCase {
                 echo "Last login: a banner"; cat "$HOME/list.json" ;;
             "task show") case "$*" in *NOPE*) echo "Error: no task NOPE" >&2; echo "Usage: zagon task show <task>" >&2; exit 64 ;; esac
                 cat "$HOME/card.json" ;;
-            "log plan") cat "$HOME/plan.json"; if [ -e "$HOME/jira-down" ]; then echo "jira: HTTP 401 reading /home/al/.zagon/jira-token" >&2; fi ;;
+            "log plan") case "$*" in *--with-summary*) echo "Error: Unknown option '--with-summary'" >&2; exit 64 ;; esac
+                cat "$HOME/plan.json"; if [ -e "$HOME/jira-down" ]; then echo "jira: HTTP 401 reading /home/al/.zagon/jira-token" >&2; fi ;;
             "log commit") want=$(cat "$HOME/digest" 2>/dev/null)
                 case "$*" in *"--expect "*) case "$* " in *"--expect $want "*) ;; *) echo "plan changed: nothing logged"; exit 3 ;; esac ;; esac
                 echo "  #3 PROJ-12 10:00–11:00 1h planned  text with logged in it"
@@ -171,7 +172,7 @@ final class TaskBackendTests: XCTestCase {
         XCTAssertEqual(calls.last, "log|commit|--yes|--no-scan|--expect|d1|--|\(day)|")
         try "d2".write(toFile: home + "/digest", atomically: true, encoding: .utf8)
         guard case .changed = try b.commit(day, shown: current) else { return XCTFail("written a stale plan") }
-        XCTAssertEqual(calls.suffix(2).first, "log|commit|--yes|--no-scan|--expect|d1|--|\(day)|")
+        XCTAssertEqual(calls.last { $0.hasPrefix("log|commit") }, "log|commit|--yes|--no-scan|--expect|d1|--|\(day)|")
         XCTAssertTrue(calls.last?.hasPrefix("log|plan") == true, "the new plan is fetched to show")
     }
 

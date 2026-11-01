@@ -321,21 +321,54 @@ public struct MockDataProvider: ZagonDataProvider {
         guard cal.isDate(d, inSameDayAs: now) else {
             return WorklogData(day: d, workStart: nil, workEnd: nil, userSec: 0, sessionSec: 0, rows: [], splits: [])
         }
+        let web = WorklogSession(id: "s1", title: "web-app", role: "worker", how: "brief", sec: 1500)
+        let lead = WorklogSession(id: "s2", title: tr("leader session", "сессия-лидер"), role: "leader", how: "message", sec: 1800)
+        let api = WorklogSession(id: "s3", title: tr("API question", "вопрос по API"), role: "single", how: "branch", sec: 1800)
         return WorklogData(
             day: d, workStart: at(30, 6), workEnd: at(30, 12.5), userSec: 6.5 * Self.h, sessionSec: 11 * Self.h + 10 * 60,
             rows: [WorklogRow(key: "PROJ-21", start: at(30, 6), end: at(30, 8),
                               text: tr("Reshooting the demo video, a backdrop for empty states.",
                                        "Пересъёмка демо-видео, подложка для пустых состояний."), destination: .alreadyLogged),
                    WorklogRow(key: "PROJ-21", start: at(30, 8), end: at(30, 8.5),
-                              text: tr("Page captions, a restart script without hung processes.",
-                                       "Подписи страниц, скрипт перезапуска без зависших процессов."), destination: .jira),
+                              text: tr("Page captions and a restart script that leaves no hung processes behind; the empty states got their backdrop.",
+                                       "Подписи страниц и скрипт перезапуска, после которого не остаётся зависших процессов; пустые состояния получили подложку."),
+                              destination: .jira, id: 2, taskKey: "PROJ-21", textSource: .summary, daySummary: true,
+                              summary: tr(Self.summaryEn, Self.summaryRu), summarySource: .summary, sessions: [web, lead]),
                    WorklogRow(key: "PROJ-12", start: at(30, 8.5), end: at(30, 9),
                               text: tr("Answer on rate limits: where they live in the code.",
-                                       "Ответ по лимитам запросов: где они в коде."), destination: .jira),
+                                       "Ответ по лимитам запросов: где они в коде."), destination: .jira,
+                              id: 3, taskKey: "PROJ-12", textSource: .manual, sessions: [api]),
                    WorklogRow(key: "ZAG-1", start: at(30, 9), end: at(30, 12.5),
                               text: tr("Research of alternatives and pain points, features, mockups, plan.",
-                                       "Исследование аналогов и болей, функционал, макеты, план."), destination: .zagonOnly)],
+                                       "Исследование аналогов и болей, функционал, макеты, план."), destination: .zagonOnly,
+                              id: 4, taskKey: "ZAG-1", textSource: .titles)],
             splits: [WorklogSplit(start: at(30, 8), end: at(30, 9),
-                                  parts: [("web-app", 1800), (tr("API question", "вопрос по API"), 1800)])])
+                                  parts: [("web-app", 1800), (tr("API question", "вопрос по API"), 1800)])],
+            zone: cal.timeZone.identifier, texts: WorklogSummaryInfo(builtAt: at(30, 12.75), newSessions: 0),
+            excluded: [WorklogPart(kind: "project", name: "dotfiles", sec: 2 * Self.h + 40 * 60)],
+            unassigned: [WorklogPart(kind: "project", name: "scratch", sec: 25 * 60)])
     }
+
+    static let summaryEn = """
+        What the task was
+        The demo video showed empty screens and stalled on a hung process after each restart.
+
+        What the check found
+        - Empty states had no backdrop and read as a broken page.
+        - The restart script left the old process holding the port.
+
+        What was done
+        Captions on every page, a backdrop for empty states, a restart script that stops the old process first.
+        """
+    static let summaryRu = """
+        Что было в задаче
+        Демо-видео показывало пустые экраны и зависало на старом процессе после каждого перезапуска.
+
+        Что найдено при проверке
+        - У пустых состояний не было подложки, страница выглядела сломанной.
+        - Скрипт перезапуска оставлял старый процесс на порту.
+
+        Что сделано
+        Подписи на всех страницах, подложка для пустых состояний, скрипт перезапуска сначала останавливает старый процесс.
+        """
 }

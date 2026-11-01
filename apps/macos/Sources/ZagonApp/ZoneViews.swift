@@ -1,28 +1,43 @@
 import SwiftUI
 import ZagonUIModel
 
+/// A zone setting other than the app's own (the worklog zone): its value (nil = the machine's), the machine's zone,
+/// and where a pick goes.
+struct ZoneChoice {
+    var id: String?
+    var machine: TimeZone
+    var pick: (String?) -> Void
+}
+
 /// The zone list: "System" first, then every known zone west to east, filtered by a search.
 struct ZonePicker: View {
     @EnvironmentObject private var app: AppState
     @State private var find = ""
+    /// nil: the app's own zone.
+    var choice: ZoneChoice?
 
     var body: some View {
-        let f = app.f, now = app.provider.now
+        let f = app.f, now = app.provider.now, selected = choice.map(\.id) ?? app.zoneID
         VStack(alignment: .leading, spacing: 8) {
             Field(placeholder: f.t("zone.find"), text: $find)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    row(f.t("zone.system", Zones.label(.autoupdatingCurrent, at: now)), on: app.zoneID == nil) { app.zoneID = nil }
+                    row(choice.map { f.t("settings.wl.tzMachine", Zones.label($0.machine, at: now)) }
+                        ?? f.t("zone.system", Zones.label(.autoupdatingCurrent, at: now)), on: selected == nil) { pick(nil) }
                     ForEach(Zones.search(find, at: now), id: \.self) { id in
-                        row(TimeZone(identifier: id).map { Zones.label($0, at: now) } ?? id, on: app.zoneID == id) { app.zoneID = id }
+                        row(TimeZone(identifier: id).map { Zones.label($0, at: now) } ?? id, on: selected == id) { pick(id) }
                     }
                 }
             }
             .frame(height: 300)
-            ZoneNotes()
+            if choice == nil { ZoneNotes() }
         }
         .padding(12)
         .frame(width: 340)
+    }
+
+    func pick(_ id: String?) {
+        if let choice { choice.pick(id) } else { app.zoneID = id }
     }
 
     func row(_ title: String, on: Bool, _ pick: @escaping () -> Void) -> some View {
