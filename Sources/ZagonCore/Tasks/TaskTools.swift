@@ -247,10 +247,11 @@ public final class TaskTools: TaskService {
         return out
     }
 
-    /// A row worklog_plan showed for Jira that is no longer that row (row ids are reused, a task's Jira key can change).
+    /// A row worklog_plan showed for Jira that is no longer that row, or one it showed not for Jira that now is (row ids
+    /// are reused, a task's Jira key can change).
     func changed(_ day: String, _ id: Int, _ now: WorklogRow?) -> Bool {
-        guard let s = shown[day]?[id] else { return false }
-        return now.flatMap(Self.shown) != s
+        guard let all = shown[day] else { return false }
+        return now.flatMap(Self.shown) != all[id]
     }
 
     /// Only on a row still as shown; then the new text counts as shown: worklog_commit writes the row with it.
@@ -274,13 +275,14 @@ public final class TaskTools: TaskService {
         }
     }
 
-    /// Only rows of a plan this server showed, and those shown for Jira only while still as shown; all or nothing.
+    /// Only rows of a plan this server showed, each still as shown; all or nothing.
     public func worklogSkip(rows ids: [Int]) throws -> String {
         let w = try makeWorklog(), wl = Worklog(store: store)
-        return try mapErrors {
+        var gone: [(day: String, id: Int)] = []
+        let text = try mapErrors {
             try Settings.inZone(w.config.tz) {
                 try store.db.transaction {
-                    var out: [String] = [], now: [String: [Int: WorklogRow]] = [:], skipped = 0
+                    var out: [String] = [], now: [String: [Int: WorklogRow]] = [:]
                     for id in ids {
                         guard let day = try store.db.one("SELECT day FROM worklog_plan WHERE id = ?", [.int(Int64(id))], { $0.text(0) }) ?? nil else {
                             out.append("#\(id): no planned row"); continue
@@ -291,15 +293,19 @@ public final class TaskTools: TaskService {
                             out.append("#\(id): not skipped, it changed since worklog_plan showed it; show worklog_plan for \(day) again"); continue
                         }
                         guard let r = try wl.skip(id) else { out.append("#\(id): no planned row"); continue }
-                        shown[day]?[id] = nil
-                        skipped += 1
+                        gone.append((day, id))
                         out.append("skipped #\(id) \(day) \(r.taskKey ?? "-") \(Txt.clock(r.start))–\(Txt.clock(r.end)) \(Txt.dur(Double(r.seconds)))")
                     }
-                    guard skipped > 0 else { throw MCPToolError(out.joined(separator: "\n") + "\nNothing was skipped.") }
+                    // The user chose these rows together: one not as shown, and none is skipped (the transaction rolls back).
+                    guard gone.count == ids.count else {
+                        throw MCPToolError(out.filter { !$0.hasPrefix("skipped") }.joined(separator: "\n") + "\nNothing was skipped.")
+                    }
                     return out.joined(separator: "\n") + "\nNothing was written to Jira."
                 }
             }
         }
+        for g in gone { shown[g.day]?[g.id] = nil }
+        return text
     }
 
     public func worklogConfig() throws -> String {

@@ -35,6 +35,7 @@ enum SettingsTools {
             }
             let kind = try a.required("kind"), on = try a.bool("undo") != true
             var name = try a.required("name").trimmed(" \t\n\r")
+            guard !name.isEmpty else { throw MCPToolError("name is required") }
             guard WorklogExclusion.kinds.contains(kind) else { throw MCPToolError("kind must be project, task or session") }
             if kind == "task" { name = name.uppercased() }
             if kind == "session", on || !WorklogConfig.load(paths).exclude.contains(WorklogExclusion(kind: kind, name: name)) {

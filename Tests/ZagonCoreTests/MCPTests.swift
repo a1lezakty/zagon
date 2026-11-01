@@ -243,6 +243,7 @@ struct MCPFixture {
         // A session by the 8 characters the tools show; one that is not there is refused.
         #expect(try call(#"{"kind":"session","name":"aaaaaaaa ","confirm":true}"#).hasPrefix("Excluded session claude:\(sessionA)"))
         #expect(try call(#"{"kind":"session","name":"zzzz","confirm":true}"#).hasPrefix("No session zzzz"))
+        #expect(try call(#"{"kind":"session","name":" ","confirm":true}"#) == "name is required")
         #expect(try call(#"{"kind":"session","name":"aaaaaaaa","undo":true,"confirm":true}"#).hasPrefix("session claude:\(sessionA) counts again"))
         #expect(WorklogConfig.load(paths).exclude.isEmpty)
     }

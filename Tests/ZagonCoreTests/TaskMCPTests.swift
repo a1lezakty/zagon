@@ -87,9 +87,13 @@ private let day = "2026-10-29"
         #expect(try m.call("worklog_plan", #"{"date":"\#(day)"}"#).text.contains("Split the parser"))
         #expect(try m.call("worklog_text", #"{"id":\#(id + 100),"text":"x","confirm":true}"#).text.contains("No plan row"))
         #expect(try m.call("worklog_text", #"{"id":\#(id),"text":"","confirm":true}"#).text.contains("[manual]") == false)
-        let s = try m.call("worklog_skip", #"{"ids":[\#(id), \#(id + 100)],"confirm":true}"#).text
-        #expect(s.contains("skipped #\(id) 2026-10-29 PROJ-1 ") && s.contains("#\(id + 100): no planned row"), "\(s)")
+        let s = try m.call("worklog_skip", #"{"ids":[\#(id)],"confirm":true}"#).text
+        #expect(s.hasPrefix("skipped #\(id) 2026-10-29 PROJ-1 "), "\(s)")
         #expect(try Worklog(store: m.f.store).rows(day: day).first { $0.id == id }?.state == "skipped")
+        // A row a commit claimed meanwhile is not skipped.
+        try m.f.store.db.run("UPDATE worklog_plan SET state = 'writing' WHERE id = ?", [.int(Int64(id))])
+        #expect(try Worklog(store: m.f.store).skip(id) == nil)
+        #expect(try Worklog(store: m.f.store).rows(day: day).first { $0.id == id }?.state == "writing")
     }
 
     @Test func reconcileWithoutJira() throws {
@@ -165,6 +169,15 @@ struct TaskMCPJiraTests {
         #expect(try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#).text.contains("Call worklog_plan for \(day) first"))
         _ = try m.call("task_update", #"{"ref":"PROJ-1","jira_key":"PROJ-1"}"#)
         _ = try m.call("worklog_plan", #"{"date":"\#(day)"}"#)
+        // A row shown for Jira that changed since: not skipped; with it, none of the others either.
+        _ = try m.call("task_update", #"{"ref":"PROJ-1","jira_key":"PROJ-2"}"#)
+        let moved = try m.call("worklog_skip", #"{"ids":[\#(id)],"confirm":true}"#)
+        #expect(moved.isError && moved.text.contains("changed since worklog_plan showed it"), "\(moved.text)")
+        _ = try m.call("task_update", #"{"ref":"PROJ-1","jira_key":"PROJ-1"}"#)
+        _ = try m.call("worklog_plan", #"{"date":"\#(day)"}"#)
+        let mixed = try m.call("worklog_skip", #"{"ids":[\#(id), \#(id + 100)],"confirm":true}"#)
+        #expect(mixed.isError && mixed.text == "#\(id + 100): no planned row\nNothing was skipped.", "\(mixed.text)")
+        #expect(try Worklog(store: m.f.store).rows(day: day).first { $0.id == id }?.state == "planned")
         #expect(try !m.call("worklog_skip", #"{"ids":[\#(id)],"confirm":true}"#).isError)
         #expect(try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#).text == "Nothing to write to Jira for \(day).")
         #expect((try mock.state()["issues"] as! [String: [String: Any]])["PROJ-1"]!["worklogs"] == nil)

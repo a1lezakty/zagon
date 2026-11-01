@@ -278,7 +278,8 @@ enum ServiceTools {
             MCPTool(name: "worklog_skip", title: "Do not log plan rows",
                     description: "Leaves rows of the plan worklog_plan showed out of the worklogs: they stay out of later "
                         + "plans of that day, and Zagon has no undo for it. To never log a project, task or session, use "
-                        + "worklog_exclude. Only when the user asked; requires confirm: true. Writes nothing to Jira.",
+                        + "worklog_exclude. All the rows or none. Only when the user asked; requires confirm: true. Writes "
+                        + "nothing to Jira.",
                     inputSchema: MCPSchema.object([
                         "ids": ["type": "array", "items": ["type": "integer"], "description": "Row ids (#N in worklog_plan)"],
                         "confirm": ["type": "boolean", "const": true, "description": "Must be true: the user asked not to log these rows"],
