@@ -32,8 +32,12 @@ extension ZagonDataProvider {
 }
 
 public enum Tool: String, Sendable, CaseIterable {
-    case claude, codex
-    public var name: String { self == .codex ? "Codex" : "Claude" }
+    case claude, codex, cursor
+    public var name: String {
+        switch self { case .claude: "Claude"; case .codex: "Codex"; case .cursor: "Cursor" }
+    }
+    /// The AIs with subscription limits (rings, their colors). Cursor has sessions, time and tokens without a price.
+    public static let withLimits: [Tool] = [.claude, .codex]
 }
 
 public struct LimitWindow: Sendable {
@@ -44,12 +48,33 @@ public struct LimitWindow: Sendable {
     /// Whose window this is and when it was read; nil in samples that do not say.
     public var tool: Tool?
     public var readAt: Date?
-    public init(usedPct: Double, resetsAt: Date, pctPerHour: Double? = nil, tool: Tool? = nil, readAt: Date? = nil) {
+    /// Whose reading it is; set only when limits come from more than one source (`Query.limitSources`).
+    public var from: LimitFrom?
+    public init(usedPct: Double, resetsAt: Date, pctPerHour: Double? = nil, tool: Tool? = nil, readAt: Date? = nil,
+                from: LimitFrom? = nil) {
         self.usedPct = usedPct; self.resetsAt = resetsAt; self.pctPerHour = pctPerHour; self.tool = tool; self.readAt = readAt
+        self.from = from
     }
 
     /// Used percent as the rings show it; nil when the reading is older than its reset (the window started over).
     public func pct(at now: Date) -> Int? { resetsAt > now ? Int(usedPct.rounded()) : nil }
+}
+
+/// Where a limit reading came from: a server (its ssh alias; nil = this Mac) and its `[limits] account`.
+public struct LimitFrom: Sendable, Equatable {
+    public var server: String?
+    public var account: String?
+    public init(server: String? = nil, account: String? = nil) { self.server = server; self.account = account }
+
+    /// "build-box · work", "this Mac".
+    public func label(_ f: Fmt) -> String { (server ?? f.t("sum.src.local")) + (account.map { " · " + $0 } ?? "") }
+
+    /// The labels of some windows, each once: "this Mac · work / build-box"; nil when none says.
+    static func label(_ ws: [LimitWindow?], _ f: Fmt) -> String? {
+        var out: [String] = []
+        for l in ws.compactMap({ $0?.from?.label(f) }) where !out.contains(l) { out.append(l) }
+        return out.isEmpty ? nil : out.joined(separator: " / ")
+    }
 }
 
 /// One AI's two windows.
@@ -105,7 +130,9 @@ public struct Limits: Sendable {
                   codex: (fiveHour ?? week)?.tool == .codex ? w : AILimits())
     }
 
-    public subscript(_ tool: Tool) -> AILimits { tool == .codex ? codex : claude }
+    public subscript(_ tool: Tool) -> AILimits {
+        switch tool { case .claude: claude; case .codex: codex; case .cursor: AILimits() }
+    }
 
     /// Claude was used and its limits did not come: they come from its status line, and Claude Code in an editor's
     /// panel (the VS Code / Cursor extension) does not run it. No reading at all, or a window that started over before
@@ -210,10 +237,12 @@ public struct LiveSession: Sendable, Identifiable {
     /// Another session typed its last message (a worker driven over tmux): waiting for input, it waits for that session.
     /// Its title or project, "" = neither; nil = you typed it.
     public var drivenBy: String?
+    /// The ssh alias of the server it runs on; nil = this Mac.
+    public var server: String?
     public init(id: String, title: String, host: String, tool: Tool = .claude, model: String, status: SessionStatus,
-                since: Date, command: String, drivenBy: String? = nil) {
+                since: Date, command: String, drivenBy: String? = nil, server: String? = nil) {
         self.id = id; self.title = title; self.host = host; self.tool = tool; self.model = model
-        self.status = status; self.since = since; self.command = command; self.drivenBy = drivenBy
+        self.status = status; self.since = since; self.command = command; self.drivenBy = drivenBy; self.server = server
     }
 }
 
@@ -323,10 +352,13 @@ public struct DayData: Sendable {
     public var summaryInfo: SummaryInfo?
     /// `projects` by machine (as shown), for the sessions a summary from other machines leaves out.
     public var hostProjects: [String: [DoneProject]]
+    /// Working time of Cursor's sessions that day (part of `totals.sessionSec`): approximate before the hooks.
+    public var cursorSec: Double
     public init(day: Date, totals: Totals, limitHits: [Interval] = [], weekPctStart: Double? = nil,
                 weekPctEnd: Double? = nil, lanes: [Lane] = [], usage: [UsageDimension: [UsageRow]] = [:],
                 doc: SummaryDoc? = nil, projects: [DoneProject] = [], summaryInfo: SummaryInfo? = nil,
-                hostProjects: [String: [DoneProject]] = [:]) {
+                hostProjects: [String: [DoneProject]] = [:], cursorSec: Double = 0) {
+        self.cursorSec = cursorSec
         self.day = day; self.totals = totals; self.limitHits = limitHits; self.weekPctStart = weekPctStart
         self.weekPctEnd = weekPctEnd; self.lanes = lanes; self.usage = usage; self.doc = doc
         self.projects = projects; self.summaryInfo = summaryInfo; self.hostProjects = hostProjects

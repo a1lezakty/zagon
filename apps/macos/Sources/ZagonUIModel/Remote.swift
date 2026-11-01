@@ -51,6 +51,11 @@ public enum Remote {
     /// The error of a server whose zagon predates usage in its export (shown translated, logged as is).
     public static let oldZagon = "zagon there is older than this app (no usage in its export): reinstall it (install.sh); its days stay empty until then"
 
+    /// The error of a server where ssh works but zagon is not found (shown translated, with `installCommand`).
+    public static let noZagon = "zagon not found there (not installed, or not on the PATH of ssh commands)"
+    /// install.sh as README gives it, with the service.
+    public static let installCommand = "curl -fsSL https://raw.githubusercontent.com/a1lezakty/zagon/main/install.sh | sh -s -- --enable-service"
+
     /// This app's version; nil outside Zagon.app.
     static let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
 
@@ -111,7 +116,8 @@ public enum Remote {
             case "limit": n.limits += 1
             default: break
             }
-            if let h = v?["host"] { hosts.insert(h) }
+            // A `limit` line's `host` (0.1.5) is the store's own name, not a host of its rows: as before, rows only.
+            if v?["type"] != "limit", let h = v?["host"] { hosts.insert(h) }
         }
         // This Mac's own database host (pinned at its first open), or the name it goes by now.
         if hosts.contains(store.host) || hosts.contains(localHost) {
@@ -154,6 +160,11 @@ public enum Remote {
                 for t in ["usage_hour", "tool_use", "activity"] { try db.run("DELETE FROM \(t) WHERE file_id = ?", [.int(file)]) }
             }
             try db.run("DELETE FROM meta WHERE key IN (?, ?)", [.text("remote_seq:" + alias), .text("remote_old:" + alias)])
+            // Its limit source (`Store.addLimitSnapshot`): an alias gone must not keep the rings labelled.
+            try db.run("""
+                DELETE FROM meta WHERE key = 'limit_account:' || ?1
+                  OR key LIKE 'limit\\_src:%' ESCAPE '\\' AND substr(key, -length(?1) - 1) = ':' || ?1
+                """, [.text(alias)])
         }
     }
 
@@ -174,6 +185,8 @@ public enum Remote {
     /// An error as it may go into the log and the diagnostics: no export line content, home folders as `~`.
     public static func brief(_ error: Error) -> String {
         switch error {
+        // The remote shell found no zagon (127): ssh itself fails with 255.
+        case let e as RemoteError where e.status == 127: return noZagon
         case let e as RemoteError: return (e.status == 0 ? "" : "exit \(e.status): ") + scrubHomes(e.message)
         case is ExportImportError: return "a line of the export could not be read"
         default: return scrubHomes(String(describing: error))

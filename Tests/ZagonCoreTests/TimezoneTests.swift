@@ -74,7 +74,7 @@ import Testing
 
     @Test func mcpToolNeedsConfirm() throws {
         let dir = makeTempDir(), p = ZagonPaths(home: dir, dir: dir + "/z")
-        let tool = try #require(SettingsTools.tools(p).first)
+        let tool = try #require(SettingsTools.tools(p, store: try Store(path: ":memory:")).first)
         #expect(try tool.run(MCPArgs(.object([]))).contains("(system zone), now "))
         #expect(throws: MCPToolError.self) { try tool.run(MCPArgs(["zone": "UTC"])) }
         #expect(throws: MCPToolError.self) { try tool.run(MCPArgs(["zone": "Nowhere/Zone", "confirm": true])) }
@@ -91,13 +91,9 @@ import Testing
         let dir = makeTempDir(), z = dir + "/z", logPath = z + "/logs/daemon.log"
         Sys.mkdirs(dir + "/claude"); Sys.mkdirs(dir + "/codex")
         let env = ["HOME": dir, "PATH": "/usr/bin:/bin"]
-        let d = Process()
-        d.executableURL = URL(fileURLWithPath: zagonBin)
-        d.arguments = ["daemon", "--no-notify", "--no-archive", "--data-dir", z, "--claude-dir", dir + "/claude", "--codex-dir", dir + "/codex"]
-        d.environment = env
-        d.standardOutput = FileHandle.nullDevice; d.standardError = FileHandle.nullDevice
-        try d.run()
-        defer { d.terminate(); d.waitUntilExit() }
+        let d = try Child([zagonBin, "daemon", "--no-notify", "--no-archive", "--data-dir", z, "--claude-dir", dir + "/claude",
+                           "--codex-dir", dir + "/codex"], env: env)
+        defer { d.send(SIGTERM); _ = try? d.wait() }
         func log() -> [String] { (Sys.readFile(logPath).map { String(decoding: $0, as: UTF8.self) } ?? "").split(separator: "\n").map(String.init) }
         func waitFor(_ what: String, count: Int) -> Bool {
             for _ in 0..<300 {
@@ -118,7 +114,7 @@ import Testing
         #expect(waitFor("restarting", count: 1) && waitFor("full pass (start)", count: 2))
         #expect(try metaTZ() == "TZ=Etc/GMT-3")
         let pids = log().filter { $0.contains(" start: pid ") }.map { $0.split(separator: " ")[3].dropLast() }
-        #expect(pids.count == 2 && pids.allSatisfy { Int($0) == Int(d.processIdentifier) }, "\(pids)")
+        #expect(pids.count == 2 && pids.allSatisfy { Int($0) == Int(d.pid) }, "\(pids)")
 
         _ = try runZagon(["tz", "system", "--data-dir", z], stdin: [], env: env)
         #expect(waitFor("restarting", count: 2) && waitFor("full pass (start)", count: 3))

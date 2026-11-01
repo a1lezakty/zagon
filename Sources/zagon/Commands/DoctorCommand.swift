@@ -3,7 +3,7 @@ import ZagonCore
 
 struct DoctorCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "doctor", abstract: "Show what is installed and what is missing (exit 1 if anything is missing).")
+        commandName: "doctor", abstract: "Show what is installed, whether the service runs, and what is missing (exit 1 if anything is missing).")
 
     @OptionGroup var flags: InstallFlags
     @Option(help: "Lines of the daemon log to show.") var logLines = 10
@@ -11,7 +11,7 @@ struct DoctorCommand: ParsableCommand {
     func run() throws {
         let o = try flags.options()
         let checks = Installer(o).doctor()
-        for c in checks { print((c.ok ? "ok       " : "MISSING  ") + c.text) }
+        for c in checks { print((c.tag.map { $0 + String(repeating: " ", count: max(1, 9 - $0.count)) } ?? (c.ok ? "ok       " : "MISSING  ")) + c.text) }
         // Facts, not checks: `info` lines count for neither the exit status nor the Mac app's Connect.
         for l in (try? Installer(o).info()) ?? [] { print("info     " + l) }
         let logPath = o.paths.dir + "/logs/daemon.log"

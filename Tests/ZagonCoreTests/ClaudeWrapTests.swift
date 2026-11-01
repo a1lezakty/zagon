@@ -29,15 +29,8 @@ import Testing
     }
 
     /// Starts `zagon claude-wrap <args>` with HOME and ZAGON_DIR in `dir`.
-    func wrap(_ args: [String], dir: String) throws -> (Process, FileHandle) {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: zagonBin)
-        p.arguments = ["claude-wrap"] + args
-        p.environment = ["HOME": dir, "ZAGON_DIR": dir, "PATH": "/usr/bin:/bin"]
-        let out = Pipe()
-        p.standardOutput = out; p.standardInput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
-        try p.run()
-        return (p, out.fileHandleForReading)
+    func wrap(_ args: [String], dir: String) throws -> Child {
+        try Child([zagonBin, "claude-wrap"] + args, env: ["HOME": dir, "ZAGON_DIR": dir, "PATH": "/usr/bin:/bin"], stdout: true)
     }
 
     func limits(_ dir: String) -> [String] { spoolLines(dir).filter { $0.contains(#""kind":"limits""#) } }
@@ -50,28 +43,30 @@ import Testing
         data += Array((Self.event + "\n{\"type\":\"result\",\"text\":\"ю — ok\"}\n{\"type\":\"partial\"").utf8)
         Sys.writeFile(dir + "/stream", data)
         writeScript(dir + "/claude", "#!/bin/sh\ncat \"$HOME/stream\"\nexit 7\n")
-        let (p, out) = try wrap([dir + "/claude", "--output-format", "stream-json", "--verbose", "--input-format", "stream-json"], dir: dir)
-        let got = out.readDataToEndOfFile()
-        p.waitUntilExit()
-        #expect(Array(got) == data)
-        #expect(p.terminationReason == .exit && p.terminationStatus == 7)
+        let p = try wrap([dir + "/claude", "--output-format", "stream-json", "--verbose", "--input-format", "stream-json"], dir: dir)
+        let got = try p.readOutput()
+        #expect(try p.wait() == 7)
+        #expect(got == data)
         #expect(limits(dir).count == 1)  // the same reading twice is spooled once
         #expect(limits(dir).first?.contains(#""five_hour_pct":42.4,"five_hour_resets_at":1793000000"#) == true)
+        let seen = ClaudeWrap.panelSeen(paths: ZagonPaths(home: dir, dir: dir))
+        #expect(seen.run != nil && seen.reading != nil)
     }
 
     /// `$$` of `sh -c` is the pid of the process started: zagon itself when it execs.
     @Test(.enabled(if: Sys.exists(zagonBin))) func otherRunsAreExecdAndRecordNothing() throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
-        let (p, out) = try wrap(["/bin/sh", "-c", "echo $$; echo '\(Self.event)'"], dir: dir)
-        let got = String(decoding: out.readDataToEndOfFile(), as: UTF8.self)
-        p.waitUntilExit()
-        #expect(got.hasPrefix("\(p.processIdentifier)\n"))
+        let p = try wrap(["/bin/sh", "-c", "echo $$; echo '\(Self.event)'"], dir: dir)
+        let got = String(decoding: try p.readOutput(), as: UTF8.self)
+        try p.wait()
+        #expect(got.hasPrefix("\(p.pid)\n"))
         #expect(limits(dir).isEmpty)
-        let (q, out2) = try wrap(["/bin/sh", "-c", "echo $$", "sh", "--output-format", "stream-json"], dir: dir)
-        let pid = String(decoding: out2.readDataToEndOfFile(), as: UTF8.self)
-        q.waitUntilExit()
-        #expect(!pid.isEmpty && pid != "\(q.processIdentifier)\n" && q.terminationStatus == 0)
+        #expect(ClaudeWrap.panelSeen(paths: ZagonPaths(home: dir, dir: dir)).run == nil)
+        let q = try wrap(["/bin/sh", "-c", "echo $$", "sh", "--output-format", "stream-json"], dir: dir)
+        let pid = String(decoding: try q.readOutput(), as: UTF8.self)
+        #expect(try q.wait() == 0)
+        #expect(!pid.isEmpty && pid != "\(q.pid)\n")
     }
 
     @Test(.enabled(if: Sys.exists(zagonBin))) func sigtermReachesClaudeAndTheWrapperDiesOfIt() throws {
@@ -84,11 +79,10 @@ import Testing
             while :; do sleep 0.1; done
 
             """)
-        let (p, out) = try wrap([dir + "/claude", "--output-format", "stream-json"], dir: dir)
-        let child = Int32(String(decoding: out.availableData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
-        p.terminate()
-        p.waitUntilExit()
-        #expect(p.terminationReason == .uncaughtSignal && p.terminationStatus == SIGTERM)
+        let p = try wrap([dir + "/claude", "--output-format", "stream-json"], dir: dir)
+        let child = Int32(String(decoding: try p.readOutput(line: true), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+        p.send(SIGTERM)
+        #expect(try p.wait() == 128 + SIGTERM && p.signaled)
         #expect(Sys.readFile(dir + "/mark") == Array("term\n".utf8))
         #expect(child.map { kill($0, 0) != 0 } == true)
     }

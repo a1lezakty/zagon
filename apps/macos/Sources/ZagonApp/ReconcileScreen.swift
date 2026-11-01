@@ -80,6 +80,7 @@ struct ReconcileScreen: View {
     @ViewBuilder func content(_ vm: ReconcileVM) -> some View {
         if let c = vm.coverage { Banner.amber(c) }
         ForEach(vm.warnings, id: \.self) { Banner.blue(Emphasis(before: $0)) }
+        if !vm.connected, let s = app.currentTaskSource, app.jiraOff(s) { JiraConnectHint(source: s) }
         StatsRow(stats: vm.stats, highlightLast: vm.connected)
         DayBars(vm: vm)
         table(vm)
@@ -210,9 +211,9 @@ enum RecStyle {
 
     static func dot(_ k: RecKind) -> Color {
         switch k {
-        case .onlySessions: Color(hex: Palette.fiveHour)
+        case .onlySessions: Z.amber
         case .mismatch: Z.bad
-        case .onlyJira: Color(hex: Palette.violet)
+        case .onlyJira: Z.violet
         case .match: Z.good
         case .zagonOnly, .noTask: Z.secondary
         }
@@ -225,9 +226,9 @@ struct RecChip: View {
     @EnvironmentObject private var app: AppState
     var body: some View {
         let c = RecStyle.chip(kind)
-        Text(app.f.t("rec.k." + kind.rawValue)).font(.system(size: small ? 11 : 12)).foregroundColor(Color(hex: c.fg)).lineLimit(1)
+        Text(app.f.t("rec.k." + kind.rawValue)).font(.system(size: small ? 11 : 12)).foregroundColor(Z.pair(c.fg)).lineLimit(1)
             .padding(.horizontal, small ? 8 : 9).frame(height: small ? 20 : 22)
-            .background(Capsule().fill(Color(hex: c.bg)))
+            .background(Capsule().fill(Z.pair(c.bg)))
     }
 }
 
@@ -294,14 +295,14 @@ struct RecRow: View {
             RecChip(kind: row.kind).frame(width: 120, alignment: .leading)
         }
         .padding(.vertical, 10).padding(.horizontal, 6)
-        .background(RoundedRectangle(cornerRadius: 8).fill(open == true ? Color(hex: 0x1C2230) : Color.clear))
+        .background(RoundedRectangle(cornerRadius: 8).fill(open == true ? Z.openRow : Color.clear))
         .contentShape(Rectangle())
         .overlay(alignment: .top) { Divider1(color: Z.border) }
     }
 
     var diffColor: Color {
         guard row.diff != nil else { return Z.faint }
-        return row.sign > 0 ? Color(hex: Palette.fiveHour) : row.sign < 0 ? Color(hex: Palette.violet) : Z.secondary
+        return row.sign > 0 ? Z.amber : row.sign < 0 ? Z.violet : Z.secondary
     }
 }
 
@@ -348,7 +349,7 @@ struct DayDetail: View {
                     if !s.meta.isEmpty { Text(s.meta).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1) }
                 }
                 if d.sessions.isEmpty {
-                    Text(f.t("rec.d.noSessions")).font(.system(size: 12.5)).foregroundColor(Color(hex: Palette.violet))
+                    Text(f.t("rec.d.noSessions")).font(.system(size: 12.5)).foregroundColor(Z.violet)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let done = d.done, !d.sessions.isEmpty {
@@ -471,7 +472,7 @@ struct DayBars: View {
                     }
                     .font(.system(size: 12)).foregroundColor(Z.secondary)
                 }
-                if vm.coverageIndex != nil { Legend(color: Color(hex: 0x3A3A40), label: f.t("rec.lg.before")) }
+                if vm.coverageIndex != nil { Legend(color: Z.before, label: f.t("rec.lg.before")) }
             }
             GeometryReader { g in
                 let slot = g.size.width / n
@@ -515,7 +516,7 @@ struct DayBars: View {
             if b.kind == .before {
                 if b.jiraH > 0 {
                     ctx.fill(Path(roundedRect: CGRect(x: x, y: base - y(b.jiraH), width: w, height: y(b.jiraH)), cornerRadius: 2),
-                             with: .color(Color(hex: 0x3A3A40)))
+                             with: .color(Z.before))
                 }
                 continue
             }
@@ -543,14 +544,14 @@ struct DayBars: View {
         var c = ctx
         let shape = Path(roundedRect: r, cornerRadius: 2)
         c.clip(to: shape)
-        c.fill(shape, with: .color(Color(hex: 0x2E2E33)))
+        c.fill(shape, with: .color(Z.hatch))
         var lines = Path(), x = r.minX - r.height
         while x < r.maxX {
             lines.move(to: CGPoint(x: x, y: r.maxY))
             lines.addLine(to: CGPoint(x: x + r.height, y: r.minY))
             x += 8.5
         }
-        c.stroke(lines, with: .color(Color(hex: 0x4A4A52)), lineWidth: 3)
+        c.stroke(lines, with: .color(Z.hatchLine), lineWidth: 3)
     }
 }
 

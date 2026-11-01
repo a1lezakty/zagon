@@ -45,15 +45,16 @@ public struct DaySummary {
     public var claudeRoot: String
     public var searchPath: String? = Sys.env("PATH")
     /// System-wide install places of the AI CLIs, after the user's own (`cliPath`).
-    public var systemBins = ["/usr/local/bin", "/opt/homebrew/bin"]
+    public var systemBins = DaySummary.binDirs
+    static let binDirs = ["/usr/local/bin", "/opt/homebrew/bin"]
     /// Runs a command: (argv, stdin, cwd, timeout) → (status, stdout, stderr). Replaced in tests.
     public var runner: ([String], [UInt8], String?, Double) -> (status: Int32, out: [UInt8], err: [UInt8]) = {
         Sys.capture($0, stdin: $1, cwd: $2, timeout: $3, env: HookSpool.internalEnv)
     }
     public var log: (String) -> Void = { _ in }
-    /// Why the last AI call gave nothing (the CLI's first error line, a timeout, an unreadable answer), nil after one
-    /// that answered: `zagon summary --json` sends it with a summary written without AI. A class, so the copies kept
-    /// by callers share it.
+    /// Why the last AI call gave nothing (the CLI's first error line, a timeout, an unreadable answer, a billing stop),
+    /// nil after one that answered: `zagon summary --json` sends it with a summary written without AI. A class, so the
+    /// copies kept by callers share it.
     public final class Failure { public var reason: String? }
     public let failure = Failure()
     static let maxDigest = 12000
@@ -340,6 +341,7 @@ public struct DaySummary {
         let prompt = Array(text.utf8)
         let run = paths.dir + "/run"
         Sys.mkdirs(run)
+        if let stop = stopped() { failure.reason = stop; return nil }
         switch config.summaryEngine {
         case "claude":
             guard let claude = engineCLI else { log("\(what): claude CLI not found"); return nil }
@@ -347,12 +349,20 @@ public struct DaySummary {
             // the user's permission mode: bypassPermissions makes claude refuse to start as root, and the call has no
             // tools anyway.
             let r = runner([claude, "-p", "--safe-mode", "--permission-mode", "default", "--model", config.summaryModel,
-                            "--tools", "", "--max-turns", "1", "--no-session-persistence", "--output-format", "json"],
-                           prompt, run, config.summaryTimeout)
-            let v = JValue.parse(r.out)
+                            "--tools", "", "--max-turns", "1", "--no-session-persistence", "--output-format", "stream-json",
+                            "--verbose"], prompt, run, config.summaryTimeout)
+            // One message a line, the result last. Only there a rate-limit event says that extra usage (pay-as-you-go
+            // beyond the plan) paid for the call: it is used, and no other is made today.
+            let msgs = r.out.split(separator: 0x0A).compactMap { JValue.parse(Array($0)) }
+            let v = msgs.last { $0["type"]?.string == "result" } ?? msgs.last
+            if msgs.contains(where: { $0["type"]?.string == "rate_limit_event" && $0["rate_limit_info"]?["isUsingOverage"] == .bool(true) }) {
+                stop("claude: billing — the call was paid as extra usage" + DaySummary.paused)
+                log("\(what): claude was paid as extra usage; no AI calls until tomorrow")
+            }
             guard r.status == 0, let v, v["is_error"] != .bool(true), let answer = v["result"]?.string?.trimmingSpaces, !answer.isEmpty else {
                 // an error answer's `result` is the error, not a reply (claude exits 1 with it)
-                failed(what, "claude", r.status, r.err, v?["is_error"] == .bool(true) ? v?["result"]?.string : nil, prompt: text)
+                failed(what, "claude", r.status, r.err, v?["is_error"] == .bool(true) ? v?["result"]?.string : nil, prompt: text,
+                       codes: [v?["api_error"]?.string, v?["api_error_code"]?.string].compactMap { $0 })
                 return nil
             }
             return (String(answer), "claude", v)
@@ -374,37 +384,79 @@ public struct DaySummary {
 
     /// Keeps and logs why a call failed, never with the prompt: the error claude answered, else the last `ERROR:`
     /// line of the CLI's stderr, else claude's first stderr line; cut to 200 characters. Lines of the prompt are left
-    /// out (codex echoes it to stderr, and a Jira text in it may hold an `ERROR:` line).
-    func failed(_ what: String, _ engine: String, _ status: Int32, _ err: [UInt8], _ answered: String?, prompt: String) {
+    /// out (codex echoes it to stderr, and a Jira text in it may hold an `ERROR:` line). An error about money or the
+    /// plan's limit (`billingKind`, also from claude's error `codes`) says so; one about money also stops the AI calls
+    /// for the day.
+    func failed(_ what: String, _ engine: String, _ status: Int32, _ err: [UInt8], _ answered: String?, prompt: String,
+                codes: [String] = []) {
         let lines = String(decoding: err, as: UTF8.self).split(separator: "\n").map { String($0.trimmingSpaces) }
             .filter { !$0.isEmpty && !prompt.contains($0) }
         let line = answered.flatMap { $0.split(separator: "\n").first.map { String($0.trimmingSpaces) } }
             ?? lines.last { $0.hasPrefix("ERROR:") }.map { String($0.dropFirst(6).trimmingSpaces) }
             ?? (engine == "claude" ? lines.first : nil)
-        let reason = status == 124 ? "no answer in \(Int(config.summaryTimeout)) s"
+        var reason = status == 124 ? "no answer in \(Int(config.summaryTimeout)) s"
             : line.map { $0.count > 200 ? String($0.prefix(199)) + "…" : $0 } ?? (status == 0 ? "an empty answer" : "exit \(status)")
+        let kind = status == 124 ? nil : DaySummary.billingKind(([line ?? ""] + codes).joined(separator: " "))
+        // A reached limit only refuses (the next call may find it reset); billing may charge: no more calls today.
+        if let kind { reason = "\(kind) — " + reason + (kind == "billing" ? DaySummary.paused : "") }
         failure.reason = "\(engine): " + reason
+        if kind == "billing" { stop(failure.reason!) }
         log("\(what): \(engine) failed (\(status)): \(reason)")
+    }
+
+    /// What an engine's error says about paying: "usage limit" (the plan's limit is reached), "billing" (credit
+    /// balance, usage credits, extra usage, a spending cap); nil for anything else. From the texts and codes of
+    /// claude 2.1 ("You've hit your limit", "Credit balance is too low", "You're out of extra usage",
+    /// `usage_limit_reached`, `model_requires_usage_credits`) and codex 0.166 ("You've hit your usage limit",
+    /// "Quota exceeded. Check your plan and billing details.", "You're out of credits").
+    static func billingKind(_ error: String) -> String? {
+        let t = error.lowercased()
+        if ["usage limit", "usage_limit", "hit your limit", "reached your", "out of usage"].contains(where: { t.contains($0) }) {
+            return "usage limit"
+        }
+        return ["credit", "billing", "extra usage", "spending", "spend limit", "overage"].contains(where: { t.contains($0) }) ? "billing" : nil
+    }
+
+    static let paused = " (no AI calls until tomorrow)"
+    /// `<local day>\n<reason>`: after a billing answer, or a call paid as extra usage, no AI call is made
+    /// for the rest of the day through `complete` (summaries, task suggestions, worklog texts; by any zagon process)
+    /// with the engine the reason names, so the unattended calls never charge extra and the log does not repeat the
+    /// refusal. A handoff the user asks for (`Handoff.compress`) is not stopped.
+    var stopFile: String { paths.dir + "/run/ai-stop" }
+
+    func stop(_ reason: String, now: Double = Sys.now()) {
+        Sys.writeFile(stopFile, Array((Time.dayString(now) + "\n" + reason).utf8), mode: 0o600)
+    }
+
+    /// The reason of today's stop for the configured engine, nil when calls may go on.
+    func stopped(now: Double = Sys.now()) -> String? {
+        let parts = Sys.readFile(stopFile).map { String(decoding: $0, as: UTF8.self).split(separator: "\n", maxSplits: 1) } ?? []
+        guard parts.count == 2, parts[0] == Time.dayString(now), parts[1].hasPrefix(config.summaryEngine + ":") else { return nil }
+        return String(parts[1])
     }
 
     /// Where the AI CLIs are looked up. A user service runs with systemd's PATH: the CLIs' own install places come
     /// after it, nvm's node versions newest first.
-    var cliPath: String {
-        let nvm = paths.home + "/.nvm/versions/node"
+    var cliPath: String { DaySummary.cliPath(home: paths.home, searchPath: searchPath, systemBins: systemBins) }
+
+    static func cliPath(home: String, searchPath: String? = Sys.env("PATH"),
+                        systemBins: [String] = binDirs) -> String {
+        let nvm = home + "/.nvm/versions/node"
         func version(_ v: String) -> [Int] { v.dropFirst().split(separator: ".").map { Int($0) ?? 0 } }
         let node = Sys.listDir(nvm).filter { $0.hasPrefix("v") }.sorted { version($1).lexicographicallyPrecedes(version($0)) }
-        let own = [".local/bin", ".claude/local", ".npm-global/bin"].map { paths.home + "/" + $0 } + node.map { nvm + "/" + $0 + "/bin" }
-        return ((searchPath.map { [$0] } ?? []) + own + systemBins + editorBins).joined(separator: ":")
+        let own = [".local/bin", ".claude/local", ".npm-global/bin"].map { home + "/" + $0 } + node.map { nvm + "/" + $0 + "/bin" }
+        return ((searchPath.map { [$0] } ?? []) + own + systemBins + editorBins(home: home)).joined(separator: ":")
     }
 
     /// The last resort, when only the editor extension is installed: the Claude Code it bundles, in
     /// `~/.<editor>/extensions/anthropic.claude-code-<version>[-<platform>]/resources/native-binary`, the newest first.
     /// Every VS Code fork keeps its extensions so (`.vscode`, `.vscode-insiders`, `.vscode-oss` of VSCodium, `.cursor`,
     /// `.windsurf`, `.positron`, `.antigravity-ide`, the `-server` folders of remote SSH…), each in its own folder.
-    var editorBins: [String] {
+    /// Also where `zagon install` finds a claude to register the MCP server with (`Installer.claudeCLI`).
+    static func editorBins(home: String) -> [String] {
         let prefix = "anthropic.claude-code-"
         func version(_ d: String) -> [Int] { d.dropFirst(prefix.count).prefix { $0 != "-" }.split(separator: ".").map { Int($0) ?? 0 } }
-        let roots = Sys.listDir(paths.home).filter { $0.hasPrefix(".") }.map { paths.home + "/" + $0 + "/extensions" }
+        let roots = Sys.listDir(home).filter { $0.hasPrefix(".") }.map { home + "/" + $0 + "/extensions" }
         return roots.flatMap { r in Sys.listDir(r).filter { $0.hasPrefix(prefix) }.map { (dir: r + "/" + $0, v: version($0)) } }
             .sorted { $1.v.lexicographicallyPrecedes($0.v) }.map { $0.dir + "/resources/native-binary" }
     }
@@ -437,11 +489,26 @@ public struct DaySummary {
         return out
     }
 
-    /// Keeps a summary under its key with a new change number (`meta` `summary_seq:<key>`), so `export` sends it.
-    func save(_ doc: SummaryDoc, engine: String, now: Double) throws {
+    /// Why the kept summary of `key` made without AI has none though an AI is set up (`meta` `summary_why:<key>`);
+    /// nil when it was not asked (engine off, no sessions) or an AI wrote one later.
+    public static func whyNoAI(_ store: Store, _ key: String) throws -> String? {
+        try store.db.one("SELECT value FROM meta WHERE key = ?", [.text("summary_why:" + key)]) { $0.text(0) } ?? nil
+    }
+
+    /// Why a summary just made has no AI: the engine's CLI is missing or its call failed. nil when no AI was asked.
+    func noAIReason(asked: Bool) -> String? {
+        guard asked, ["claude", "codex"].contains(config.summaryEngine) else { return nil }
+        return missingCLI.map { "\($0) CLI not found" } ?? failure.reason ?? "the AI gave nothing usable"
+    }
+
+    /// Keeps a summary under its key with a new change number (`meta` `summary_seq:<key>`), so `export` sends it;
+    /// `why`: why it has no AI (`whyNoAI`).
+    func save(_ doc: SummaryDoc, engine: String, why: String? = nil, now: Double) throws {
         try store.db.transaction {
             try store.db.run("INSERT OR REPLACE INTO summary(day, engine, text, created) VALUES(?, ?, ?, ?)",
                              [.text(doc.key), .text(engine), .text(doc.json), .real(now)])
+            if let why { try store.db.run("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", [.text("summary_why:" + doc.key), .text(why)]) }
+            else { try store.db.run("DELETE FROM meta WHERE key = ?", [.text("summary_why:" + doc.key)]) }
             let seq = try store.nextSeq()
             try store.db.run("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", [.text("summary_seq:" + doc.key), .int(Int64(seq))])
         }
@@ -455,7 +522,7 @@ public struct DaySummary {
         var doc = DaySummary.plain(f, words), engine = "none"
         if let r = ai(f) { (doc, engine) = r }
         doc.hosts = f.hosts.isEmpty ? nil : f.hosts
-        try save(doc, engine: engine, now: now)
+        try save(doc, engine: engine, why: engine == "none" ? noAIReason(asked: !f.sessions.isEmpty) : nil, now: now)
         if engine != "none" {
             let tasks = Tasks(store: store)
             for (key, text) in DaySummary.taskTexts(doc) {
@@ -465,6 +532,9 @@ public struct DaySummary {
         }
         return (f, doc, engine)
     }
+
+    /// The line that says a summary was made without AI, and why.
+    public static func noAIMark(_ why: String, _ w: Words) -> String { w.t("Сводка без ИИ: ", "Summary without AI: ") + why }
 
     /// One text per task and day: the points of its cards. It is also the task's worklog text in Jira (unless one was
     /// set by hand), so it is kept short; cards without points add nothing.
@@ -484,11 +554,12 @@ public struct DaySummary {
 
     /// The evening message: numbers, what was done, who waited longest, and the ribbon.
     public func message(_ day: String, now: Double = Sys.now()) throws -> Message {
-        let (f, doc, _) = try make(day, now: now)
+        let (f, doc, engine) = try make(day, now: now)
         let w = words
         // Who waited goes before the cards: a long text is cut at the channel's limit.
         var body = DaySummary.headline(f, w)
         if let l = DaySummary.longestWait(f, w) { body += "\n" + l }
+        if engine == "none", let why = try DaySummary.whyNoAI(store, day) { body += "\n" + DaySummary.noAIMark(why, w) }
         body += "\n\n" + doc.text()
         return Message(title: w.t("Сводка дня", "Day summary"), text: body, photo: try ribbon(f),
                        buttons: [[.init(w.t("Подробнее", "Details"), "day:\(day)")]])

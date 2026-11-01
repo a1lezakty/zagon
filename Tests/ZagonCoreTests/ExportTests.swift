@@ -54,9 +54,15 @@ import Testing
         try "s3 1761825600 9 9\n".write(toFile: dir + "/c.txt", atomically: false, encoding: .utf8)
         let store = try Store(path: ":memory:")
         let ingest = Ingest(store: store, sources: [deltaSpec(dir)])
-        try ingest.update(paths: [dir + "/a.jsonl", other + "/b.jsonl", dir + "/c.txt", dir + "/missing.jsonl"])
+        let s = try ingest.update(paths: [dir + "/a.jsonl", other + "/b.jsonl", dir + "/c.txt", dir + "/missing.jsonl"])
         #expect(try totals(store) == (100, 10, 1))
         #expect(try store.db.one("SELECT count(*) FROM day_agg") { $0.int(0) }! > 0)  // derived tables refreshed
+        #expect(s.lines == 1 && s.usageRecords == 1)
+        // The stats are those of each update (the daemon adds them up for its health line).
+        let h = FileHandle(forWritingAtPath: dir + "/a.jsonl")!
+        h.seekToEndOfFile(); h.write("s1 1761825601 1 1\ns1 1761825602 1 1\n".data(using: .utf8)!); h.closeFile()
+        let next = try ingest.update(paths: [dir + "/a.jsonl"])
+        #expect(next.lines == 2 && next.usageRecords == 2 && next.filesRead == 1)
     }
 
     @Test func dayEmptiedByARetractionIsExported() throws {

@@ -74,6 +74,11 @@ public struct Installer {
         /// PATH used to find `claude`, `codex`, `systemctl`.
         public var searchPath: String?
         public var now: Double
+        /// Root with no systemd user manager running (no /run/user/0/systemd: ssh without linger, containers): the
+        /// service goes to the system unit when `systemctl --user` fails.
+        public var rootWithoutUserManager = geteuid() == 0 && !Sys.isDir("/run/user/0/systemd")
+        /// Claude Code's managed settings (an organization's `cleanupPeriodDays` bounds the archive).
+        public var managedSettingsDir = Archive.managedSettingsDir
 
         /// `user`: its home replaces `$HOME` for every path.
         public init(paths: ZagonPaths? = nil, user: Account? = nil, zagon: String = Sys.executablePath()) {
@@ -187,13 +192,17 @@ public struct Installer {
                 try backup("codex-hooks.json", cur)
                 Sys.mkdirs(o.codexDir)
                 guard Sys.writeFile(codexHooks, new!) else { throw InstallError("cannot write \(codexHooks)") }
-                log("codex: hooks installed in \(codexHooks); open /hooks in Codex once to trust them")
-            } else { log("codex: already installed") }
+                // Codex trusts a hook by the hash of its text: a new or changed one runs only once trusted.
+                log("codex: hooks installed in \(codexHooks); Codex runs them once trusted: open /hooks in codex, press t")
+            } else {
+                log("codex: already installed")
+                Self.trustWarning(codexTrust()).map(log)
+            }
         }
         if o.mcp && forOther {
             log("mcp: not registered from sudo; run `zagon install` as \(userName) for it")
         } else if o.mcp {
-            if o.claude, let claude = Sys.which("claude", path: o.searchPath), !claudeHasMCP() {
+            if o.claude, let claude = claudeCLI, !claudeHasMCP() {
                 let rc = runner([claude, "mcp", "add", "--scope", "user", "zagon", "--", o.zagon, "mcp"])
                 log(rc == 0 ? "claude: MCP server zagon added" : "claude: `claude mcp add` failed (\(rc))")
             }
@@ -226,27 +235,37 @@ public struct Installer {
                 log("service: wrote \(userUnit)")
             }
         }
-        if o.systemService {
-            let sys = unitText(system: true)
-            if Sys.readFile(systemUnit) != Array(sys.utf8) {
-                guard Sys.writeFile(systemUnit, Array(sys.utf8)) else { throw InstallError("cannot write \(systemUnit) (root needed)") }
-                log("service: wrote \(systemUnit)")
-            }
-        }
+        if o.systemService { try writeSystemUnit() }
         guard o.enableService else {
             if !o.systemService { log("service: enable with `zagon install --enable-service`") }
             return
         }
         guard let sc = Sys.which("systemctl", path: o.searchPath) else { log("service: systemctl not found"); return }
-        if o.systemService {
+        func enableSystem() {
             _ = runner([sc, "daemon-reload"])
             let rc = runner([sc, "enable", "--now", Sys.basename(systemUnit)])
             log(rc == 0 ? "service: \(Sys.basename(systemUnit)) enabled" : "service: enabling the system unit failed (\(rc))")
+        }
+        // One daemon per database: an enabled unit of the other kind is not joined by a second one.
+        let userOn = Sys.exists(o.userUnitDir + "/default.target.wants/zagon.service")
+        if o.systemService {
+            enableSystem()
+            if userOn { log("service: the user unit zagon.service is enabled too: systemctl --user disable --now zagon.service") }
+        } else if Sys.exists(systemUnit) && runner([sc, "is-enabled", "--quiet", Sys.basename(systemUnit)]) == 0 {
+            log("service: \(Sys.basename(systemUnit)) runs zagon for \(userName); the user unit is left off (one daemon per database)"
+                + (userOn ? ", but it is enabled: systemctl --user disable --now zagon.service" : ""))
         } else if forOther {
             log("service: as \(userName): systemctl --user enable --now zagon.service (or here: --system-service)")
             lingerNote().map(log)
         } else {
-            _ = runner([sc, "--user", "daemon-reload"])
+            let reload = runner([sc, "--user", "daemon-reload"])
+            if reload != 0 && o.rootWithoutUserManager && !userOn {
+                // Root over ssh or in a container has no user manager (no user bus): the system unit runs it instead.
+                log("service: systemd --user is not available here (\(reload)); using the system unit")
+                try writeSystemUnit()
+                enableSystem()
+                return
+            }
             let rc = runner([sc, "--user", "enable", "--now", "zagon.service"])
             log(rc == 0 ? "service: zagon.service enabled (systemd --user)"
                 : "service: systemd --user is not available (\(rc)); sudo zagon install --system-service --enable-service")
@@ -266,6 +285,14 @@ public struct Installer {
         guard link(exe, tmp) == 0 || Sys.readFile(exe).map({ Sys.writeFile(tmp, $0, mode: 0o755) }) == true,
               rename(tmp, prev) == 0 else { return nil }
         return prev
+    }
+
+    func writeSystemUnit() throws {
+        let sys = unitText(system: true)
+        if Sys.readFile(systemUnit) != Array(sys.utf8) {
+            guard Sys.writeFile(systemUnit, Array(sys.utf8)) else { throw InstallError("cannot write \(systemUnit) (root needed)") }
+            log("service: wrote \(systemUnit)")
+        }
     }
 
     /// systemd stops an account's --user services when its last login ends (ssh logout) unless it lingers; turning
@@ -298,8 +325,12 @@ public struct Installer {
         if o.mcp && forOther {
             log("mcp: not removed from sudo; run `zagon uninstall` as \(userName) for it")
         } else if o.mcp {
-            if let claude = Sys.which("claude", path: o.searchPath), claudeHasMCP() {
-                _ = runner([claude, "mcp", "remove", "--scope", "user", "zagon"]); log("claude: MCP server zagon removed")
+            if claudeHasMCP() {
+                if let claude = claudeCLI {
+                    _ = runner([claude, "mcp", "remove", "--scope", "user", "zagon"]); log("claude: MCP server zagon removed")
+                } else {
+                    log("claude: MCP server zagon left in \(o.claudeJSON) (no claude CLI to remove it with)")
+                }
             }
             if let codex = Sys.which("codex", path: o.searchPath), codexHasMCP() {
                 _ = runner([codex, "mcp", "remove", "zagon"]); log("codex: MCP server zagon removed")
@@ -777,6 +808,12 @@ public struct Installer {
 
     // MARK: MCP
 
+    /// `claude` on PATH, else the one an editor's Claude Code extension bundles (`DaySummary.editorBins`): a Mac with
+    /// Claude Code only in VS Code or Cursor gets the MCP server too.
+    var claudeCLI: String? {
+        Sys.which("claude", path: o.searchPath) ?? Sys.which("claude", path: DaySummary.editorBins(home: o.paths.home).joined(separator: ":"))
+    }
+
     func claudeHasMCP() -> Bool {
         guard let b = Sys.readFile(o.claudeJSON), let v = JValue.parse(b, maxDepth: 512) else { return false }
         return v["mcpServers"]?["zagon"] != nil
@@ -793,11 +830,16 @@ public struct Installer {
     public struct Check: Sendable {
         public var ok: Bool
         public var text: String
+        /// `warn` / `info`: a fact printed in place of ok that never counts as missing (the Mac app reads only the ok
+        /// and MISSING lines).
+        public var tag: String? = nil
     }
 
     public func doctor() -> [Check] {
         var out: [Check] = []
         func add(_ ok: Bool, _ t: String) { out.append(Check(ok: ok, text: t)) }
+        func note(_ tag: String, _ t: String) { out.append(Check(ok: true, text: t, tag: tag)) }
+        let log = daemonLog(), codexMeta = o.codex ? newestRolloutMeta() : nil
         add(Sys.exists(o.zagon), "binary \(o.zagon)")
         func hookChecks(_ path: String, _ tool: String, _ events: [String]) {
             guard let b = Sys.readFile(path), let doc = try? load(b) else { add(false, "\(tool): \(path) missing or unreadable"); return }
@@ -822,21 +864,22 @@ public struct Installer {
             let cfg = Sys.readFile(codexConfig).map { String(decoding: $0, as: UTF8.self) } ?? ""
             let off = ["hooks", "codex_hooks"].contains { TOMLLite.raw(in: cfg, section: "features", key: $0) == "false" }
             add(!off, "codex: hooks feature " + (off ? "disabled in config.toml [features]" : "enabled (trust them once in /hooks)"))
+            codexTrustCheck(note)
+            codexHooksCheck(codexMeta, note)
         }
         if o.mcp {
             for (tool, on, has) in [("claude", o.claude, claudeHasMCP()), ("codex", o.codex, codexHasMCP())] where on {
-                if !has && Sys.which(tool, path: o.searchPath) == nil { add(true, "\(tool): MCP skipped (no \(tool) CLI on PATH)"); continue }
+                if !has && (tool == "claude" ? claudeCLI : Sys.which(tool, path: o.searchPath)) == nil {
+                    add(true, "\(tool): MCP skipped (no \(tool) CLI on PATH" + (tool == "claude" ? " or in an editor extension)" : ")")); continue
+                }
                 add(has, "\(tool): MCP server zagon " + (has ? "registered" : "not registered"))
             }
         }
         #if os(Linux)
-        let unit = Sys.exists(userUnit)
-        var unitText = "service: \(userUnit) " + (unit ? "present" : "missing")
-        if unit, let sc = Sys.which("systemctl", path: o.searchPath) {
-            unitText += runner([sc, "--user", "is-enabled", "--quiet", "zagon.service"]) == 0 ? ", enabled" : ", not enabled"
-        }
-        if Sys.exists(systemUnit) { unitText += "; system unit \(systemUnit) present" }
-        add(unit || Sys.exists(systemUnit), unitText)
+        var health: (ok: Bool, text: String)?
+        let alive = healthCheck(log) { health = ($0, $1) }
+        serviceCheck(alive: alive, add)
+        health.map { add($0.ok, $0.text) }
         #else
         add(true, "service: none (Zagon.app collects data on macOS)")
         #endif
@@ -846,6 +889,10 @@ public struct Installer {
         } else {
             add(Sys.isDir(o.paths.spool), "spool: \(o.paths.spool) " + (Sys.isDir(o.paths.spool) ? "empty (no hook has fired yet)" : "missing"))
         }
+        notifyCheck(log, note)
+        versionChecks(codexMeta, note)
+        archiveCheck(note)
+        snapshotsCheck(note)
         return out
     }
 

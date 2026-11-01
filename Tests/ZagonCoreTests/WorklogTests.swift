@@ -195,7 +195,7 @@ import Testing
 func hasTool(_ name: String) -> Bool { Exec.run(["sh", "-c", "command -v \(name)"])?.status == 0 }
 
 final class JiraMock {
-    let process = Process()
+    let process: Child
     let dir = tempDir()
     let url: String
     let config: JiraConfig
@@ -204,9 +204,7 @@ final class JiraMock {
         try state.write(toFile: dir + "/state.json", atomically: true, encoding: .utf8)
         try "old line\nsecret-token\n\n".write(toFile: dir + "/token", atomically: true, encoding: .utf8)
         let script = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/jira_mock.py").path
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", script, dir + "/state.json", dir + "/port", "me@example.com", "secret-token"]
-        try process.run()
+        process = try Child(["/usr/bin/env", "python3", script, dir + "/state.json", dir + "/port", "me@example.com", "secret-token"])
         var port: String?
         for _ in 0..<200 where port == nil {
             port = try? String(contentsOfFile: dir + "/port", encoding: .utf8)
@@ -222,7 +220,7 @@ final class JiraMock {
         return try JSONSerialization.jsonObject(with: Data(r.out)) as! [String: Any]
     }
 
-    deinit { kill(process.processIdentifier, SIGKILL); process.waitUntilExit(); try? FileManager.default.removeItem(atPath: dir) }
+    deinit { process.send(SIGKILL); _ = try? process.wait(); try? FileManager.default.removeItem(atPath: dir) }
 }
 
 /// Basic auth goes over plain http only to this machine: the host must be exactly localhost, 127.0.0.1 or [::1].

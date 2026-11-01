@@ -17,6 +17,12 @@ struct WorklogCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             if let s, let entry = app.worklogConfig[s] {
                 if let c = entry { rows(c, s, f) } else { note(f.t("settings.wl.none")) }
+            } else if let s, app.worklogConfigMessage == nil {
+                // A server answers over ssh: seconds without the rows would look like a card with nothing in it.
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(f.t("settings.wl.loading", app.sourceName(s))).font(.system(size: 13)).foregroundColor(Z.muted)
+                }
             }
             if let m = app.worklogConfigMessage {
                 Text(m).font(.system(size: 12)).foregroundColor(Z.bad).fixedSize(horizontal: false, vertical: true)

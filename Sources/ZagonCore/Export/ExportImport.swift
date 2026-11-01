@@ -10,11 +10,13 @@ public struct ExportImportError: Error, CustomStringConvertible {
 public final class ExportImport {
     public let store: Store
     let file: Int64
+    let source: String
     /// `seq` of the last header line: pass it as the next `--since`.
     public private(set) var seq = 0
 
     public init(store: Store, source: String) throws {
         self.store = store
+        self.source = source
         let path = "export:" + source
         try store.db.run("INSERT OR IGNORE INTO source_file(path, tool) VALUES(?, 'export')", [.text(path)])
         file = try store.db.one("SELECT id FROM source_file WHERE path = ?", [.text(path)]) { $0.int64(0) } ?? 0
@@ -98,15 +100,24 @@ public final class ExportImport {
                   let created = v["created"]?.double else { return }
             // ponytail: one row per (day, engine) on this store: two servers' summaries of a day replace each other
             // (the newer stays); a host in the key of `summary` (a schema change) if that bites.
-            try db.run("""
+            let n = try db.run("""
                 INSERT INTO summary(day, engine, text, created) VALUES(?1, ?2, ?3, ?4)
                 ON CONFLICT(day, engine) DO UPDATE SET text = ?3, created = ?4 WHERE ?4 >= created
                 """, [.text(day), .text(engine), .text(text), .real(created)])
+            // This store's reason for a summary without AI is not the other host's.
+            if engine == "none", n > 0 { try db.run("DELETE FROM meta WHERE key = ?", [.text("summary_why:" + day)]) }
         case "limit":
             guard let tool = v["tool"]?.string.flatMap(ToolKind.init), let w = v["window"]?.string,
                   let pct = v["used_pct"]?.double, let ts = v["ts"]?.double else { return }
             try store.addLimitSnapshot(LimitSnapshot(tool: tool, window: w, usedPct: pct, resetsAt: v["resets_at"]?.double,
-                                                     windowMinutes: v["window_minutes"]?.double.map { Int($0) }, ts: ts))
+                                                     windowMinutes: v["window_minutes"]?.double.map { Int($0) }, ts: ts),
+                                       source: source)
+            // The server's `[limits] account` (0.1.5; a line without it, also from an older server, = none).
+            if let a = v["account"]?.string, !a.isEmpty {
+                try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", [.text("limit_account:" + source), .text(a)])
+            } else {
+                try db.run("DELETE FROM meta WHERE key = ?", [.text("limit_account:" + source)])
+            }
         default: break
         }
     }

@@ -91,12 +91,12 @@ struct DayScreen: View {
                 projects(vm.projects)
             }
             if let w = vm.longestWait {
-                Text(w).font(.system(size: 13)).foregroundColor(Color(hex: 0xF0D9D6)).lineSpacing(3)
+                Text(w).font(.system(size: 13)).foregroundColor(Z.alarmInk).lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.vertical, 10).padding(.horizontal, 12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color(hex: 0x2E2425)))
-                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(hex: 0x4D3234)))
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Z.alarmFill))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Z.alarmBorder))
                     .padding(.top, 4)
             }
             if let n = vm.summaryNote {

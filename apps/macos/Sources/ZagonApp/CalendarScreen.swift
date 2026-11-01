@@ -25,7 +25,7 @@ struct CalendarScreen: View {
                 HStack(spacing: 6) {
                     Text(f.t("cal.less"))
                     ForEach(Palette.heat.indices, id: \.self) { i in
-                        RoundedRectangle(cornerRadius: 4).fill(Color(hex: Palette.heat[i])).frame(width: 14, height: 14)
+                        RoundedRectangle(cornerRadius: 4).fill(Z.heat[i]).frame(width: 14, height: 14)
                     }
                     Text(f.t("cal.more"))
                 }
@@ -100,7 +100,7 @@ struct CalendarScreen: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .frame(height: 66)
             .foregroundColor(c.level >= 4 ? Z.onAccent : c.future ? Z.faint : Z.text)
-            .background(RoundedRectangle(cornerRadius: 9).fill(Color(hex: Palette.heat[c.level])))
+            .background(RoundedRectangle(cornerRadius: 9).fill(Z.heat[c.level]))
             .overlay {
                 if c.selected {
                     RoundedRectangle(cornerRadius: 9).strokeBorder(Z.text, lineWidth: 2)

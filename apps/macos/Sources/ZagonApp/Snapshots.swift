@@ -2,10 +2,12 @@ import AppKit
 import SwiftUI
 import ZagonUIModel
 
-/// `Zagon --snapshots <dir>`: every screen on the design sample, dark, both languages, as PNG (for CI).
+/// `Zagon --snapshots <dir>`: every screen on the design sample, dark and light (`-light`), both languages, as PNG (for CI).
 @MainActor
 enum Snapshots {
     static let queries: [Lang: String] = [.en: "demo video", .ru: "демо видео"]
+    /// The light pass: names get `-light`, colours resolve for Light Mode.
+    static var light = false
 
     /// The design sample as `<screen>-<lang>.png`; with `fixtures`, also a store scanned from them as `db-<screen>-<lang>.png`.
     static func render(to dir: URL, fixtures: String?) {
@@ -16,6 +18,13 @@ enum Snapshots {
         for lang in Lang.allCases {
             failed = !screens(AppState.mock(lang), query: queries[lang] ?? "", prefix: "", lang, dir) || failed
             failed = !emptyStates(lang, dir) || failed
+            // The same sample in Light Mode (the store scanned from fixtures only in the dark).
+            light = true
+            NSApp.appearance = NSAppearance(named: .aqua)
+            failed = !screens(AppState.mock(lang), query: queries[lang] ?? "", prefix: "", lang, dir) || failed
+            failed = !emptyStates(lang, dir) || failed
+            light = false
+            NSApp.appearance = NSAppearance(named: .darkAqua)
             if let fixtures {
                 do {
                     failed = !screens(try AppState.fixture(fixtures, lang), query: "demo video", prefix: "db-", lang, dir) || failed
@@ -142,6 +151,14 @@ enum Snapshots {
             let root = WindowRoot().environmentObject(state).fixedSize(horizontal: false, vertical: true)
             ok = write(root, width: 1280, "\(prefix)\(screen.rawValue)-\(lang.rawValue)", dir) && ok
         }
+        // Each settings tab (`settings-<lang>` above is the first one).
+        state.screen = .settings
+        for tab in SettingsTab.allCases.dropFirst() {
+            state.settingsTab = tab
+            let root = WindowRoot().environmentObject(state).fixedSize(horizontal: false, vertical: true)
+            ok = write(root, width: 1280, "\(prefix)settings-\(tab.rawValue)-\(lang.rawValue)", dir) && ok
+        }
+        state.settingsTab = .general
         if prefix.isEmpty {
             // "What to log" with the day summary row open: its editor, where the summary goes, the sessions.
             state.screen = .worklog
@@ -181,6 +198,38 @@ enum Snapshots {
             state.toast = nil
             state.cli = connected
         }
+        if prefix.isEmpty {
+            // What needs the user: Claude's tools left out (no claude anywhere), notifications denied in macOS, a server
+            // without zagon (the row and the toast with the install command), Jira not connected under the plan.
+            let connected = state.cli, jira = state.jira
+            state.cli = Connect.Status(ok: ["hooks: ~/.claude/settings.json"], notes: ["claude: MCP skipped (no claude CLI on PATH)"])
+            state.notifyDenied = true
+            state.sampleHostErrors = ["gpu-box": Remote.noZagon]
+            let editors = state.editors
+            state.editors = EditorPanelsVM(MockDataProvider.editorsOn, state.f)
+            state.screen = .settings
+            var root = WindowRoot().environmentObject(state).fixedSize(horizontal: false, vertical: true)
+            for tab in [SettingsTab.connect, .notify, .servers] {
+                state.settingsTab = tab
+                root = WindowRoot().environmentObject(state).fixedSize(horizontal: false, vertical: true)
+                ok = write(root, width: 1280, "settings-states-\(tab.rawValue)-\(lang.rawValue)", dir) && ok
+            }
+            state.settingsTab = .general
+            state.toast = Toast(text: state.f.t("servers.noZagon", "gpu-box"), error: true, revealTitle: state.f.t("servers.copyInstall"),
+                                copy: Remote.installCommand)
+            ok = write(MainPanel().environmentObject(state), width: 400, "main-nozagon-\(lang.rawValue)", dir) && ok
+            state.toast = Toast(text: state.f.t("connect.doneNoMCP"))
+            ok = write(MainPanel().environmentObject(state), width: 400, "main-nomcp-\(lang.rawValue)", dir) && ok
+            state.toast = nil
+            // This Mac's plan without its Jira: the note and Connect Jira under it.
+            let local = state.hasLocalCLI, source = state.taskSource
+            state.hasLocalCLI = true; state.taskSource = .local; state.jira = nil
+            state.screen = .worklog
+            root = WindowRoot().environmentObject(state).fixedSize(horizontal: false, vertical: true)
+            ok = write(root, width: 1280, "worklog-nojira-\(lang.rawValue)", dir) && ok
+            state.hasLocalCLI = local; state.taskSource = source
+            state.cli = connected; state.jira = jira; state.notifyDenied = false; state.sampleHostErrors = [:]; state.editors = editors
+        }
         return ok
     }
 
@@ -216,15 +265,29 @@ enum Snapshots {
         let next = AppState(provider: week, lang: lang)
         next.cli = stale.cli
         let h = write(MainPanel().environmentObject(next), width: 400, "main-weekonly-both-\(lang.rawValue)", dir)
-        return a && b && c && d && e && g && h
+        // Limits from this Mac and a server (two accounts): whose they are, one AI and both.
+        var src = MockDataProvider(lang: lang)
+        src.twoSources = true
+        let one = AppState(provider: src, lang: lang)
+        one.cli = stale.cli
+        let i = write(MainPanel().environmentObject(one), width: 400, "main-sources-\(lang.rawValue)", dir)
+        src.codexLimits = true
+        let two2 = AppState(provider: src, lang: lang)
+        two2.cli = stale.cli
+        let j = write(MainPanel().environmentObject(two2), width: 400, "main-sources-both-\(lang.rawValue)", dir)
+        return a && b && c && d && e && g && h && i && j
     }
 
     static func write<V: View>(_ view: V, width: CGFloat, scale: CGFloat = 2, _ name: String, _ dir: URL) -> Bool {
+        let name = light ? name + "-light" : name
         let r = ImageRenderer(content: view.frame(width: width)
-            .environment(\.isSnapshot, true).environment(\.colorScheme, .dark))
+            .environment(\.isSnapshot, true).environment(\.colorScheme, light ? .light : .dark))
         r.scale = scale
         r.proposedSize = ProposedViewSize(width: width, height: nil)
-        guard let cg = r.cgImage,
+        // Colours made for both appearances resolve against the drawing one.
+        var image: CGImage?
+        (NSAppearance(named: light ? .aqua : .darkAqua) ?? NSApp.effectiveAppearance).performAsCurrentDrawingAppearance { image = r.cgImage }
+        guard let cg = image,
               let png = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]),
               (try? png.write(to: dir.appendingPathComponent(name + ".png"))) != nil
         else {

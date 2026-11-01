@@ -41,8 +41,11 @@ public enum SpoolIngest {
         for name in names where name.hasPrefix(".limits-") {
             if let m = Sys.mtime(spoolDir + "/" + name), m < now - Double(retainDays) * 86400 { Sys.remove(spoolDir + "/" + name) }
         }
+        // Cursor's lines are its only record of time (CursorSource): kept 40 days, beyond Claude Code's 30-day cleanup,
+        // so a rebuilt database counts them again.
+        let oldestCursor = Sys.utcDay(now - Double(max(retainDays, 40)) * 86400)
         for name in files {
-            if String(name.prefix(10)) < oldest {
+            if String(name.prefix(10)) < (name.hasSuffix(".cursor.ndjson") ? oldestCursor : oldest) {
                 Sys.remove(spoolDir + "/" + name)
                 try store.db.run("DELETE FROM meta WHERE key = ?", [.text("spool:" + name)])
                 res.expired += 1
@@ -110,13 +113,23 @@ public enum SpoolIngest {
     /// `waiting` interval from when it started. Returns whether anything changed.
     static func setStatus(store: Store, id: String, tool: ToolKind, status: String, at: Timestamp, cwd: String?,
                           detail: String? = nil) throws -> Bool {
-        let row = try store.db.one("SELECT status, status_at FROM session WHERE id = ?", [.text(id)]) { ($0.text(0), $0.optReal(1)) }
+        let row = try store.db.one("SELECT status, status_at, status_detail FROM session WHERE id = ?", [.text(id)]) {
+            ($0.text(0), $0.optReal(1), $0.text(2))
+        }
         if row == nil, let cwd { try store.mergeSession(SessionMeta(id: id, tool: tool, cwd: cwd)) }
-        let (prev, prevAt) = row ?? (nil, nil)
+        let (prev, prevAt, prevDetail) = row ?? (nil, nil, nil)
+        // The same state already set without its detail (`claude agents` saw the prompt before its hook came): keep the tool.
+        if prev == status, let detail, prevDetail == nil {
+            let seq = try store.nextSeq()
+            try store.db.run("UPDATE session SET status_detail = ?, seq = ? WHERE id = ?", [.text(detail), .int(Int64(seq)), .text(id)])
+        }
         if let prevAt, at < prevAt { return false }
         if prev == status { return false }  // keep status_at = when this state began
         if let prev, let prevAt, prev.hasPrefix("waiting") {
-            try store.addActivity(sessionId: id, start: prevAt, end: at, kind: "waiting", cwd: cwd)
+            // Cursor's `sessionEnd` mostly never comes (Cursor quits before the hook runs): a wait after its `stop` ends
+            // once the conversation is idle, as the live list has it (`Query.idleAfter`), not when it is next used.
+            let end = tool == .cursor ? min(at, prevAt + Query.idleAfter) : at
+            try store.addActivity(sessionId: id, start: prevAt, end: end, kind: "waiting", cwd: cwd)
         }
         try store.setStatus(sessionId: id, tool: tool, status: status, at: at, detail: detail)
         return true

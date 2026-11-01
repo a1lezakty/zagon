@@ -105,7 +105,7 @@ public struct DayWorklog {
             try kept.put(WorklogTexts.rowKey("manual", day, t, r.start), nil)
             try kept.put(WorklogTexts.rowKey("auto", day, t, r.start), text)
         }
-        return try wl.filled(day: day, config: config, exclude: try wl.exclusions(config)).first { $0.id == id }!
+        return try refilled(id, day)
     }
 
     /// Sets a planned row's text (or with `summary` its task's day summary) by hand; nil or "" goes back to the built one.
@@ -117,7 +117,16 @@ public struct DayWorklog {
             guard r.daySummary == true else { throw TaskError("row #\(id) does not carry its task's day summary") }
             try WorklogTexts(store: store).setManualSummary(day: day, task: t, text: text)
         } else { try WorklogTexts(store: store).setManual(day: day, task: t, start: r.start, text: text) }
-        return try wl.filled(day: day, config: config, exclude: try wl.exclusions(config)).first { $0.id == id }!
+        return try refilled(id, day)
+    }
+
+    /// Row `id` read again after a change; another process may have planned the day again meanwhile.
+    func refilled(_ id: Int, _ day: String) throws -> WorklogRow {
+        let wl = Worklog(store: store)
+        guard let r = try wl.filled(day: day, config: config, exclude: try wl.exclusions(config)).first(where: { $0.id == id }) else {
+            throw TaskError("row #\(id) changed meanwhile; show the plan of \(day) again")
+        }
+        return r
     }
 
     var db: SQLite { store.db }

@@ -160,6 +160,10 @@ final class RemoteTests: XCTestCase {
                                              arguments: ["-c", "echo nope /home/al/.ssh >&2; exit 255"])) {
             XCTAssertEqual(Remote.brief($0), "exit 255: nope ~/.ssh")
         }
+        XCTAssertThrowsError(try Remote.pull(host: "x", since: 0, controlDir: "", executable: "/bin/sh",
+                                             arguments: ["-c", "echo 'sh: 1: zagon: not found' >&2; exit 127"])) {
+            XCTAssertEqual(Remote.brief($0), Remote.noZagon)
+        }
         let started = Date()
         XCTAssertThrowsError(try Remote.pull(host: "x", since: 0, controlDir: "", timeout: 1, executable: "/bin/sh",
                                              arguments: ["-c", "sleep 5"]))

@@ -350,8 +350,7 @@ let day0 = Time.dayBounds("2026-10-30")!.start
 
 /// A local stand-in for api.telegram.org and ntfy.sh (Python in the container): records every request.
 final class MockHTTP {
-    let proc = Process()
-    let stdin = Pipe()
+    let proc: Child
     let port: Int
     let log: String
     static let script = #"""
@@ -369,7 +368,11 @@ final class MockHTTP {
                                         'body': base64.b64encode(body).decode()}) + '\n')
                 if self.path.endswith('/getUpdates'):
                     try:
-                        res = json.load(open(updates_file)); open(updates_file, 'w').write('[]')
+                        if os.path.exists(updates_file + '.queue'):  # a list of answers: one per call, then []
+                            q = json.load(open(updates_file + '.queue'))
+                            res = q.pop(0) if q else []; open(updates_file + '.queue', 'w').write(json.dumps(q))
+                        else:
+                            res = json.load(open(updates_file)); open(updates_file, 'w').write('[]')
                     except Exception:
                         res = []
                     out = {'ok': True, 'result': res}
@@ -390,22 +393,12 @@ final class MockHTTP {
         log = dir + "/requests.ndjson"
         let script = dir + "/mock.py"
         try MockHTTP.script.write(toFile: script, atomically: true, encoding: .utf8)
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        proc.arguments = ["-I", script, log, dir + "/updates.json"]
-        let out = Pipe()
-        proc.standardOutput = out
-        proc.standardInput = stdin
-        proc.standardError = FileHandle.nullDevice
-        try proc.run()
-        var line = Data()
-        while !line.contains(0x0A) {
-            let d = out.fileHandleForReading.availableData
-            if d.isEmpty { throw CocoaError(.fileReadUnknown) }  // the mock did not start
-            line.append(d)
-        }
-        port = Int(String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))!
+        let c = try Child(["/usr/bin/python3", "-I", script, log, dir + "/updates.json"], stdin: true, stdout: true)
+        proc = c
+        guard let p = Int(String(decoding: try c.readOutput(line: true, timeout: 30), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)) else { throw TaskError("the mock did not start") }
+        port = p
     }
-    deinit { proc.terminate() }
 
     struct Request { var path: String; var headers: [String: String]; var body: [UInt8] }
     var requests: [Request] {
@@ -699,7 +692,8 @@ struct ChannelTests {
         #expect(prompt.hasPrefix("Below is a digest") && prompt.contains("[1] Project repo (Claude), session “Parser fixes”"))
         #expect(m2.title == "Day summary" && m2.buttons == [[Message.Button("Details", "day:2026-10-30")]])
         #expect(m2.text.hasPrefix("Fri, October 30. Sessions worked 15 min") && m2.text.contains("\n\n▸ repo · Parser fixes — 15 min")
-                && m2.text.contains(" tokens.\nWaited for you longest: repo — 36 min.\n\nProjects: 1, sessions: 1, commits: 1."))
+                && m2.text.contains(" tokens.\nWaited for you longest: repo — 36 min.\nSummary without AI: claude: no answer in ")
+                && m2.text.contains(" s\n\nProjects: 1, sessions: 1, commits: 1."), "\(m2.text)")
     }
 }
 

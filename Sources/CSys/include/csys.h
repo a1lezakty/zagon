@@ -26,4 +26,8 @@ void z_background_thread(void);
 int z_as_user(unsigned uid, unsigned gid);
 void z_as_root(void);
 
+/// pipe(2) with both ends close-on-exec. Linux: pipe2(O_CLOEXEC), so a child spawned meanwhile by another thread never
+/// inherits them; elsewhere pipe + fcntl (Darwin has no pipe2). 0, or -1 with errno.
+int z_pipe_cloexec(int fd[2]);
+
 #endif

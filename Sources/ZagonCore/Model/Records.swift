@@ -5,7 +5,9 @@
 public typealias Timestamp = Double
 
 public enum ToolKind: String, Sendable, Codable, CaseIterable {
-    case claude, codex
+    /// `cursor`: Cursor's agent, from its hooks, `agent-transcripts` and conversation list (sessions, time, tokens from
+    /// hooks without a price; no limits).
+    case claude, codex, cursor
 }
 
 /// Partial session description. `nil` fields mean "unknown here", never "clear".

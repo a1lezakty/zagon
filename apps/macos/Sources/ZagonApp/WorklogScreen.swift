@@ -83,6 +83,7 @@ struct WorklogScreen: View {
                         ForEach(vm.notes.indices, id: \.self) { i in
                             Text(vm.notes[i]).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
                         }
+                        if let s = app.currentTaskSource, app.jiraOff(s) { JiraConnectHint(source: s) }
                         parts(vm, key, f)
                     }
                     .font(.system(size: 13)).foregroundColor(Z.body)
@@ -125,7 +126,7 @@ struct WorklogScreen: View {
                     let s = segments[i]
                     ZStack(alignment: .leading) {
                         if s.logged { Hatch() } else { Color(hex: s.color) }
-                        Text(s.label).font(.system(size: 11, weight: .semibold)).foregroundColor(Z.onAccent).lineLimit(1)
+                        Text(s.label).font(.system(size: 11, weight: .semibold)).foregroundColor(Z.onSeries).lineLimit(1)
                             .padding(.horizontal, 8)
                     }
                     .frame(width: max(2, s.width * g.size.width), height: max(0, g.size.height - 6))
@@ -146,7 +147,7 @@ struct WorklogScreen: View {
                 Text(f.t("worklog.col.span")).frame(width: 104, alignment: .leading)
                 Text(f.t("worklog.col.time")).frame(width: 72, alignment: .trailing)
                 Text(f.t("worklog.col.text")).frame(maxWidth: .infinity, alignment: .leading)
-                Text(f.t("worklog.col.dest")).frame(width: 120, alignment: .leading)
+                Text(f.t("worklog.col.dest")).frame(width: 136, alignment: .leading)
             }
             .font(.system(size: 12, weight: .medium)).foregroundColor(Z.muted)
             .padding(.vertical, 6).padding(.horizontal, 6)
@@ -170,7 +171,8 @@ struct WorklogScreen: View {
                             DestChip(text: r.destination, kind: r.kind)
                             if r.editable, let task = r.taskKey { rowMenu(task, day, f) }
                         }
-                        .frame(width: 120, alignment: .leading)
+                        // "только Zagon" and the row's menu side by side.
+                        .frame(width: 136, alignment: .leading)
                     }
                     .padding(.vertical, 10).padding(.horizontal, 6)
                     if open { RowEditor(row: r, day: day).id(r.anchor).padding(.bottom, 12) }
@@ -185,8 +187,8 @@ struct WorklogScreen: View {
     func labels(_ r: WorklogRowVM, open: Bool, _ f: Fmt) -> some View {
         HStack(spacing: 8) {
             if r.daySummary {
-                Text(f.t("worklog.daySummary")).foregroundColor(Color(hex: 0xC7B6FF))
-                    .padding(.horizontal, 8).frame(height: 20).background(Capsule().fill(Color(hex: 0x2E2846)))
+                Text(f.t("worklog.daySummary")).foregroundColor(Z.summaryTag)
+                    .padding(.horizontal, 8).frame(height: 20).background(Capsule().fill(Z.summaryTagFill))
             }
             if let s = r.source { TextSourceLabel(source: s) }
             Text("·").foregroundColor(Z.faint)
@@ -385,8 +387,8 @@ struct DestChip: View {
     var body: some View {
         let (bg, fg): (UInt32, UInt32) = kind == .alreadyLogged ? (0x2A2A2E, 0xA9A9B0)
             : kind == .jira ? (0x1F2E46, 0x9CC3FF) : (0x1E3A33, 0x5FD9B8)
-        Text(text).font(.system(size: 12)).foregroundColor(Color(hex: fg)).lineLimit(1)
+        Text(text).font(.system(size: 12)).foregroundColor(Z.pair(fg)).lineLimit(1)
             .padding(.horizontal, 9).frame(height: 22)
-            .background(Capsule().fill(Color(hex: bg)))
+            .background(Capsule().fill(Z.pair(bg)))
     }
 }

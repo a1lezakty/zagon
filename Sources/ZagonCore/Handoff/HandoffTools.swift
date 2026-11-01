@@ -113,7 +113,9 @@ public final class HandoffTools: HandoffService {
         let here = cwd.map(HandoffStore.norm)
         let from = startedAt - 60, firstDay = Sys.utcDay(from)
         var byPid: (Double, String)?, byCwd: (Double, String)?
-        for f in Sys.listDir(spoolDir) where f.hasSuffix(".ndjson") && String(f.dropLast(7)) >= firstDay {
+        // Cursor's lines (`.cursor.ndjson`) have no pid: in the same folder they would pass for this conversation.
+        for f in Sys.listDir(spoolDir) where f.hasSuffix(".ndjson") && !f.hasSuffix(".cursor.ndjson")
+            && String(f.dropLast(7)) >= firstDay {
             let text = Sys.readFile(spoolDir + "/" + f).map { String(decoding: $0, as: UTF8.self) } ?? ""
             for line in text.split(separator: "\n") where line.contains("\"SessionStart\"") {
                 guard let j = JValue.parse(String(line)), j["event"]?.string == "SessionStart",

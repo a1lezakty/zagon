@@ -142,18 +142,19 @@ public struct MCPTool {
     /// JSON Schema of `arguments`.
     public var inputSchema: JValue
     public var readOnly: Bool
+    /// A write that cannot be undone (the spec's default for writes); most writes here add files or records.
+    public var destructive: Bool
     public var run: (MCPArgs) throws -> String
 
     public init(name: String, title: String, description: String, inputSchema: JValue = MCPSchema.object([:]),
-                readOnly: Bool = true, run: @escaping (MCPArgs) throws -> String) {
+                readOnly: Bool = true, destructive: Bool = false, run: @escaping (MCPArgs) throws -> String) {
         self.name = name; self.title = title; self.description = description; self.inputSchema = inputSchema
-        self.readOnly = readOnly; self.run = run
+        self.readOnly = readOnly; self.destructive = destructive; self.run = run
     }
 
     var descriptor: JValue {
         ["name": .string(name), "title": .string(title), "description": .string(description), "inputSchema": inputSchema,
-         // Writes here add files or records, never delete: not destructive (the spec default for writes is).
-         "annotations": readOnly ? ["readOnlyHint": true] : ["readOnlyHint": false, "destructiveHint": false]]
+         "annotations": readOnly ? ["readOnlyHint": true] : ["readOnlyHint": false, "destructiveHint": .bool(destructive)]]
     }
 }
 
@@ -241,8 +242,12 @@ public struct MCPArgs {
         }
     }
 
-    /// A local day `YYYY-MM-DD`; `today` / `yesterday` are accepted too.
-    public func day(_ k: String) throws -> String? {
+    /// A local day `YYYY-MM-DD`; `today` / `yesterday` are accepted too. `old`: names the argument had before 0.1.5,
+    /// still read when `k` is not given.
+    public func day(_ k: String, old: String...) throws -> String? {
+        for o in old where value[k] == nil || value[k] == .null {
+            if let d = try day(o) { return d }
+        }
         guard let s = try string(k) else { return nil }
         switch s.lowercased() {
         case "today": return Time.dayString(Time.now())
@@ -250,7 +255,7 @@ public struct MCPArgs {
         default:
             // addDays(…, 0) normalizes the form; a different day of month means the date does not exist (02-31).
             guard let p = Time.parseDay(s), let d = Time.addDays(s, 0), Time.parseDay(d)?.2 == p.2 else {
-                throw MCPToolError("\(k) must be a date YYYY-MM-DD")
+                throw MCPToolError("\(k) must be a date YYYY-MM-DD, today or yesterday")
             }
             return d
         }

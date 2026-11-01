@@ -107,11 +107,7 @@ struct TasksScreen: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(f.t("tasks.jiraOff", place)).font(.system(size: 12)).foregroundColor(Z.muted)
                         .fixedSize(horizontal: false, vertical: true)
-                    // A server's Jira is set there, not here.
-                    if s == .local {
-                        Button(f.t("tasks.jiraConnect")) { app.screen = .settings }
-                            .buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundColor(Z.week)
-                    }
+                    JiraConnectHint(source: s)
                 }
             }
         }
@@ -319,9 +315,9 @@ struct TasksScreen: View {
     func session(_ s: TaskSessionVM) -> some View {
         HStack(spacing: 10) {
             Text(s.tool).font(.system(size: 11, weight: .semibold))
-                .foregroundColor(Color(hex: s.codex ? 0x8CC8FF : 0xF5B27A))
+                .foregroundColor(Z.pair(s.codex ? 0x8CC8FF : 0xF5B27A))
                 .padding(.horizontal, 8).frame(minWidth: 52, minHeight: 22)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color(hex: s.codex ? 0x1F2E3A : 0x3A2A1F)))
+                .background(RoundedRectangle(cornerRadius: 6).fill(Z.pair(s.codex ? 0x1F2E3A : 0x3A2A1F)))
             VStack(alignment: .leading, spacing: 1) {
                 Text(s.title).font(.system(size: 13, weight: .medium)).foregroundColor(Z.text).lineLimit(1)
                 Text(s.meta).font(.system(size: 11)).foregroundColor(Z.muted).lineLimit(1)
@@ -350,9 +346,9 @@ struct StateChip: View {
 
     var body: some View {
         let (bg, fg) = colors
-        Text(text).font(.system(size: fontSize)).foregroundColor(Color(hex: fg)).lineLimit(1)
+        Text(text).font(.system(size: fontSize)).foregroundColor(Z.pair(fg)).lineLimit(1)
             .padding(.horizontal, height >= 22 ? 9 : 8).frame(height: height)
-            .background(Capsule().fill(Color(hex: bg)))
+            .background(Capsule().fill(Z.pair(bg)))
     }
 }
 

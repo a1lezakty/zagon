@@ -203,15 +203,17 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
         let writer = try Store(path: paths.dir + "/zagon.db")
         let codex = CodexSource.defaultHome()
         let ingest = Ingest(store: writer, sources: [ClaudeSource.spec(root: paths.home + "/.claude/projects")]
-                            + CodexSource.specs(codexHome: codex))
+                            + CodexSource.specs(codexHome: codex) + CursorSource.specs(paths: paths))
         let p = StoreDataProvider(store: try Store(path: paths.dir + "/zagon.db"), writer: writer, host: ingest.host) {
             if baseZone(paths) {
                 Task { @MainActor in NotificationCenter.default.post(name: .NSSystemTimeZoneDidChange, object: nil) }
             }
             let s = try ingest.scan()
+            let cursor = CursorHeaders.sync(store: writer, paths: paths)
+            if cursor { try ingest.update(paths: [CursorHeaders.file(paths)]) }
             let threads = try CodexThreads.sync(store: writer, codexHome: codex, host: ingest.host)
             let spool = try SpoolIngest.run(store: writer, spoolDir: paths.spool)
-            return s.lines > 0 || threads > 0 || spool.lines > 0
+            return s.lines > 0 || cursor || threads > 0 || spool.lines > 0
         }
         p.dbPath = paths.dir + "/zagon.db"
         p.paths = paths
@@ -297,11 +299,16 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
     public func limits() -> Limits {
         read(Limits()) {
             let all = try query.limits(now: now.timeIntervalSince1970)
+            // Whose reading each is, said only with more than one source; a failed read loses only the labels.
+            let sources = (try? query.limitSources(now: now.timeIntervalSince1970,
+                                                   localAccount: Settings.limitsAccount(paths))) ?? []
             func window(_ tool: ToolKind, _ name: String) -> LimitWindow? {
                 guard let r = all.first(where: { $0.tool == tool && $0.window == name }) else { return nil }
                 let reset = r.resetsAt ?? r.ts + Double((r.windowMinutes ?? 0) * 60)
+                let from = sources.first { $0.tool == tool && $0.window == name && $0.several }
+                    .map { LimitFrom(server: $0.source.isEmpty ? nil : $0.source, account: $0.account) }
                 return LimitWindow(usedPct: r.usedPct, resetsAt: Self.date(reset), pctPerHour: r.pctPerHour,
-                                   tool: tool == .codex ? .codex : .claude, readAt: Self.date(r.ts))
+                                   tool: tool == .codex ? .codex : .claude, readAt: Self.date(r.ts), from: from)
             }
             // For `AILimits.weekAlone`: week readings over a minute after the 5-hour one was due (a reset's own reading
             // lands within seconds of it); a failed read keeps both rings.
@@ -341,6 +348,8 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
     /// The editors' settings changed (`zagon editor-panels`, connect): the next `limits()` reads them again.
     public func forgetEditors() { queue.sync { editors = nil } }
 
+    // ponytail: the pace history mixes sources: with two accounts it runs through both accounts' readings of the window
+    // (the rings say whose the current one is, `Query.limitSources`). Exact: a source column in `limit_snapshot` (schema v8).
     public func limitHistory(_ kind: LimitKind) -> [LimitPoint] {
         read([]) {
             let windows: [(ToolKind, String)] = kind == .fiveHour ? [(.claude, "five_hour"), (.codex, "primary")]
@@ -363,10 +372,11 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 case .waitingInput: status = .waitingInput
                 case .idle: status = .idle
                 }
-                return LiveSession(id: s.id, title: Self.title(s.title, s.project, s.id), host: shown(s.host),
-                                   tool: s.tool == "codex" ? .codex : .claude, model: Self.modelName(s.model), status: status,
-                                   since: Self.date(s.since), command: command(tool: s.tool, id: s.nativeId, cwd: s.cwd, host: shown(s.host)),
-                                   drivenBy: s.drivenBy)
+                let host = shown(s.host)
+                return LiveSession(id: s.id, title: Self.title(s.title, s.project, s.id), host: host,
+                                   tool: Tool(rawValue: s.tool) ?? .claude, model: Self.modelName(s.model), status: status,
+                                   since: Self.date(s.since), command: command(tool: s.tool, id: s.nativeId, cwd: s.cwd, host: host),
+                                   drivenBy: s.drivenBy, server: host == localHost ? nil : host)
             }
         }
     }
@@ -440,7 +450,9 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                         .tool: d.byTool.map { UsageRow($0.name, tokens: $0.count, cost: 0) }, .host: rows(d.byHost) { shown($0.isEmpty ? nil : $0) }],
                 doc: kept?.doc, projects: Self.projects(d, branches: branches),
                 summaryInfo: kept.map { SummaryInfo(engine: $0.engine, at: $0.at, weekPct: nil, sources: ($0.doc.hosts ?? []).map(shown)) },
-                hostProjects: hostProjects)
+                hostProjects: hostProjects,
+                cursorSec: d.lanes.filter { $0.id.hasPrefix("cursor:") }
+                    .reduce(0) { $0 + $1.intervals.filter { !$0.waiting }.reduce(0) { $0 + $1.end - $1.start } })
         }
     }
 
@@ -602,7 +614,7 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
             let host: String
             if let w { host = shown(w.host) } else if case .server(let h) = source { host = h } else { host = localHost }
             let last = w?.lastAt ?? l.lastAt ?? 0
-            return TaskSession(tool: w?.tool == "codex" ? .codex : .claude, title: Self.title(w?.title ?? l.title, w?.project, l.sessionId),
+            return TaskSession(tool: Tool(rawValue: w?.tool ?? String(l.sessionId.prefix { $0 != ":" })) ?? .claude, title: Self.title(w?.title ?? l.title, w?.project, l.sessionId),
                                host: host, model: Self.modelName(w?.model), first: Self.date(w?.startedAt ?? last),
                                last: Self.date(last), sec: w?.workingSec ?? 0)
         }
@@ -654,6 +666,11 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
 
     /// Command that brings the session back on this machine (or over ssh when it ran elsewhere).
     func command(tool: String, id: String, cwd: String?, host: String?) -> String {
+        if tool == "cursor" {  // a Cursor chat is resumed in Cursor: open its folder there (on a server over Remote SSH)
+            let dir = cwd.map { " " + Self.quote($0) } ?? ""
+            guard let host, host != localHost, !host.hasPrefix("-") else { return "cursor" + dir }
+            return "cursor --remote ssh-remote+" + Self.word(host) + dir
+        }
         let resume = (tool == "codex" ? "codex resume " : "claude --resume ") + Self.word(id)
         let local = cwd.map { "cd " + Self.quote($0) + " && " + resume } ?? resume
         // A host read from the database must not turn into an ssh option.

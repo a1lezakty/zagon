@@ -9,11 +9,40 @@ enum Screen: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// The settings' tabs, in order.
+enum SettingsTab: String, CaseIterable {
+    case general, connect, jira, notify, servers
+}
+
+/// The look of the window and the panel: as the system, or always dark / light. The menu bar icon follows the bar.
+enum Appearance: String, CaseIterable {
+    case system, dark, light
+    var scheme: ColorScheme? { self == .system ? nil : self == .dark ? .dark : .light }
+    var ns: NSAppearance? { self == .system ? nil : NSAppearance(named: self == .dark ? .darkAqua : .aqua) }
+}
+
 @MainActor
 final class AppState: ObservableObject {
     let provider: any ZagonDataProvider
     let lang: Lang
     @Published var screen: Screen = .day
+    /// The settings tab shown (the last one is kept).
+    @Published var settingsTab = SettingsTab.general {
+        didSet { if persist { UserDefaults.standard.set(settingsTab.rawValue, forKey: "settingsTab") } }
+    }
+    /// The system is in Dark Mode. The panel is given its scheme explicitly: a SwiftUI scheme going back to nil does
+    /// not always reach the panel's window (the main window takes `NSWindow.appearance`, nil follows the system).
+    @Published var systemDark = AppState.systemIsDark
+    /// The system's own setting, which nothing in the app can override (unlike `NSApp.effectiveAppearance`, which may
+    /// lag behind the change notification or take a scheme forced on a window).
+    static var systemIsDark: Bool { UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark" }
+    var panelScheme: ColorScheme { appearance.scheme ?? (systemDark ? .dark : .light) }
+    @Published var appearance = Appearance.system {
+        didSet {
+            if persist { UserDefaults.standard.set(appearance.rawValue, forKey: "appearance") }
+            MainWindow.shared.setAppearance(appearance.ns)
+        }
+    }
     /// Day shown by the Day screen (and preselected in the calendar).
     @Published var day: Date
     /// "Day summary" opens this many days before today (the samples' detailed day is yesterday).
@@ -114,6 +143,11 @@ final class AppState: ObservableObject {
     /// System notifications on this Mac (on by default) and the same through Telegram / ntfy (off: servers send those).
     @Published var macNotify = true { didSet { save(macNotify, "macNotify") } }
     @Published var macNotifyRemote = false { didSet { save(macNotifyRemote, "macNotifyRemote") } }
+    /// macOS has Zagon's notifications turned off (settings say so, with the way to System Settings).
+    @Published var notifyDenied = false
+    func checkNotify() { MacNotifications.denied { [weak self] in self?.notifyDenied = $0 } }
+    /// The first time notifications are wanted (welcome done, turned on): macOS asks the user then, not at launch.
+    func askNotify() { MacNotifications.ask { [weak self] in self?.notifyDenied = $0 } }
     /// Claude Code / Codex connection by the CLI inside Zagon.app (nil = not checked, or not running from the app).
     @Published var cli: Connect.Status?
     @Published private(set) var cliBusy = false
@@ -218,8 +252,9 @@ final class AppState: ObservableObject {
     @Published var toast: Toast?
 
     /// The one place results are shown (a VoiceOver announcement belongs here too).
-    func say(_ text: String, error: Bool = false, reveal: URL? = nil, revealTitle: String? = nil, seconds: Double = 4) {
-        let t = Toast(text: text, error: error, reveal: reveal, revealTitle: revealTitle)
+    func say(_ text: String, error: Bool = false, reveal: URL? = nil, revealTitle: String? = nil, copy: String? = nil,
+             seconds: Double = 4) {
+        let t = Toast(text: text, error: error, reveal: reveal, revealTitle: revealTitle, copy: copy)
         toast = t
         guard !error else { return }
         Task { [weak self] in
@@ -233,6 +268,7 @@ final class AppState: ObservableObject {
     func welcomeDone() {
         welcome = false
         UserDefaults.standard.set(true, forKey: "welcomeDone")
+        if macNotify && persist { askNotify() }
     }
 
     /// The last pull of a checked server worked (grey until the first one did); the samples have no store.
@@ -276,6 +312,13 @@ final class AppState: ObservableObject {
             state.macNotifyRemote = d.bool(forKey: "macNotifyRemote")
             state.rebuildOnOpen = d.object(forKey: "worklogRebuildOnOpen") as? Bool ?? true
             state.zoneID = d.string(forKey: "timeZone").flatMap { TimeZone(identifier: $0) == nil ? nil : $0 }
+            state.settingsTab = d.string(forKey: "settingsTab").flatMap(SettingsTab.init(rawValue:)) ?? .general
+            state.appearance = d.string(forKey: "appearance").flatMap(Appearance.init(rawValue:)) ?? .system
+            // The system switched Dark / Light (by hand or on schedule): the panel follows with "Match system".
+            DistributedNotificationCenter.default().addObserver(forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+                                                                object: nil, queue: .main) { [weak state] _ in
+                MainActor.assumeIsolated { state?.systemDark = AppState.systemIsDark }
+            }
             // Open at login: on by default the first time Zagon runs from Applications (it can be turned off in settings).
             if cliPath != nil, Bundle.main.bundlePath.hasPrefix("/Applications/"), !d.bool(forKey: "launchAtLoginSet") {
                 d.set(true, forKey: "launchAtLoginSet")
@@ -308,11 +351,13 @@ final class AppState: ObservableObject {
                     deliver: { MacNotifications.deliver(title: $0, text: $1, loud: $2) },
                     enabled: { UserDefaults.standard.object(forKey: "macNotify") as? Bool ?? true },
                     remote: { UserDefaults.standard.bool(forKey: "macNotifyRemote") }))
-                if state.macNotify { MacNotifications.start() }
+                MacNotifications.start()
+                state.checkNotify()
             }
             let home = NSHomeDirectory()
             state.localTools = [home + "/.claude", home + "/.codex"].contains { FileManager.default.fileExists(atPath: $0) }
             state.runCLI(nil, quiet: true)
+            if state.localTools { state.startWorklogTexts() }
             state.welcome = !d.bool(forKey: "welcomeDone")
             do { state.notify = try NotifySettings.load(NotifySettings.configPath) } catch {
                 state.notifyError = Log.scrub(String(describing: error))
@@ -370,7 +415,9 @@ final class AppState: ObservableObject {
         return hosts + remoteHosts.filter { !hosts.contains($0) }
     }
 
-    var hostErrors: [String: String] { store?.hostErrors ?? [:] }
+    var hostErrors: [String: String] { store?.hostErrors ?? sampleHostErrors }
+    /// What the servers of the samples say (snapshots).
+    var sampleHostErrors: [String: String] = [:]
     var hostHints: [String: String] { store?.hostHints ?? [:] }
 
     private func save(_ value: Bool, _ key: String) {
@@ -538,7 +585,69 @@ final class AppState: ObservableObject {
         guard let status else { return }
         if command == "uninstall" { return say(f.t("connect.removed")) }
         if !status.missing.isEmpty { return say(f.t("connect.missing", status.missing.joined(separator: ", ")), error: true) }
-        if command == "install" { say(f.t("connect.done"), seconds: 8) } else { say(f.t("connect.checked")) }
+        // The core installs the rest without a word when there is no claude to register the MCP server with.
+        if command == "install" { say(f.t(status.mcpSkipped ? "connect.doneNoMCP" : "connect.done"), seconds: 8) }
+        else { say(f.t("connect.checked")) }
+    }
+
+    /// On a Mac without a server, the day summary and the worklog texts rebuilt at 23:55 in the worklog zone
+    /// (`[worklog] rebuild_at_end`), as a server's service does: `zagon log at-end` of the CLI inside Zagon.app, again
+    /// after the seconds it answers. With a server checked its service does that; the Mac waits.
+    private var worklogTexts: Task<Void, Never>?
+    var endOfDayTexts: Bool { worklogTexts != nil }
+    func startWorklogTexts() {
+        guard let bin = Self.cliPath, worklogTexts == nil else { return }
+        worklogTexts = Task.detached(priority: .background) { [weak self] in
+            while !Task.isCancelled {
+                let app = self
+                guard let now = await MainActor.run(body: { app.map { (servers: $0.remoteHosts, path: $0.cliEnvPath) } }) else { return }
+                guard now.servers.isEmpty else {
+                    try? await Task.sleep(nanoseconds: 600 * 1_000_000_000)
+                    continue
+                }
+                // The first pass may come before `runCLI` found the login shell's PATH (nvm's claude): look it up then.
+                let path = now.path ?? Connect.path(loginShell: Connect.loginShellPath(), home: NSHomeDirectory())
+                let r = (try? Proc.run(bin, ["log", "at-end"], env: ["PATH": path], timeout: 1200)) ?? nil
+                for l in String(decoding: r?.err ?? Data(), as: UTF8.self).split(separator: "\n").prefix(3) {
+                    Log.shared.write("worklog: " + Log.scrub(String(l)))
+                }
+                let answer = r.flatMap { $0.status == 0 ? Int(String(decoding: $0.out, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) : nil }
+                if answer == nil { Log.shared.write("worklog: log at-end did not answer (\(r.map { "exit \($0.status)" } ?? "no answer"))") }
+                // ponytail: an hour at most, so a Mac that slept through 23:55 catches up within the hour after waking.
+                try? await Task.sleep(nanoseconds: UInt64(min(max(answer ?? 600, 60), 3600)) * 1_000_000_000)
+            }
+        }
+    }
+
+    /// "Copy summary" of a session: its handoff from the zagon where it runs, onto the clipboard; the result as a toast.
+    func copyHandoff(_ s: SessionRowVM, done: @escaping @MainActor (Bool) -> Void) {
+        guard let make = taskBackend else { return done(false) }
+        let b = make(s.server.map { .server($0) } ?? .local), id = s.id
+        Task.detached {
+            let r = Result { try b.handoff(id) }
+            await MainActor.run {
+                switch r {
+                case .success(let md) where md.isEmpty && s.server != nil:
+                    // A server's zagon prints it; nothing back (a Mac over ssh copies it there) is nothing copied.
+                    self.say(self.f.t("handoff.empty", s.server ?? ""), error: true)
+                    done(false)
+                case .success(let md):
+                    if !md.isEmpty { copyToPasteboard(md) }
+                    self.say(self.f.t("handoff.copied"))
+                    done(true)
+                case .failure(let e):
+                    Log.shared.write("handoff \(id): \(e)")
+                    self.say(self.f.t("handoff.failed", Remote.scrubHomes("\(e)")), error: true)
+                    done(false)
+                }
+            }
+        }
+    }
+
+    /// Sessions can be handed off here: a server's always, this Mac's when Zagon.app has its CLI; Claude Code and Codex
+    /// only (`zagon handoff` reads their logs, not Cursor's).
+    func canHandoff(_ s: SessionRowVM) -> Bool {
+        taskBackend != nil && (s.server != nil || hasLocalCLI) && (s.id.hasPrefix("claude:") || s.id.hasPrefix("codex:"))
     }
 
     /// A server that fails only gets a grey dot; the next attempt comes on schedule.
@@ -558,7 +667,12 @@ final class AppState: ObservableObject {
             for h in self.awaitingHosts.intersection(hosts) {
                 self.awaitingHosts.remove(h)
                 if let e = self.hostErrors[h] {
-                    self.say(e == Remote.oldZagon ? h + ": " + self.f.t("servers.oldZagon") : self.f.t("servers.failed", h, e), error: true)
+                    if e == Remote.noZagon {
+                        self.say(self.f.t("servers.noZagon", h), error: true, revealTitle: self.f.t("servers.copyInstall"),
+                                 copy: Remote.installCommand)
+                    } else {
+                        self.say(e == Remote.oldZagon ? h + ": " + self.f.t("servers.oldZagon") : self.f.t("servers.failed", h, e), error: true)
+                    }
                 } else {
                     self.say(self.f.t("servers.ok", h))
                 }
@@ -607,7 +721,7 @@ struct ZagonApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MainPanel().environmentObject(state).preferredColorScheme(.dark)
+            MainPanel().environmentObject(state).preferredColorScheme(state.panelScheme)
         } label: {
             // Rebuilt on every AppState change: takes the picture as it is, drawing and reading nothing.
             let icon = state.statusImage
@@ -791,6 +905,9 @@ struct LimitsBlock: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
                     Caps(text: !vm.ais.isEmpty && app.showLeft ? vm.limitsHeaderLeft : vm.limitsHeader)
+                    if let s = vm.limitsSource {
+                        Text(s).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1).truncationMode(.middle)
+                    }
                     Spacer(minLength: 8)
                     if let age = vm.limitsAge {
                         Text(age).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1).minimumScaleFactor(0.85)
@@ -880,6 +997,7 @@ struct LimitsBlock: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(a.tool.name).font(.system(size: 14, weight: .semibold)).foregroundColor(Z.text)
+                if let s = a.source { Text(s).font(.system(size: 12)).foregroundColor(Z.muted) }
                 if !a.weekOnly { windowLine(a.five.color, a.fiveLine) }
                 windowLine(a.week.color, left ? a.weekLeftLine : a.weekLine)
             }
@@ -990,24 +1108,25 @@ struct WaitingRow: View {
             Dot(color: Z.waiting)
             VStack(alignment: .leading, spacing: 1) {
                 Text(s.title).font(.system(size: 13, weight: .semibold)).foregroundColor(Z.text).lineLimit(1)
-                Text(s.subtitle).font(.system(size: 12)).foregroundColor(Color(hex: 0xB9AEB0)).lineLimit(1)
+                Text(s.subtitle).font(.system(size: 12)).foregroundColor(Z.alarmSub).lineLimit(1)
             }
             Spacer(minLength: 0)
             Text(s.time).font(mono(12)).foregroundColor(Z.bad).lineLimit(1)
+            HandoffButton(s: s, color: Z.text, background: Z.alarmButton, border: Z.alarmBorder)
             Button { copy(s.command, $copied) } label: {
                 Image(systemName: copied ? "checkmark" : "terminal").font(.system(size: 12))
                     .foregroundColor(copied ? Z.good : Z.text)
                     .frame(width: 28, height: 28)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(hex: 0x3A2C2D)))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(hex: 0x4D3234)))
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Z.alarmButton))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Z.alarmBorder))
             }
             .buttonStyle(Pressable())
             .help(copied ? app.f.t("copied") : app.f.t("main.copyCommand") + ": " + s.command)
             .accessibilityLabel(app.f.t("main.copyCommand"))
         }
         .padding(.vertical, 9).padding(.horizontal, 10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(hex: 0x2E2425)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(hex: 0x4D3234)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Z.alarmFill))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Z.alarmBorder))
     }
 }
 
@@ -1025,11 +1144,51 @@ struct SessionRow: View {
             }
             Spacer(minLength: 0)
             Text(copied ? app.f.t("copied") : s.time).font(mono(12)).foregroundColor(copied ? Z.good : Z.secondary).lineLimit(1)
+            HandoffButton(s: s, color: Z.secondary)
         }
         .padding(.vertical, 7).padding(.horizontal, 10)
         .contentShape(Rectangle())
         .onTapGesture { copy(s.command, $copied) }
         .help(app.f.t("main.copyCommand") + ": " + s.command)
+    }
+}
+
+/// "Copy summary": the session's handoff (`AppState.copyHandoff`) for a new session or another chat. A spinner while it
+/// is made, a check once copied.
+struct HandoffButton: View {
+    let s: SessionRowVM
+    let color: Color
+    var background: Color = .clear
+    var border: Color = .clear
+    @EnvironmentObject private var app: AppState
+    @Environment(\.isSnapshot) private var snapshot
+    @State private var done = false
+    @State private var busy = false
+    var body: some View {
+        if snapshot || app.canHandoff(s) {
+            Button {
+                guard !busy, !snapshot else { return }
+                busy = true
+                app.copyHandoff(s) { ok in
+                    busy = false
+                    done = ok
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { done = false }
+                }
+            } label: {
+                Group {
+                    if busy { ProgressView().controlSize(.small).scaleEffect(0.7) }
+                    else { Image(systemName: done ? "checkmark" : "doc.on.clipboard").font(.system(size: 12))
+                        .foregroundColor(done ? Z.good : color) }
+                }
+                .frame(width: 28, height: 28)
+                .background(RoundedRectangle(cornerRadius: 8).fill(background))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(border))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(Pressable())
+            .help(app.f.t("main.copyHandoff"))
+            .accessibilityLabel(app.f.t("main.copyHandoff"))
+        }
     }
 }
 

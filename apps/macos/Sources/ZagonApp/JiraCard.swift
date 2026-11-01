@@ -180,3 +180,22 @@ extension AppState {
         currentTaskSource == .local ? jira?.browse(key) : nil
     }
 }
+
+/// Under "Jira is not connected": how to connect it. This Mac's: Settings, where its Jira card is; a server's is set
+/// in that server's config.toml.
+struct JiraConnectHint: View {
+    @EnvironmentObject private var app: AppState
+    let source: TaskBackend.Source
+    var body: some View {
+        if source == .local {
+            Button(app.f.t("tasks.jiraConnect")) {
+                app.settingsTab = .jira
+                app.screen = .settings
+            }
+                .buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundColor(Z.week)
+        } else {
+            Text(app.f.t("settings.jira.servers")).font(.system(size: 12)).foregroundColor(Z.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
