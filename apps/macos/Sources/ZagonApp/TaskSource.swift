@@ -45,7 +45,8 @@ extension AppState {
             }) { $0.cards[key] = $1 }
         case .plan(let day):
             guard force || have.plans[day] == nil else { return }
-            work(s, { try $0.plan(day) }) { $0.plans[day] = $1 }
+            let comments = planComments(s, day)
+            work(s, { try $0.plan(day, comments: comments) }) { $0.plans[day] = $1 }
         case .reconcile(let from, let to):
             let key = reconcileKey(from, to)
             guard force || have.reconciles[key] == nil else { return }
@@ -68,7 +69,8 @@ extension AppState {
     /// source's error line.
     func reloadPlan(_ day: String, done: @escaping (TaskBackend.Source, WorklogPlan) -> Void) {
         guard let s = currentTaskSource else { return }
-        work(s, { try $0.plan(day) }) { cache, plan in
+        let comments = planComments(s, day)
+        work(s, { try $0.plan(day, comments: comments) }) { cache, plan in
             cache.plans[day] = plan
             DispatchQueue.main.async { done(s, plan) }
         }
@@ -124,7 +126,7 @@ extension AppState {
         // Its failures go next to the button, not to the source's line.
         work(s, { b -> (Result<TaskBackend.Commit, Error>, WorklogPlan?) in
             let r = Result { try b.commit(day, shown: shown) }
-            if case .success(.written) = r { return (r, try? b.plan(day)) }
+            if case .success(.written) = r { return (r, try? b.plan(day, comments: shown.comments)) }
             return (r, nil)
         }) { cache, v in
             switch v.0 {
@@ -138,6 +140,133 @@ extension AppState {
             if let after = v.1 { cache.plans[day] = after }
             // After `work` has stored this cache: a load started from here bumps its own counter.
             DispatchQueue.main.async(execute: then)
+        }
+    }
+
+    // MARK: what to log: texts, rebuilds, exclusions
+
+    /// The worklog zone of the current source: its plans', else its `[worklog] tz`, else the app's.
+    var worklogZone: TimeZone {
+        guard let s = currentTaskSource else { return zone }
+        let id = taskCache[s]?.plans.values.lazy.compactMap(\.zone).first ?? worklogConfig[s].flatMap { $0?.tz ?? $0?.machineTz }
+        return id.flatMap(TimeZone.init(identifier:)) ?? zone
+    }
+
+    func planKey(_ s: TaskBackend.Source, _ day: String) -> String { s.saved + "|" + day }
+    /// Tasks whose day summary goes to Jira as a comment: every plan of that day is asked with them (its digest counts them).
+    func planComments(_ s: TaskBackend.Source, _ day: String) -> [String] { (summaryComments[planKey(s, day)] ?? []).sorted() }
+
+    /// "What to log" opened on `day`: its plan, then a rebuild when sessions worked after its summary (Settings →
+    /// Worklogs; once per summary).
+    func openPlan(_ day: String) {
+        guard let s = currentTaskSource else { return }
+        if let p = taskCache[s]?.plans[day] { rebuildIfStale(s, day, p); return }
+        let comments = planComments(s, day)
+        work(s, { try $0.plan(day, comments: comments) }) { cache, plan in
+            cache.plans[day] = plan
+            // After `work` has stored this cache: a rebuild bumps its own counter.
+            DispatchQueue.main.async { self.rebuildIfStale(s, day, plan) }
+        }
+    }
+
+    private func rebuildIfStale(_ s: TaskBackend.Source, _ day: String, _ p: WorklogPlan) {
+        guard rebuildOnOpen, (p.newSessions ?? 0) > 0, s == currentTaskSource,
+              rebuildTried.insert(planKey(s, day) + "|" + String(p.summaryBuiltAt ?? 0)).inserted else { return }
+        rebuildPlan(day)
+    }
+
+    /// `log plan --refresh`: the day summary and the texts made anew (AI calls, minutes); hand-typed texts stay.
+    func rebuildPlan(_ day: String) {
+        guard let s = currentTaskSource else { return }
+        let k = planKey(s, day), comments = planComments(s, day), f = self.f
+        guard planRebuilding.insert(k).inserted else { return }
+        work(s, { b in Result { try b.plan(day, refresh: true, comments: comments) } }) { cache, r in
+            self.planRebuilding.remove(k)
+            switch r {
+            case .success(let plan): cache.plans[day] = plan
+            case .failure(let e): cache.message = f.t("worklog.rebuildFailed", Remote.scrubHomes(String(describing: e)))
+            }
+        }
+    }
+
+    /// A change through the CLI (a text, an exclusion), then the day's plan again without a scan; `done` gets whether
+    /// it worked (a failure is the source's grey line). `others`: the other days' plans changed too and load anew.
+    func editPlan(_ day: String, others: Bool = false, done: @escaping (Bool) -> Void = { _ in },
+                  _ edit: @escaping (TaskBackend) throws -> Void) {
+        guard let s = currentTaskSource else { return }
+        let comments = planComments(s, day)
+        work(s, { b in
+            Result { () throws -> WorklogPlan in
+                try edit(b)
+                return try b.plan(day, scan: false, comments: comments)
+            }
+        }) { cache, r in
+            switch r {
+            case .success(let plan):
+                if others { cache.plans = [:] }
+                cache.plans[day] = plan
+                done(true)
+            case .failure(let e):
+                cache.error = Remote.scrubHomes(String(describing: e))
+                done(false)
+            }
+        }
+    }
+
+    /// The task's day summary in its worklog or as a separate comment on the task; the plan is asked again with it.
+    func setSummaryComment(_ day: String, task: String, _ on: Bool) {
+        guard let s = currentTaskSource else { return }
+        let k = planKey(s, day)
+        if on { summaryComments[k, default: []].insert(task) } else { summaryComments[k]?.remove(task) }
+        editPlan(day) { _ in }
+    }
+
+    /// `[worklog]` of the current source (Settings → Worklogs); a failure is a line under the card.
+    func loadWorklogConfig() {
+        guard let s = currentTaskSource, let b = taskBackend?(s) else { return }
+        let name = sourceName(s), f = self.f
+        Task.detached {
+            let r = Result { try b.worklogConfig() }
+            await MainActor.run {
+                switch r {
+                case .success(let c): self.worklogConfig[s] = .some(c)
+                case .failure(let e): self.worklogConfigMessage = f.t("source.failed", name, Remote.scrubHomes(String(describing: e)))
+                }
+            }
+        }
+    }
+
+    /// One `[worklog]` key on this Mac and every checked server (`log config`), shown at once through `change`; the
+    /// plans are cut by these keys, so they load anew.
+    func setWorklog(_ key: String, _ value: String, _ change: (inout TaskBackend.WorklogConfig) -> Void) {
+        guard let make = taskBackend else { return }
+        for (s, c) in worklogConfig { if var c { change(&c); worklogConfig[s] = c } }
+        writeWorklog(taskSources.map { (sourceName($0), make($0)) }) { try $0.setWorklogConfig(key, value) }
+    }
+
+    /// Lets an excluded project, task or session back into the plans of the current source.
+    func removeExclusion(_ e: TaskBackend.WorklogConfig.Exclusion) {
+        guard let s = currentTaskSource, let b = taskBackend?(s) else { return }
+        if var c = worklogConfig[s] ?? nil { c.exclude?.removeAll { $0 == e }; worklogConfig[s] = c }
+        writeWorklog([(sourceName(s), b)]) { try $0.exclude(e.kind, e.name, add: false) }
+    }
+
+    /// Runs `write` on each backend after the writes before it; what failed goes under the card, then the current
+    /// source's `[worklog]` is read again.
+    private func writeWorklog(_ backends: [(String, TaskBackend)], _ write: @escaping @Sendable (TaskBackend) throws -> Void) {
+        let f = self.f, before = worklogWrite
+        worklogConfigMessage = nil
+        worklogWrite = Task.detached {
+            await before?.value
+            var failed: [String] = []
+            for (name, b) in backends {
+                do { try write(b) } catch { failed.append(f.t("settings.wl.notSaved", name, Remote.scrubHomes(String(describing: error)))) }
+            }
+            await MainActor.run {
+                self.worklogConfigMessage = failed.isEmpty ? nil : failed.joined(separator: "\n")
+                for s in self.taskCache.keys { self.taskCache[s]?.plans = [:] }
+                self.loadWorklogConfig()
+            }
         }
     }
 

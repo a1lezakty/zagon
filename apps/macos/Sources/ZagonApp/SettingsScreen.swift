@@ -45,6 +45,7 @@ struct SettingsScreen: View {
             .frame(maxWidth: 640, alignment: .leading)
             EditorPanelsCard()
             JiraCard()
+            if app.currentTaskSource != nil { WorklogCard() }
             ZoneCard()
             Card(spacing: 12) {
                 Text(f.t("settings.view")).font(.system(size: 15, weight: .semibold))

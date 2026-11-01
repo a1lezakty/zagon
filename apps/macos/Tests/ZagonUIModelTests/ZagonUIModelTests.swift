@@ -350,7 +350,8 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertEqual(vm.notes, ["08:00–09:00: 2 sessions ran at once (web-app, API question), the time is split by activity: 30m + 30m.",
                                   "Nothing overlaps the worklogs already in Jira.",
                                   "ZAG-1 is not in Jira, it stays in Zagon only."])
-        XCTAssertEqual(vm.copyText.split(separator: "\n").count, 3)
+        // A line per row; the day summary under PROJ-21's text takes lines of its own.
+        XCTAssertEqual(vm.copyText.split(separator: "\n").filter { $0.contains("\t") }.count, 3)
         XCTAssertNil(WorklogVM(p.worklog(p.at(29, 0)), f).commitTitle)
 
         let ru = WorklogVM(env(.ru).0.worklog(p.now), env(.ru).1)

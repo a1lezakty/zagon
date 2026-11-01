@@ -25,6 +25,21 @@ final class AppState: ObservableObject {
     /// The worklog screen's period (nil: one day and its plan) and the open task row of its reconciliation.
     @Published var worklogPeriod: ClosedRange<Date>?
     @Published var reconcileOpen: String?
+    /// The plan row expanded in "What to log" (its id there), the tasks whose day summary goes as a comment by
+    /// "source|day", and plans being rebuilt by "source|day" (`TaskSource.swift`).
+    @Published var worklogOpen: Int?
+    @Published var summaryComments: [String: Set<String>] = [:]
+    @Published var planRebuilding: Set<String> = []
+    /// Rebuilds made on opening, by "source|day|summary time": one per summary.
+    var rebuildTried: Set<String> = []
+    /// Settings → Worklogs: rebuild the plan when "What to log" opens and sessions worked after its summary.
+    @Published var rebuildOnOpen = true { didSet { save(rebuildOnOpen, "worklogRebuildOnOpen") } }
+    /// `[worklog]` as each source's zagon answers `log config` (nil inside: a zagon without it), and what the last
+    /// write could not save.
+    @Published var worklogConfig: [TaskBackend.Source: TaskBackend.WorklogConfig?] = [:]
+    @Published var worklogConfigMessage: String?
+    /// Writes of `[worklog]` one after another: each rewrites config.toml there.
+    var worklogWrite: Task<Void, Never>?
     /// What the period shows with no task source (the design sample, snapshots).
     var sampleReconcile: Reconciliation?
     /// Bumped when new data arrived (or a minute passed), so the screens read the store again.
@@ -257,6 +272,7 @@ final class AppState: ObservableObject {
             state.claudeColors = RingColors.load(.claude, d); state.codexColors = RingColors.load(.codex, d)
             state.macNotify = d.object(forKey: "macNotify") as? Bool ?? true
             state.macNotifyRemote = d.bool(forKey: "macNotifyRemote")
+            state.rebuildOnOpen = d.object(forKey: "worklogRebuildOnOpen") as? Bool ?? true
             state.zoneID = d.string(forKey: "timeZone").flatMap { TimeZone(identifier: $0) == nil ? nil : $0 }
             // Open at login: on by default the first time Zagon runs from Applications (it can be turned off in settings).
             if cliPath != nil, Bundle.main.bundlePath.hasPrefix("/Applications/"), !d.bool(forKey: "launchAtLoginSet") {
@@ -320,6 +336,9 @@ final class AppState: ObservableObject {
         state.remoteHosts = ["build-box", "gpu-box"]
         state.serverJira = ["build-box": .on, "gpu-box": .off]
         state.jira = sampleJira
+        state.worklogConfig = [.server("build-box"): TaskBackend.WorklogConfig(
+            tz: "Asia/Nicosia", machineTz: "Asia/Almaty", projects: ["OPS"], jiraProjects: ["PROJ", "ZAG"], daySummary: true,
+            rebuildAtEnd: true, exclude: [.init(kind: "project", name: "dotfiles"), .init(kind: "task", name: "PROJ-7")])]
         state.sampleReconcile = .sample(now: state.provider.now, zone: state.zone)
         state.editors = EditorPanelsVM(MockDataProvider.editors, state.f)
         return state
