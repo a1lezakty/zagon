@@ -32,8 +32,12 @@ extension ZagonDataProvider {
 }
 
 public enum Tool: String, Sendable, CaseIterable {
-    case claude, codex
-    public var name: String { self == .codex ? "Codex" : "Claude" }
+    case claude, codex, cursor
+    public var name: String {
+        switch self { case .claude: "Claude"; case .codex: "Codex"; case .cursor: "Cursor" }
+    }
+    /// The AIs with subscription limits (rings, their colors). Cursor has sessions and time only.
+    public static let withLimits: [Tool] = [.claude, .codex]
 }
 
 public struct LimitWindow: Sendable {
@@ -105,7 +109,9 @@ public struct Limits: Sendable {
                   codex: (fiveHour ?? week)?.tool == .codex ? w : AILimits())
     }
 
-    public subscript(_ tool: Tool) -> AILimits { tool == .codex ? codex : claude }
+    public subscript(_ tool: Tool) -> AILimits {
+        switch tool { case .claude: claude; case .codex: codex; case .cursor: AILimits() }
+    }
 
     /// Claude was used and its limits did not come: they come from its status line, and Claude Code in an editor's
     /// panel (the VS Code / Cursor extension) does not run it. No reading at all, or a window that started over before
@@ -323,10 +329,13 @@ public struct DayData: Sendable {
     public var summaryInfo: SummaryInfo?
     /// `projects` by machine (as shown), for the sessions a summary from other machines leaves out.
     public var hostProjects: [String: [DoneProject]]
+    /// Working time of Cursor's sessions that day (part of `totals.sessionSec`): approximate, and without tokens.
+    public var cursorSec: Double
     public init(day: Date, totals: Totals, limitHits: [Interval] = [], weekPctStart: Double? = nil,
                 weekPctEnd: Double? = nil, lanes: [Lane] = [], usage: [UsageDimension: [UsageRow]] = [:],
                 doc: SummaryDoc? = nil, projects: [DoneProject] = [], summaryInfo: SummaryInfo? = nil,
-                hostProjects: [String: [DoneProject]] = [:]) {
+                hostProjects: [String: [DoneProject]] = [:], cursorSec: Double = 0) {
+        self.cursorSec = cursorSec
         self.day = day; self.totals = totals; self.limitHits = limitHits; self.weekPctStart = weekPctStart
         self.weekPctEnd = weekPctEnd; self.lanes = lanes; self.usage = usage; self.doc = doc
         self.projects = projects; self.summaryInfo = summaryInfo; self.hostProjects = hostProjects

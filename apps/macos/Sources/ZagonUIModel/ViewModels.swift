@@ -184,19 +184,21 @@ public struct MainVM: Sendable {
         }
         // A worker driven by another session waits for that session, not for you: listed with the idle ones.
         func driven(_ s: LiveSession) -> Bool { s.status == .waitingInput && s.drivenBy != nil }
+        // Cursor's sessions say so: their model names look like Claude's or Codex's.
+        func cursor(_ s: LiveSession, _ detail: String) -> String { s.tool == .cursor ? "Cursor · " + detail : detail }
         waiting = sessions.compactMap {
             switch $0.status {
-            case .waitingPermission: return row($0, f.t("status.permission"))
-            case .waitingInput where !driven($0): return row($0, f.t("status.input"))
+            case .waitingPermission: return row($0, cursor($0, f.t("status.permission")))
+            case .waitingInput where !driven($0): return row($0, cursor($0, f.t("status.input")))
             default: return nil
             }
         }
-        working = sessions.filter { $0.status == .working }.map { row($0, $0.model) }
+        working = sessions.filter { $0.status == .working }.map { row($0, cursor($0, $0.model)) }
         idle = sessions.compactMap {
             if driven($0), let d = $0.drivenBy {
                 return row($0, d.isEmpty ? f.t("status.otherSession") : f.t("status.session", d))
             }
-            return $0.status == .idle ? row($0, $0.model) : nil
+            return $0.status == .idle ? row($0, cursor($0, $0.model)) : nil
         }
         waitingHeader = f.t("sessions.waiting", String(waiting.count)).uppercased()
         workingHeader = f.t("sessions.working", String(working.count)).uppercased()
@@ -327,6 +329,7 @@ public struct DayVM: Sendable {
             notes.append(Note(color: Palette.week, text: f.t("day.weekDelta", "+" + f.pct(b - a), String(Int(a.rounded())),
                                                              f.pct(b))))
         }
+        if d.cursorSec > 0 { notes.append(Note(color: Palette.muted, text: f.t("day.cursor", f.duration(d.cursorSec)))) }
         limitNotes = notes
         timeline = TimelineVM(day: d.day, lanes: d.lanes, f: f)
         let waits = d.lanes.flatMap { lane in lane.intervals.filter(\.waiting).map { (lane.title, $0) } }
@@ -697,7 +700,7 @@ public struct TasksVM: Sendable {
             done: t.doneByDay.map { (f.dayTitleShortWeekday($0.day), $0.text) },
             sessions: t.sessions.map { s in
                 let days = f.dayRange(s.first, s.last)
-                return TaskSessionVM(tool: s.tool == .codex ? "Codex" : "Claude", codex: s.tool == .codex, title: s.title,
+                return TaskSessionVM(tool: s.tool.name, codex: s.tool == .codex, title: s.title,
                                      meta: [s.host, s.model, days].joined(separator: " · "), time: f.duration(s.sec))
             },
             notes: t.notes)
