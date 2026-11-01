@@ -350,6 +350,49 @@ extension Daemon {
     }
 }
 
+extension Daemon {
+    /// Live statuses from `claude agents --json` (`ClaudeAgents`) every `every` seconds, but only while a Claude
+    /// session of `host` was seen in the last 30 minutes (~0.3 s CPU a call; none when idle). A Claude Code without
+    /// the command (a non-zero exit, not a JSON array) is asked again an hour later; hooks alone meanwhile.
+    /// A read of the session list: no update check or telemetry from that `claude` (a call every 30 s while active).
+    static let agentsEnv = HookSpool.internalEnv.merging(["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"]) { a, _ in a }
+
+    public static func startClaudeAgents(dbPath: String, home: String, host: String, every: UInt32 = 30,
+                                         log: @escaping @Sendable (String) -> Void) {
+        startThread {
+            z_background_thread()
+            let store: Store
+            do { store = try Store(path: dbPath) } catch { log("agents: cannot open the database: \(error)"); return }
+            try? store.db.exec("PRAGMA cache_size=-256")
+            var on: Bool?, retryAt = 0.0
+            while true {
+                sleep(every)
+                let path = DaySummary.cliPath(home: home)
+                guard Time.monotonic() >= retryAt, (try? ClaudeAgents.active(store: store, host: host, now: Sys.now())) == true,
+                      let claude = Sys.which("claude", path: path) else { continue }
+                let env = Daemon.agentsEnv.merging(["PATH": path]) { _, b in b }  // an npm or nvm `claude` needs its node
+                // An older Claude Code would take `agents` for a prompt: the version is checked before the first call.
+                if on != true, !ClaudeAgents.supports(version: Sys.capture([claude, "--version"], timeout: 10, env: env).out) {
+                    if on != false { log("agents: this Claude Code has no `claude agents --json`, hooks only; checking again in 1 h"); on = false }
+                    retryAt = Time.monotonic() + 3600
+                    continue
+                }
+                let at = Sys.now()
+                let r = Sys.capture([claude, "agents", "--json"], timeout: 10, env: env)
+                if r.status == 0, let entries = ClaudeAgents.parse(r.out) {
+                    if on != true { log("agents: second status source on"); on = true }
+                    do { _ = try store.db.transaction { try ClaudeAgents.apply(entries, store: store, at: at) } }
+                    catch { log("agents: error: \(error)") }
+                } else {
+                    if on != false { log("agents: `claude agents --json` unsupported (exit \(r.status)), hooks only; retry in 1 h"); on = false }
+                    retryAt = Time.monotonic() + 3600
+                }
+                store.db.releaseMemory(); z_release_memory()
+            }
+        }
+    }
+}
+
 final class ThreadBody: Sendable {
     let run: @Sendable () -> Void
     init(_ run: @escaping @Sendable () -> Void) { self.run = run }

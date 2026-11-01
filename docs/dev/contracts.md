@@ -41,6 +41,19 @@ or recounted and tailing goes on from the stored offset. The parser is not calle
 "archived" must come from another signal (Codex `threads.archived`), not from seeing the new path. A copy (new
 inode) is a new file.
 
+Compressed logs (Codex 0.16x: a rollout cold for 7 days becomes `<name>.jsonl.zst`, the same bytes, and the original is
+deleted; to append Codex unpacks it back to `<name>.jsonl` under a new inode and deletes the `.zst`): for a source that
+accepts `<rel>.zst`, the `source_file` row keeps the plain name `<name>` in both forms, with offsets, sizes and tails of
+the unpacked content (unpacked into an unlinked temporary file next to the database, never leaving less than 256 MB free
+there; a failure is retried when the file changes); `meta packed:file:<id>` marks a row last read from its `.zst`.
+Between the forms a new inode is not a replacement: the bytes before the offset decide, so nothing is recounted. While
+both forms exist the plain file is read and the `.zst` skipped; a `.zst` already read is skipped while its inode and
+mtime stay. Moves between roots work in either form (inode), and a form changed on the way is matched by file name in
+another root when the old file is gone in both forms. A zagon without this (0.1.4) sees a compressed file as gone and an
+unpacked one as replaced, so it recounts rather than double counts. Our archive keeps copies of plain files only (a
+`.zst` is one already: if it is deleted later, its counts stay but handoff and search lose it); `Archive.readLog` and
+`transcript(id)` unpack it for handoff and search.
+
 ## Store (`Sources/ZagonCore/Store/`)
 
 `Store(path:)` opens SQLite in WAL mode and applies migrations (`PRAGMA user_version`); a database newer than the
@@ -141,6 +154,13 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   or `/` (one that works in many projects), counts for its own `dir_project.project` (its last component when not
   resolved). Tool calls go to the session's own project. `cache_write_1h` (v5) as in `usage_hour`.
 - `limit_snapshot`, `task*`, `worklog_plan`, `summary`, `handoff`, `fts` (contentless FTS5) + `fts_doc`.
+- Limit sources live in `meta` (0.1.5, no column in `limit_snapshot`): `limit_src:<tool>:<window>:<source>` = the `ts`
+  of that source's newest reading of the window (`Store.addLimitSnapshot(_:source:)`; `<source>` "" = this store's own
+  readings, else the ssh alias `ExportImport` was given), `limit_account:<alias>` = the server's `[limits] account`
+  (removed when its `limit` lines come without one). `Query.limitSources` names the source of each current reading
+  (its own newest reading, else the source's newest reading of the same window period) and whether more than one
+  source has a reading of that tool within 8 days. The Mac drops an alias's keys with its other rows (`Remote.forget`).
+  The pace history (`Query.limitHistory`) still mixes sources.
 
 ## Time rules
 
@@ -214,14 +234,17 @@ NDJSON on stdout, keys in snake_case, one consistent read snapshot; the Mac app 
 - `{"type":"summary", day, engine, text, created, seq}` — a kept day or period summary (`summary` row) changed after
   `since` (`meta` `summary_seq:<day>`; `since` 0 sends all): `day` = `YYYY-MM-DD` or `from..to`, `text` = the
   `SummaryDoc` JSON (`Notify/SummaryDoc.swift`); the client stores it as its `summary` row of that day and engine;
-- `{"type":"limit", tool, window, used_pct, resets_at, window_minutes, ts}` — the current reading per (tool, window)
-  (`Store.latestLimits`), in every export;
+- `{"type":"limit", tool, window, used_pct, resets_at, window_minutes, ts, host, account}` — the current reading per
+  (tool, window) (`Store.latestLimits`), in every export; `host` (0.1.5) = the exporting store's `meta.host`, `account`
+  (0.1.5) = its `[limits] account`, left out when not set; a line without them (0.1.4) = no account (the Mac's
+  `Remote.apply` takes host names of a server from its `session` / `day` lines only, not from this `host`);
 - unknown line types and keys must be ignored (the format only grows).
 
 `ExportImport(store:source:)` (`Export/ExportImport.swift`) is the reference client: it applies an export to
 another store, keeping imported `usage_hour` / `tool_use` / `activity` rows on one `source_file` row
 `export:<source>` (your time as `activity` with `kind = 'user'`, `session_id = ''`), so local ingest never touches
-them and `Reports` on that store give the server's numbers. Tested: a full export imported into an empty store gives
+them and `Reports` on that store give the server's numbers. Its `limit` readings are stored with `<source>` as their
+source (`limit_src:…:<source>`, `limit_account:<source>`). Tested: a full export imported into an empty store gives
 the same `Reports.day`, per-agent and per-tool sums and intervals; incremental exports applied on top, each twice,
 double nothing.
 
@@ -266,6 +289,15 @@ newer ones; a repeated status keeps the time it began.
 | `Stop`; Codex `Interrupt`; Claude `Notification` with `idle_prompt`; `SessionStart` (not `compact`) | `waiting_input` |
 | `SessionEnd` | `ended` |
 
+A second source on Linux: the daemon runs `claude agents --json` (Claude Code 2.1.145+; `claude` from PATH and the
+CLI's install places) every 30 s while a Claude session of this host not `ended` was seen in the last 30 minutes, and
+applies it through the same `setStatus` (`ClaudeAgents`), dated 5 s before the call so a hook not yet ingested still
+wins: `busy` → `working`; `waiting` for a permission prompt, sandbox / worker request or input needed →
+`waiting_permission`, other `waiting` and `idle` → `waiting_input` (`idle` of a background session still `working`:
+no change); an exited background session `done` → `waiting_input`, `blocked` → `waiting_permission`, `failed` /
+`stopped` → `ended` (never reopens an `ended` one). Only sessions already in the database; one missing from the list is
+left alone. A Claude Code without the command (non-zero exit, not a JSON array) is asked again an hour later.
+
 The status line wrapper adds `limits` lines (`five_hour` / `seven_day`) only when the reading changed or a minute
 passed for that session (the last one is kept in `spool/.limits-<session>`, removed with spool days); Claude Code
 redraws the status line every few seconds and each spool line wakes the daemon. They become `limit_snapshot` rows (an
@@ -304,6 +336,10 @@ claude.week = [80, 95]
 codex.five_hour = [80, 95]
 codex.week = [80, 95]
 codex.<limit_id> = [80, 95]   # a Codex premium limit, both of its windows (stored as `<limit_id>:primary|secondary`)
+
+[limits]
+account = ""              # e.g. "work": names this machine's subscription; with readings from more than one
+                          # source (this Mac, servers) the Mac app shows "<server> · <account>" next to the rings
 
 [telegram]
 token_file = "~/.config/zagon/tg-bot-token"   # the user's own bot; the token is read from this file only

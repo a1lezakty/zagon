@@ -45,7 +45,8 @@ public struct DaySummary {
     public var claudeRoot: String
     public var searchPath: String? = Sys.env("PATH")
     /// System-wide install places of the AI CLIs, after the user's own (`cliPath`).
-    public var systemBins = ["/usr/local/bin", "/opt/homebrew/bin"]
+    public var systemBins = DaySummary.binDirs
+    static let binDirs = ["/usr/local/bin", "/opt/homebrew/bin"]
     /// Runs a command: (argv, stdin, cwd, timeout) → (status, stdout, stderr). Replaced in tests.
     public var runner: ([String], [UInt8], String?, Double) -> (status: Int32, out: [UInt8], err: [UInt8]) = {
         Sys.capture($0, stdin: $1, cwd: $2, timeout: $3, env: HookSpool.internalEnv)
@@ -389,22 +390,25 @@ public struct DaySummary {
 
     /// Where the AI CLIs are looked up. A user service runs with systemd's PATH: the CLIs' own install places come
     /// after it, nvm's node versions newest first.
-    var cliPath: String {
-        let nvm = paths.home + "/.nvm/versions/node"
+    var cliPath: String { DaySummary.cliPath(home: paths.home, searchPath: searchPath, systemBins: systemBins) }
+
+    static func cliPath(home: String, searchPath: String? = Sys.env("PATH"),
+                        systemBins: [String] = binDirs) -> String {
+        let nvm = home + "/.nvm/versions/node"
         func version(_ v: String) -> [Int] { v.dropFirst().split(separator: ".").map { Int($0) ?? 0 } }
         let node = Sys.listDir(nvm).filter { $0.hasPrefix("v") }.sorted { version($1).lexicographicallyPrecedes(version($0)) }
-        let own = [".local/bin", ".claude/local", ".npm-global/bin"].map { paths.home + "/" + $0 } + node.map { nvm + "/" + $0 + "/bin" }
-        return ((searchPath.map { [$0] } ?? []) + own + systemBins + editorBins).joined(separator: ":")
+        let own = [".local/bin", ".claude/local", ".npm-global/bin"].map { home + "/" + $0 } + node.map { nvm + "/" + $0 + "/bin" }
+        return ((searchPath.map { [$0] } ?? []) + own + systemBins + editorBins(home: home)).joined(separator: ":")
     }
 
     /// The last resort, when only the editor extension is installed: the Claude Code it bundles, in
     /// `~/.<editor>/extensions/anthropic.claude-code-<version>[-<platform>]/resources/native-binary`, the newest first.
     /// Every VS Code fork keeps its extensions so (`.vscode`, `.vscode-insiders`, `.vscode-oss` of VSCodium, `.cursor`,
     /// `.windsurf`, `.positron`, `.antigravity-ide`, the `-server` folders of remote SSH…), each in its own folder.
-    var editorBins: [String] {
+    static func editorBins(home: String) -> [String] {
         let prefix = "anthropic.claude-code-"
         func version(_ d: String) -> [Int] { d.dropFirst(prefix.count).prefix { $0 != "-" }.split(separator: ".").map { Int($0) ?? 0 } }
-        let roots = Sys.listDir(paths.home).filter { $0.hasPrefix(".") }.map { paths.home + "/" + $0 + "/extensions" }
+        let roots = Sys.listDir(home).filter { $0.hasPrefix(".") }.map { home + "/" + $0 + "/extensions" }
         return roots.flatMap { r in Sys.listDir(r).filter { $0.hasPrefix(prefix) }.map { (dir: r + "/" + $0, v: version($0)) } }
             .sorted { $1.v.lexicographicallyPrecedes($0.v) }.map { $0.dir + "/resources/native-binary" }
     }

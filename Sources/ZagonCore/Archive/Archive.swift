@@ -242,10 +242,24 @@ public struct Archive {
             WHERE s.id = ?
             """, [.text(sessionId)]) { ($0.text(0), $0.text(1)) }
         guard let (path, copy) = row else { return nil }
-        if let path, let b = Sys.readFile(path), copy.flatMap(Archive.contentSize).map({ b.count >= $0 }) ?? true { return b }
+        if let path, let b = Archive.readLog(path), copy.flatMap(Archive.contentSize).map({ b.count >= $0 }) ?? true { return b }
         guard let copy, Sys.exists(copy) else { return nil }
         var out: [UInt8] = []
         try Archive.decompress(copy) { out.append(contentsOf: $0) }
+        return out
+    }
+
+    /// A log's bytes, at most about `limit`; one compressed in place (a Codex `<name>.zst`, also when asked for `<name>`,
+    /// as `source_file` keeps it) unpacked.
+    public static func readLog(_ path: String, limit: Int = .max) -> [UInt8]? {
+        let zst = path.hasSuffix(".zst") ? path : !Sys.exists(path) && Sys.exists(path + ".zst") ? path + ".zst" : nil
+        guard let zst else { return Sys.readFile(path) }
+        struct Enough: Error {}
+        var out: [UInt8] = []
+        do {
+            try decompress(zst) { out.append(contentsOf: $0); if out.count >= limit { throw Enough() } }
+        } catch is Enough {
+        } catch { return nil }
         return out
     }
 
@@ -253,7 +267,9 @@ public struct Archive {
     public func stats() throws -> Stats {
         var s = Stats()
         var originals = Set<String>()
-        try store.db.query("SELECT path FROM source_file") { if let p = $0.text(0), Sys.exists(p) { originals.insert(p) } }
+        try store.db.query("SELECT path FROM source_file") {
+            if let p = $0.text(0), Sys.exists(p) || Sys.exists(p + ".zst") { originals.insert(p) }
+        }
         var mains: [String: String] = [:]  // copy -> original
         try store.db.query("""
             SELECT s.archive_path, f.path FROM session s LEFT JOIN source_file f ON f.session_id = s.id AND f.agent = ''

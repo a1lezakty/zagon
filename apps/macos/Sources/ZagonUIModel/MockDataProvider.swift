@@ -13,6 +13,8 @@ public struct MockDataProvider: ZagonDataProvider {
     public var staleLimits = false
     /// Codex limits next to Claude's (both AIs in the menu bar and the panel).
     public var codexLimits = false
+    /// Limits read on this Mac and on a server (two accounts): the rings say whose they are.
+    public var twoSources = false
     /// Claude on a plan without a 5-hour window: only the week comes.
     public var weekOnly = false
     /// Claude used where its status line does not run (an editor extension): sessions, no reading.
@@ -60,6 +62,12 @@ public struct MockDataProvider: ZagonDataProvider {
                                week: LimitWindow(usedPct: 71, resetsAt: at(34, 11), tool: .codex, readAt: ago(6)))
         }
         if weekOnly { l.claude.fiveHour = nil }
+        if twoSources {
+            l.claude.fiveHour?.from = LimitFrom(server: "build-box", account: "work")
+            l.claude.week?.from = LimitFrom(server: "build-box", account: "work")
+            l.codex.fiveHour?.from = LimitFrom(account: "personal")
+            l.codex.week?.from = LimitFrom(account: "personal")
+        }
         if claudeUnread {
             l.claude = AILimits()
             l.claudeSeen = ago(4)
