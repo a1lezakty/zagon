@@ -1,3 +1,9 @@
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
+import Foundation
+#endif
+
 /// `TaskService` for `zagon mcp`: task_list / task_get / task_create / task_update, worklog_plan, worklog_commit.
 public final class TaskTools: TaskService {
     /// Built for every call, so a fixed config or a rotated token is picked up without restarting the server.
@@ -11,7 +17,7 @@ public final class TaskTools: TaskService {
 
     /// What a planned Jira row looked like when this server showed it; worklog_commit writes only rows that are
     /// still exactly like this (row ids can be reused by SQLite, a key or a text can change meanwhile).
-    struct Shown: Hashable { var id: Int, task: Int?, start: Timestamp, end: Timestamp, jiraKey: String?, text: String }
+    struct Shown: Hashable { var id: Int, task: Int?, start: Timestamp, end: Timestamp, jiraKey: String?, text: String, summary: String? }
     /// Day -> rows shown by the last worklog_plan (or by a refused commit, which returns the new plan to show).
     var shown: [String: [Int: Shown]] = [:]
 
@@ -166,43 +172,69 @@ public final class TaskTools: TaskService {
         return out.isEmpty ? "" : "; " + out.joined(separator: ", ")
     }
 
-    func jiraRows(_ day: String) throws -> [Int: Shown] {
+    /// The plan's rows to write to Jira (with their texts and summaries) as shown.
+    func jiraRows(_ p: DayPlan) -> [Int: Shown] {
         var out: [Int: Shown] = [:]
-        for r in try Worklog(store: store).rows(day: day) where r.state == "planned" && r.jiraKey != nil {
-            out[r.id] = Shown(id: r.id, task: r.taskId, start: r.start, end: r.end, jiraKey: r.jiraKey, text: r.text)
+        for r in p.rows where r.state == "planned" && r.jiraKey != nil {
+            out[r.id] = Shown(id: r.id, task: r.taskId, start: r.start, end: r.end, jiraKey: r.jiraKey, text: r.text,
+                              summary: r.daySummary == true ? r.summary : nil)
         }
         return out
     }
 
     func planText(_ p: DayPlan, _ w: DayWorklog, _ err: String? = nil) throws -> String {
-        shown[p.day] = try jiraRows(p.day)
+        shown[p.day] = jiraRows(p)
         return TaskText.plan(p, base: w.base, jiraError: err)
     }
 
-    public func worklogPlan(day: String) throws -> String {
+    public func worklogPlan(day: String) throws -> String { try worklogPlan(day: day, refresh: false, json: false) }
+
+    /// Days are cut in `[worklog] tz` after the scan (`Settings.inZone`: the MCP server answers one call at a time).
+    public func worklogPlan(day: String?, refresh: Bool, json: Bool) throws -> String {
         scan()
         let w = try makeWorklog()
-        let (p, err) = try w.plan(day)
-        return try planText(p, w, err)
-            + "\nNothing was written. To log, the user must ask; then worklog_commit with confirm: true (and ids to pick rows)."
+        return try Settings.inZone(w.config.tz) {
+            let (p, err) = try w.plan(day ?? Time.dayString(now()), refresh: refresh)
+            let text = try planText(p, w, err)
+            if json {
+                let e = JSONEncoder()
+                e.keyEncodingStrategy = .convertToSnakeCase
+                e.outputFormatting = [.sortedKeys]
+                return String(decoding: try e.encode(p), as: UTF8.self)
+            }
+            return text + "\nNothing was written. To log, the user must ask; then worklog_commit with confirm: true (and ids to pick rows)."
+        }
+    }
+
+    public func worklogConfig() throws -> String {
+        let w = try makeWorklog()
+        let e = JSONEncoder()
+        e.keyEncodingStrategy = .convertToSnakeCase
+        e.outputFormatting = [.sortedKeys]
+        return String(decoding: try e.encode(WorklogSettings(w.config, jiraProjects: JiraCache.load(store).projects.sorted())), as: UTF8.self)
     }
 
     public func worklogReconcile(from: String, to: String?, format: String) throws -> String {
         scan()
-        let today = Time.dayString(now())
-        let r = try mapErrors { try makeWorklog().reconcile(from: from, to: to ?? today, today: today) }
-        switch format {
-        case "json": return try ReconcileText.json(r)
-        case "csv": return ReconcileText.csv(r)
-        case "text": return ReconcileText.text(r)
-        default: return ReconcileText.markdown(r)
+        let w = try makeWorklog()
+        return try Settings.inZone(w.config.tz) {
+            let today = Time.dayString(now())
+            let r = try mapErrors { try w.reconcile(from: from, to: to ?? today, today: today) }
+            switch format {
+            case "json": return try ReconcileText.json(r)
+            case "csv": return ReconcileText.csv(r)
+            case "text": return ReconcileText.text(r)
+            default: return ReconcileText.markdown(r)
+            }
         }
     }
 
     /// Writes only what this server's last worklog_plan of the day showed: the day is planned again against fresh
     /// data, and if the rows to write differ in anything (task, time, Jira issue, text) nothing is written and the new
     /// plan comes back instead.
-    public func worklogCommit(day: String, ids: [Int]?) throws -> String {
+    public func worklogCommit(day: String, ids: [Int]?) throws -> String { try worklogCommit(day: day, ids: ids, withSummary: false, summaryComment: []) }
+
+    public func worklogCommit(day: String, ids: [Int]?, withSummary: Bool, summaryComment: [String]) throws -> String {
         let w = try makeWorklog()
         guard w.jira != nil else {
             throw MCPToolError("Jira is not connected" + (w.jiraSetupError.map { " (\($0))" } ?? " ([jira] in config.toml)")
@@ -212,11 +244,17 @@ public final class TaskTools: TaskService {
             throw MCPToolError("Call worklog_plan for \(day) first and show it to the user; nothing was written.")
         }
         scan()
+        return try Settings.inZone(w.config.tz) {
+            try commit(w, day: day, ids: ids, before: before, withSummary: withSummary, comments: Set(summaryComment.map { $0.uppercased() }))
+        }
+    }
+
+    func commit(_ w: DayWorklog, day: String, ids: [Int]?, before: [Int: Shown], withSummary: Bool, comments: Set<String>) throws -> String {
         let p: DayPlan
         do { p = try w.plan(day, strict: true).plan }
         catch let e as JiraError { throw MCPToolError("Jira failed, nothing was written: \(e)") }
         catch { throw MCPToolError("Could not plan \(day), nothing was written: \(error)") }
-        let current = try jiraRows(day)
+        let current = jiraRows(p)
         let wanted = ids.map(Set.init) ?? Set(before.keys)
         let changed = ids == nil ? Set(before.values) != Set(current.values)
                                  : wanted.contains { before[$0] == nil || before[$0] != current[$0] }
@@ -226,11 +264,12 @@ public final class TaskTools: TaskService {
                                            : "Rows \(wanted.sorted().map { "#\($0)" }.joined(separator: ", ")) are not exactly as shown")
                                + "; nothing was written. Show this plan to the user:\n" + text)
         }
-        let pick = try Worklog(store: store).rows(day: day).filter { wanted.contains($0.id) && current[$0.id] != nil }
+        let pick = p.rows.filter { wanted.contains($0.id) && current[$0.id] != nil }
         guard !pick.isEmpty else { return "Nothing to write to Jira for \(day)." }
-        let r = try w.write(pick, day: day)
+        let r = try w.write(pick, day: day, withSummary: withSummary, commentKeys: comments)
         for row in pick { shown[day]?[row.id] = nil }
-        return (r.lines + ["\(r.logged) worklogs written to Jira" + (r.failed > 0 ? ", \(r.failed) not written" : "")])
+        return (r.lines + ["\(r.logged) worklogs written to Jira" + (r.failed > 0 ? ", \(r.failed) not written" : "")] + r.commentLines
+                + (r.commentLines.isEmpty ? [] : ["\(r.commented) day summaries written as comments" + (r.commentsFailed > 0 ? ", \(r.commentsFailed) not written" : "")]))
             .joined(separator: "\n")
     }
 }

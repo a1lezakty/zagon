@@ -8,6 +8,7 @@ Faults (optional): "lose_post_replies": N — the next N worklog POSTs are store
 "post_status": [500, 400] — the next POSTs get these codes and store nothing; "bad_post_bodies": N — the next N POSTs
 are stored but answered 201 with a body that is not JSON; "search_lag": true — worklogs added by POST do not show in
 the worklogAuthor search (its index lags). The same post_status / lose_post_replies apply to issue POSTs.
+"browse_fails": true — the project list without `action` (projects you can browse) answers 500.
 """
 import base64, json, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -56,6 +57,8 @@ class H(BaseHTTPRequestHandler):
         if method == "GET" and u.path == "/rest/api/2/myself":
             return self.send(200, {"accountId": me})
         if method == "GET" and u.path == "/rest/api/3/project/search":
+            if state.get("browse_fails") and "action" not in q:  # the browse list (no action) failing
+                return self.send(500, {"errorMessages": ["down"]})
             ps = state.get("projects", [])
             at = int(q.get("startAt", 0))
             return self.send(200, {"values": ps[at:at + 1], "isLast": at + 1 >= len(ps)})  # one per page
@@ -129,8 +132,19 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, {"key": key, "fields": {"summary": i["summary"], "status": {
                     "name": i["status"], "statusCategory": {"key": i["category"]}}}})
             if len(parts) == 6 and parts[5] == "comment" and method == "GET":
-                cs = [{"author": {"accountId": c["author"]}, "body": c["body"]} for c in reversed(i.get("comments", []))]
+                cs = [{"id": c.get("id", ""), "author": {"accountId": c["author"]}, "body": c["body"]} for c in reversed(i.get("comments", []))]
                 return self.send(200, {"startAt": 0, "total": len(cs), "comments": cs})
+            if len(parts) == 6 and parts[5] == "comment" and method == "POST":
+                b = self.body()
+                with lock:
+                    next_id[0] += 1
+                    c = {"id": "c" + str(next_id[0]), "author": me, "body": b["body"]}
+                    i.setdefault("comments", []).append(c)
+                    if state.get("lose_comment_replies", 0) > 0:
+                        state["lose_comment_replies"] -= 1
+                        self.close_connection = True
+                        return
+                return self.send(201, {"id": c["id"], "body": c["body"]})
             if len(parts) == 6 and parts[5] == "worklog" and method == "GET":
                 after = float(q.get("startedAfter", 0))
                 ws = [w for w in i.get("worklogs", []) if started_ms(w["started"]) >= after]

@@ -10,6 +10,8 @@ public struct JiraCache: Sendable, Equatable {
     public var mine: Set<String> = []
     /// With your worklogs in the last 7 days.
     public var logged: Set<String> = []
+    /// Keys of the projects you can browse: a key of another project (`BRIEF-2`) is no task (`TaskLinker`).
+    public var projects: Set<String> = []
     /// `[jira] review_statuses` of the last read: how a task made from an issue here gets its status.
     public var review = JiraConfig.defaultReview
     public init() {}
@@ -21,9 +23,10 @@ public struct JiraCache: Sendable, Equatable {
 
     public static func load(_ store: Store) -> JiraCache { stored(store).cache }
 
-    static func stored(_ store: Store) -> (cache: JiraCache, tried: Timestamp) {
+    /// `legacy`: a read from before the project list (0.1.4).
+    static func stored(_ store: Store) -> (cache: JiraCache, tried: Timestamp, legacy: Bool) {
         guard let raw = try? store.db.one("SELECT value FROM meta WHERE key = ?", [.text(metaKey)], { $0.text(0) }), let text = raw,
-              let v = JValue.parse(text) else { return (JiraCache(), 0) }
+              let v = JValue.parse(text) else { return (JiraCache(), 0, false) }
         var c = JiraCache()
         c.at = v["at"]?.double ?? 0
         if case .object(let m)? = v["issues"] {
@@ -34,8 +37,9 @@ public struct JiraCache: Sendable, Equatable {
         }
         c.mine = Set(v["mine"]?.array?.compactMap(\.string) ?? [])
         c.logged = Set(v["logged"]?.array?.compactMap(\.string) ?? [])
+        c.projects = Set(v["projects"]?.array?.compactMap(\.string) ?? [])
         if let r = v["review"]?.array?.compactMap(\.string) { c.review = r }
-        return (c, v["tried"]?.double ?? c.at)
+        return (c, v["tried"]?.double ?? c.at, v["projects"] == nil && c.at > 0)
     }
 
     func save(_ store: Store, tried: Timestamp) throws {
@@ -45,6 +49,7 @@ public struct JiraCache: Sendable, Equatable {
                 .init($0.key, .object([.init("s", .string($0.summary)), .init("st", .string($0.status)), .init("c", .string($0.statusCategory))]))
             })),
             .init("mine", .array(mine.sorted().map(JValue.string))), .init("logged", .array(logged.sorted().map(JValue.string))),
+            .init("projects", .array(projects.sorted().map(JValue.string))),
             .init("review", .array(review.map(JValue.string))),
         ])
         try store.db.run("INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
@@ -69,6 +74,8 @@ public struct JiraCache: Sendable, Equatable {
         }
         // Your worklogs only: the search also finds issues where you logged long ago and someone else this week.
         c.logged = Set(try jira.myWorklogs(from: now - 7 * 86400, to: now).map(\.issueKey))
+        // Projects change rarely: a failed read keeps the last one.
+        c.projects = (try? Set(jira.projects(action: nil).map(\.key))) ?? old.projects
         try store.db.transaction {
             for t in try tasks.list() {
                 guard let k = t.jiraKey, let i = c.issues[k], old.issues[k]?.status != i.status else { continue }
@@ -85,8 +92,10 @@ public struct JiraCache: Sendable, Equatable {
     /// is logged and the last read is used.
     public static func current(_ store: Store, _ jira: JiraClient?, now: Timestamp = Time.now(),
                                log: (String) -> Void = { _ in }) -> JiraCache {
-        let (c, tried) = stored(store)
-        guard let jira, now - c.at >= ttl, now - tried >= retry else { return c }
+        let (c, tried, legacy) = stored(store)
+        // A read from before the project list (0.1.4) is read again now: until then every key counts.
+        let failedLately = tried > c.at && now - tried < retry
+        guard let jira, now - c.at >= ttl || legacy, !failedLately else { return c }
         do { return try refresh(store, jira, now: now) } catch {
             log("jira: \(error)")
             // Only the time of the try: a read another process saved meanwhile stays.

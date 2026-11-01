@@ -249,8 +249,9 @@ public final class JiraClient {
     }
     struct CommentPage: Decodable {
         struct Author: Decodable { var accountId: String? }
-        struct C: Decodable { var author: Author?; var body: String? }
+        struct C: Decodable { var id: String?; var author: Author?; var body: String? }
         var comments: [C]?
+        var startAt: Int?, total: Int?
     }
     struct Created: Decodable { var key: String }
 
@@ -350,11 +351,12 @@ public final class JiraClient {
         return out.sorted { $0.started < $1.started }
     }
 
-    /// Projects you may create issues in, by key.
-    public func projects() throws -> [JiraProject] {
+    /// Projects you may create issues in (`action` "create"; nil = those you can browse), by key.
+    public func projects(action: String? = "create") throws -> [JiraProject] {
         var out: [JiraProject] = []
         while true {
-            let p = try get("/rest/api/3/project/search?action=create&startAt=\(out.count)&maxResults=50", ProjectPage.self)
+            let p = try get("/rest/api/3/project/search?\(action.map { "action=\($0)&" } ?? "")startAt=\(out.count)&maxResults=50",
+                            ProjectPage.self)
             out += p.values
             if p.values.isEmpty || p.isLast != false || out.count >= 1000 { return out.sorted { $0.key < $1.key } }
         }
@@ -408,6 +410,28 @@ public final class JiraClient {
         let body: [String: JSONValue] = ["started": .s(Self.jiraTime(started)), "timeSpentSeconds": .n(seconds), "comment": .s(comment)]
         let data = try request("POST", "/rest/api/2/issue/\(Self.escape(key))/worklog", json: Array(try JSONEncoder().encode(body)))
         return try JSONDecoder().decode(WorklogBean.self, from: Data(data)).id
+    }
+
+    /// Your comments on an issue (id, body), newest first; at most 500 comments are read.
+    public func myComments(issue key: String) throws -> [(id: String, body: String)] {
+        let me = try accountId()
+        var out: [(id: String, body: String)] = [], at = 0
+        while at < 500 {
+            let p = try get("/rest/api/2/issue/\(Self.escape(key))/comment?orderBy=-created&startAt=\(at)&maxResults=100", CommentPage.self)
+            let cs = p.comments ?? []
+            for c in cs where c.author?.accountId == me { out.append((c.id ?? "", c.body ?? "")) }
+            at += cs.count
+            if cs.isEmpty || at >= (p.total ?? 0) { break }
+        }
+        return out
+    }
+
+    /// Adds a comment to an issue; returns its id.
+    public func addComment(issue key: String, body: String) throws -> String {
+        let data = try request("POST", "/rest/api/2/issue/\(Self.escape(key))/comment",
+                               json: Array(try JSONEncoder().encode(["body": JSONValue.s(body)])))
+        struct Made: Decodable { var id: String }
+        return try JSONDecoder().decode(Made.self, from: Data(data)).id
     }
 
     // MARK: time formats

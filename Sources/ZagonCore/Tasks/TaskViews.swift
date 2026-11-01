@@ -169,10 +169,15 @@ public enum TaskText {
         return out.joined(separator: "\n")
     }
 
-    public static func rows(_ rows: [WorklogRow]) -> String {
+    /// `summary`: the rows whose day summary is shown in full under them (what would go to Jira with it).
+    public static func rows(_ rows: [WorklogRow], summary: (WorklogRow) -> Bool = { $0.daySummary == true }) -> String {
         rows.map { r in
             "#\(pad("\(r.id)", 5)) \(pad(r.taskKey ?? "-", 10)) \(Txt.clock(r.start))–\(Txt.clock(r.end)) \(pad(Txt.dur(Double(r.seconds)), 7)) "
                 + "\(pad(r.state, 8)) \(Txt.oneLine(r.text, 260))" + (r.jiraKey == nil ? "  (Zagon only)" : "")
+                + (r.textSource.map { "  [\($0)]" } ?? "")
+                + (summary(r) && !(r.summary ?? "").isEmpty
+                   ? "\n       + day summary:\n" + r.summary!.split(separator: "\n", omittingEmptySubsequences: false).map { "         " + $0 }.joined(separator: "\n")
+                   : "")
         }.joined(separator: "\n")
     }
 
@@ -192,7 +197,14 @@ public enum TaskText {
         }
         if p.unassignedSec > 0 {
             out.append("no task: \(Txt.dur(p.unassignedSec))"
+                       + ((p.unassigned ?? []).isEmpty ? "" : " (" + p.unassigned!.prefix(5).map { "\($0.project) \(Txt.dur(Double($0.seconds)))" }.joined(separator: ", ") + ")")
                        + (p.unknownKeys.isEmpty ? "" : " · keys seen: \(p.unknownKeys.joined(separator: ", ")) (add them as tasks to link)"))
+        }
+        let ex = (p.excluded ?? []).filter { $0.seconds > 0 }
+        if !ex.isEmpty { out.append("excluded: " + ex.map { "\($0.kind) \($0.name) \(Txt.dur(Double($0.seconds)))" }.joined(separator: ", ")) }
+        if let tz = p.tz {
+            out.append("days in \(tz) · texts " + (p.summaryBuiltAt.map { "built \(Txt.clock($0))" } ?? "not built yet")
+                       + ((p.sessionsAfterSummary ?? 0) > 0 ? ", \(p.sessionsAfterSummary!) sessions since (log plan --refresh)" : ""))
         }
         for n in p.notes { out.append("note: \(n)") }
         return out.joined(separator: "\n")

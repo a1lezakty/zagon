@@ -24,7 +24,8 @@ public struct IngestOptions: Sendable {
     public var dedupDays: Double = 40
     /// Feed typed messages and titles into the contentless search index.
     public var indexPrompts = true
-    /// Task keys looked for in typed messages (`task_key`); nil = off. `[tasks] key_pattern` in config.toml.
+    /// Task keys looked for in typed messages and the briefs they point to (`task_key`); nil = off.
+    /// `[tasks] key_pattern` in config.toml.
     public var keyPattern: String? = IngestOptions.defaultKeyPattern
     public static let defaultKeyPattern = #"[A-Z][A-Z0-9]+-\d+"#
     /// nil = the database's own host (`Store.host`); set only to import another machine's data.
@@ -543,9 +544,11 @@ public final class Ingest {
                 // Only messages taken as actions: copies of history in a resumed or forked file are skipped.
                 guard t.actions.count > before, let text = p.text, !text.isEmpty else { continue }
                 if options.indexPrompts { try indexText(text, file: f.id, session: p.session, ts: p.ts, kind: "msg") }
-                for k in taskKeys(text) {
-                    try db.run("INSERT OR IGNORE INTO task_key(file_id, session_id, key, at) VALUES(?,?,?,?)",
-                               [.int(f.id), .text(p.session), .text(k), .real(p.ts)])
+                // Typed keys first: a key also in a brief at the same moment stays typed (`how` NULL).
+                let typed = Self.typedText(text)
+                for (k, how) in taskKeys(typed).map({ ($0, nil as String?) }) + briefKeys(typed).map({ ($0, "brief") }) {
+                    try db.run("INSERT OR IGNORE INTO task_key(file_id, session_id, key, at, how) VALUES(?,?,?,?,?)",
+                               [.int(f.id), .text(p.session), .text(k), .real(p.ts), .of(how)])
                 }
             } else {
                 turns.agent(p.session, p.ts, cwd: p.cwd, sessionGap: options.sessionGap, into: &t)
@@ -619,18 +622,80 @@ public final class Ingest {
     }
 
     /// Distinct task keys in a typed message, upper-cased; a match glued to a letter or digit before it is not a key.
+    /// A line that also holds a clock range (`09:00–10:15`) gives none: a pasted worklog or plan talks about time
+    /// already spent, it does not ask to work on those tasks.
     func taskKeys(_ text: String) -> [String] {
         guard let keys else { return [] }
         var out: [String] = []
-        for m in text.matches(of: keys) {
-            if m.range.lowerBound > text.startIndex {
-                let c = text[text.index(before: m.range.lowerBound)]
-                if c.isLetter || c.isNumber { continue }
+        // A block (a paragraph, or a numbered item up to the next) that holds a clock range is a pasted worklog list:
+        // none of its keys count, also those on its other lines.
+        var blocks: [[Substring]] = [[]]
+        for line in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            if line.allSatisfy(\.isWhitespace) || line.firstMatch(of: itemStart) != nil { blocks.append([]) }
+            blocks[blocks.count - 1].append(line)
+        }
+        for line in blocks.filter({ !$0.contains { $0.firstMatch(of: clockRange) != nil } }).joined() {
+            for m in line.matches(of: keys) {
+                if m.range.lowerBound > line.startIndex {
+                    let c = line[line.index(before: m.range.lowerBound)]
+                    if c.isLetter || c.isNumber { continue }
+                }
+                let k = line[m.range].uppercased()
+                if !out.contains(k) { out.append(k) }
             }
-            let k = text[m.range].uppercased()
-            if !out.contains(k) { out.append(k) }
         }
         return out
+    }
+
+    let clockRange = #/\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}/#
+    let itemStart = #/^\s*\d{1,2}[.)]\s/#
+
+    /// The message without what the agent's harness added to it (`<system-reminder>` spans: memory, CLAUDE.md, notes
+    /// of the tool); an unclosed span runs to the end.
+    static func typedText(_ text: String) -> String {
+        var out = text[...], kept = ""
+        while let open = out.firstRange(of: "<system-reminder>") {
+            kept += out[..<open.lowerBound]
+            guard let close = out[open.upperBound...].firstRange(of: "</system-reminder>") else { return kept }
+            out = out[close.upperBound...]
+        }
+        return kept + out
+    }
+
+    /// Keys of the briefs a typed message points to (`read /path/BRIEF.md and do it`): from the file's first non-empty
+    /// line (the title), never from its body, which cites other keys (a key in the path itself is typed). A path counts
+    /// when it names a regular .md or .txt file of at most `briefMax` bytes on this machine; at most 5 per message.
+    /// ponytail: paths with spaces are not seen; quote-aware splitting if briefs ever live there.
+    func briefKeys(_ text: String) -> [String] {
+        let home = options.home ?? Sys.env("HOME") ?? ""
+        var out: [String] = [], tried = 0
+        for word in text.split(whereSeparator: { $0.isWhitespace || "\"'`()<>[]{}".contains($0) }) {
+            var path = String(word)
+            while let c = path.last, ".,;:!?".contains(c) { path.removeLast() }
+            if path.hasPrefix("~/") { if home.isEmpty { continue }; path = home + path.dropFirst() }
+            let lower = path.lowercased()
+            guard path.hasPrefix("/"), lower.hasSuffix(".md") || lower.hasSuffix(".txt") else { continue }
+            tried += 1
+            if tried > 5 { break }
+            guard let body = Self.smallFile(path, max: Self.briefMax) else { continue }
+            // The title: the first heading of the first 5 lines (a banner may come before it), else the first line.
+            let lines = String(decoding: body, as: UTF8.self).split(whereSeparator: \.isNewline).filter { !$0.allSatisfy(\.isWhitespace) }.prefix(5)
+            let title = (lines.first { $0.drop { $0 == " " }.hasPrefix("#") } ?? lines.first).map(String.init) ?? ""
+            for k in taskKeys(title) where !out.contains(k) { out.append(k) }
+        }
+        return out
+    }
+
+    static let briefMax = 256 << 10
+
+    /// The bytes of a regular file of at most `max` bytes; nil for anything else or what cannot be read.
+    static func smallFile(_ path: String, max: Int) -> [UInt8]? {
+        let fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var st = stat()
+        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, Int(st.st_size) <= max else { return nil }
+        return Sys.readAll(fd: fd, limit: max)
     }
 
     func indexText(_ text: String, file: Int64?, session: String, ts: Timestamp?, kind: String) throws {

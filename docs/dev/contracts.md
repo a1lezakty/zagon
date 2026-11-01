@@ -61,7 +61,7 @@ hooks, status line and importers:
 
 Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIATE).
 
-## Tables (schema v6, `Store/Schema.swift`; migrations are append-only)
+## Tables (schema v7, `Store/Schema.swift`; migrations are append-only)
 
 - `source_file` — per-file tail state; `usage_hour`, `tool_use`, `activity`, `user_action`, `fts_doc`, `msg`,
   `relay` carry `file_id`, so one file's contribution can be retracted. `recount` (v5) = 1: count the file again from
@@ -116,7 +116,19 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
 - `task_key(file_id, session_id, key, at)` (v4): every task key in a message typed at `at` (pattern
   `[tasks] key_pattern`, default `[A-Z][A-Z0-9]+-\d+`, upper-cased, a match glued to a letter or digit before it is
   not a key; `""` = off). Only messages Ingest takes as actions (not history copied into a resumed file); filled
-  with or without `index_prompts`; retracted with its file. No text is stored.
+  with or without `index_prompts`; retracted with its file. No text is stored. Not from `<system-reminder>` spans
+  (memory, CLAUDE.md) nor from a paragraph or numbered item holding a clock range (`09:00–10:15`: a pasted worklog list). `how` (v7):
+  NULL = typed; `brief` = from the first non-empty line of a brief the message names (an absolute or `~/` path to a
+  regular .md/.txt file of at most 256 KB on this machine, at most 5 paths per message; never the brief's body). A key
+  typed and in a brief at once stays typed. The v7 migration marks Claude files changed in the last 14 days for one
+  recount (`source_file.recount`, as in v5), so their keys follow these rules; older days keep their keys, and so does
+  a file whose recount comes out with other totals. A brief is read when its message is scanned (also by the
+  recount): its title then; the title is its first heading among the first 5 non-empty lines, else the first line.
+- Worklog texts live in `meta` (no table): `wltext:<auto|manual>:<day>:<task>:<start>`, `wlsum:<auto|manual>:<day>:<task>`,
+  `wltext_built:<day>`, `wltext_auto:<day>` (the 23:55 rebuild done), `wlsummary:<day>:<jira key>` and
+  `wlcomment:<day>:<jira key>` (a day summary in Jira), see docs/dev/tasks.md. `log plan --json` (`DayPlan`) only gained
+  fields in 0.1.5, all optional: `tz`, `summary_built_at`, `sessions_after_summary`, `excluded`, `unassigned`; per row
+  `text_source`, `day_summary`, `summary`, `summary_source`, `sessions`.
 - `day_agg` — per local day and host, built only from sessions of that host (`coalesce(session.host, host)`), so
   usage, tool calls, activity and user actions imported from other machines never count twice: rows with `model <> ''` hold tokens; `model = ''` rows hold `session_sec` per
   (tool, project); the `tool = project = model = ''` row holds the day totals `session_sec` and `user_sec`. `seq`

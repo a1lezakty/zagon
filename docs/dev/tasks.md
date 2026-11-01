@@ -29,7 +29,10 @@ is about (of the session and its sub-agents, by the folder of each interval, `ac
 - title: the whole session;
 - branch the agent recorded (`session.git_branch`): the intervals in the session's folder;
 - typed key (`task_key`, written at ingest, no text; works with `index_prompts` off): from the message on through
-  the following intervals while no pause is longer than `idle_gap`, until a message with other keys;
+  the following intervals while no pause is longer than `idle_gap`, until a message with other keys. Not from
+  `<system-reminder>` spans or a paragraph or numbered item with a clock range (a pasted worklog list). A key in the title (first non-empty
+  line) of a brief the message points to (`read /path/BRIEF.md`) reaches the same way, as `brief` (rank of a typed key);
+  the brief's body cites other keys and gives none;
 - `worktree`: the branch checked out in the interval's folder at that time (checkouts from the folder's HEAD
   reflog; the current branch if there were none);
 - commits: your commits (`--author=<repo user.email>`, none without it; all branches; by author time, which a
@@ -39,7 +42,10 @@ is about (of the session and its sub-agents, by the folder of each interval, `ac
   folder) counts for the repositories one or two levels below it: agents there commit with `git -C` or full paths.
   Known limits: a session there gets those commits whatever it did (nothing tells which repository it touched);
   an amended or squashed commit keeps its first author time, so work done before the amend is not covered by it.
-`linkSessions` rebuilds title/branch/message links, `linkDay` the day's commit/worktree links; manual links are
+Only keys of known projects count (for linking and `unknownKeys`): Jira's (`JiraCache.projects`, the projects you
+can browse, read with the issues), `TaskLinker.projects` and those of the registry's tasks; without Jira projects
+every match counts. So `BRIEF-2` or `EN-150` are no keys where Jira has no such project.
+`linkSessions` rebuilds title/branch/message/brief links, `linkDay` the day's commit/worktree links; manual links are
 never touched. `unknownKeys` lists keys in branches, titles and typed messages of the day that match no task (the
 plan suggests adding them). A key that is no task but one of your Jira issues (`JiraCache.mine`) becomes a task as its
 work is linked (`TaskLinker.Known`); keys of other issues stay unknown. `task_done` with source `auto` is written when a
@@ -66,7 +72,32 @@ stretch). Inside a stretch each task starts at its first activity
 there (earlier free time of the stretch after that), in order of first activity, on a 5-minute grid, only in free time (day − Jira worklogs of any issue − logged/skipped
 rows, both widened to the grid). What does not fit goes to the free time nearest to its stretch; if the day is
 full it is reported as unplaced. Invariant (tested on random days): no overlap with each other or with busy time.
-Text: the day's "what was done" for the task, else the titles of its sessions that day, else the task title.
+Days are cut in `[worklog] tz` (`Settings.inZone`: CLI and MCP switch `TZ` after their scan; the service runs
+`zagon log at-end` as a child for the 23:55 rebuild, since its threads stay in the database's zone).
+Exclusions (`[worklog] exclude`, `Worklog.exclusions` → `TaskTime.Exclude`): a project's or one session's time, or a
+task's, is taken out as a task of its own: in no row, task line or "no task", not reconciled (nor the Jira worklogs of
+an excluded task); a linked session takes a parallel piece from it as from unlinked work, and without one "no task"
+and excluded work share the piece; `DayPlan.excluded` has each item's time. `DayPlan.unassigned` splits "no task" by the sessions' project.
+Text (`Worklog.filled`, `WorklogTexts`): per row, by task, day and row start in `meta` `wltext:<auto|manual>:<day>:<task>:<start>`
+(a kept text whose start falls inside a row that grew earlier counts too): by hand, else built, else the task's "what
+was done" of the day, else its sessions' titles (`text_source` manual | summary | titles). The task's day summary
+(`wlsum:<auto|manual>:<day>:<task>`) rides on its longest planned row (`day_summary`), unless `[worklog] day_summary`
+is off or a summary of that task and day is already in Jira: `wlcomment:<day>:<key>` = `id:<id>` (a comment), or
+`wlsummary:<day>:<key>` = `worklog:<row>` whose row is logged or writing (set at the claim; `settle` drops it when the
+row is planned again). A comment left `writing:<time>` is looked up by the next plan or commit (`settleComments`):
+found → `id:`, not found after 5 min → dropped and offered again. `sessions` per row: the task's sessions with their
+time inside the row (the day on the summary row), the strongest link `how`, role leader (typed into other sessions'
+terminals, `relay`) | worker (brief link, or typed into) | single.
+Build (`WorklogTextBuilder`, one AI call per day through `DaySummary.complete`): per task and row the sessions' first
+words of typed messages, last assistant texts and `ГОТОВО:` / `DONE:` lines inside the row, the task's commits; ≤ 16 000
+characters (fewer words per session first). Answer `{rows: {id: text}, tasks: {key: {was, found, done}}}`. Phrases about
+the input ("digest", "not visible", "итогов нет" …) → asked once more, then those texts are dropped (titles take over);
+home paths are cut to their last part. `wltext_built:<day>` = build time; `sessions_after_summary` = the rows' sessions
+with work after it (work of no task does not ask for a rebuild). A kept text follows its row: at its start, inside it,
+or (the row moved) the nearest row of the task within 12 h. A build keeps earlier texts of rows its answer left out. `log text rebuild` = one call for one row (`--shorten` shortens the current text and keeps its source).
+Writes: the worklog gets the row's text; `--with-summary` adds the summary on its row; `--summary-comment KEY` posts it
+once as an issue comment (`JiraClient.addComment`; before the POST your comments on the issue are read and one that
+starts with the day's header `Итог дня — <day>` / `Day summary — <day>` counts as written). `commit_digest` covers both.
 Rows: `planned` (rebuilt on every plan), `logged` (with `jira_worklog_id`), `skipped`. With Jira connected, every
 worklog Jira shows counts as Jira has it (Zagon's own too, also when moved there); logged rows Jira does not show and
 skipped rows count as local rows.

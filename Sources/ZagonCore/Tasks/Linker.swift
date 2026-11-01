@@ -12,6 +12,15 @@ public struct TaskLinker {
     let patterns: [Regex<AnyRegexOutput>]
     /// A pause longer than this ends the reach of a typed key (as for your time).
     public var idleGap: Double
+    /// Jira projects keys may belong to besides those read from Jira (`JiraCache.projects`), e.g. `[worklog] projects`.
+    public var projects: Set<String> = []
+
+    /// `[tasks] key_pattern` and `[worklog] projects` of config.toml: every linker of a process links alike.
+    public static func load(configText t: String) throws -> TaskLinker {
+        var l = try TaskLinker(patterns: [TOMLLite.string(in: t, section: "tasks", key: "key_pattern") ?? defaultPattern])
+        l.projects = Set(WorklogConfig.load(configText: t).projects)
+        return l
+    }
 
     public init(patterns: [String] = [TaskLinker.defaultPattern], idleGap: Double = 20 * 60) throws {
         self.patterns = try patterns.map { try Regex($0) }
@@ -32,6 +41,19 @@ public struct TaskLinker {
         return out
     }
 
+    /// Projects a key may belong to (the text before its last `-`): Jira's (`JiraCache.projects`), `projects` and
+    /// those of the registry's tasks; nil (every match counts) when neither Jira's nor `projects` are known (no Jira).
+    /// Keeps `BRIEF-2`, `EN-150` and the like out.
+    func knownProjects(jira: Set<String>, registry: [String: [Int]]) -> Set<String>? {
+        guard !jira.isEmpty || !projects.isEmpty else { return nil }
+        return jira.union(projects.map { $0.uppercased() }).union(registry.keys.compactMap(Self.project))
+    }
+    static func project(_ key: String) -> String? { key.lastIndex(of: "-").map { String(key[..<$0]) } }
+    static func allowed(_ key: String, _ projects: Set<String>?) -> Bool {
+        guard let projects, let p = project(key) else { return true }
+        return projects.contains(p)
+    }
+
     /// Task ids by key and Jira key.
     func index(_ store: Store) throws -> [String: [Int]] {
         var ix: [String: [Int]] = [:]
@@ -44,12 +66,15 @@ public struct TaskLinker {
     /// Task ids by key; a key that is one of your Jira issues and no task yet becomes a task when work asks for it.
     final class Known {
         var ids: [String: [Int]]
-        let cache: JiraCache, tasks: Tasks
+        let cache: JiraCache, tasks: Tasks, projects: Set<String>?
         init(_ store: Store, _ linker: TaskLinker) throws {
             ids = try linker.index(store); cache = JiraCache.load(store); tasks = Tasks(store: store)
+            projects = linker.knownProjects(jira: cache.projects, registry: ids)
         }
         var isEmpty: Bool { ids.isEmpty && cache.mine.isEmpty }
         func callAsFunction(_ k: String) throws -> [Int]? {
+            // Your issues (`JiraCache`) always count: the project list is cut at 1000.
+            guard TaskLinker.allowed(k, projects) || cache.issues[k] != nil else { return nil }
             if let v = ids[k] { return v }
             guard cache.mine.contains(k), let i = cache.issues[k] else { return nil }
             let t = try tasks.add(title: i.summary.isEmpty ? k : i.summary, key: k, status: TaskStatus(jira: i, review: cache.review))
@@ -73,15 +98,16 @@ public struct TaskLinker {
     }
 
     /// Links that need no git, rebuilt from scratch: session titles (whole session); the branch the agent recorded
-    /// (the intervals in the session's folder); keys typed in messages (from the message on while the session keeps
-    /// working without a pause longer than `idleGap`, until a message with other keys). Returns links written.
+    /// (the intervals in the session's folder); keys typed in messages and in the titles of briefs they point to (from
+    /// the message on while the session keeps working without a pause longer than `idleGap`, until a message with other
+    /// keys; a brief's as `brief`). Returns links written.
     @discardableResult
     public func linkSessions(_ store: Store) throws -> Int {
         let db = store.db, tasks = Tasks(store: store), ix = try Known(store, self)
         var n = 0
         try db.transaction {
             // Whole-session commit links are what the v3 migration left; new ones always have a period.
-            try db.run("DELETE FROM task_session WHERE how IN ('title', 'branch', 'message') OR (how IN ('commit', 'worktree') AND start = 0)")
+            try db.run("DELETE FROM task_session WHERE how IN ('title', 'branch', 'message', 'brief') OR (how IN ('commit', 'worktree') AND start = 0)")
             guard !ix.isEmpty else { return }
             var rows: [(id: String, branch: String?, title: String?, cwd: String?)] = []
             try db.query("SELECT id, git_branch, title, cwd FROM session") { rows.append(($0.text(0) ?? "", $0.text(1), $0.text(2), $0.text(3))) }
@@ -94,10 +120,11 @@ public struct TaskLinker {
                     }
                 }
             }
-            // Typed keys: session -> (time, keys) in time order.
-            var typed: [String: [(at: Timestamp, keys: Set<String>)]] = [:]
-            try db.query("SELECT session_id, at, key FROM task_key ORDER BY session_id, at") { r in
+            // Typed keys: session -> (time, keys) in time order; keys of a brief the message points to are in `brief`.
+            var typed: [String: [(at: Timestamp, keys: Set<String>)]] = [:], brief = Set<String>()
+            try db.query("SELECT session_id, at, key, how FROM task_key ORDER BY session_id, at") { r in
                 let sid = r.text(0) ?? "", at = r.real(1), k = r.text(2) ?? ""
+                if r.text(3) == LinkHow.brief.rawValue { brief.insert("\(sid) \(at) \(k)") }
                 if var list = typed[sid], let last = list.last, last.at == at {
                     list[list.count - 1].keys.insert(k); typed[sid] = list
                 } else { typed[sid, default: []].append((at, [k])) }
@@ -112,7 +139,10 @@ public struct TaskLinker {
                     if i > 0, known[i - 1].keys == m.keys, m.at <= end { continue }
                     let stop = known[(i + 1)...].first { $0.keys != m.keys }?.at ?? 1e18
                     end = reach(from: m.at, until: stop, ivs)
-                    for k in m.keys { for t in try ix(k)! { try tasks.link(t, session: sid, how: .message, start: m.at, end: end); n += 1 } }
+                    for k in m.keys {
+                        let how: LinkHow = brief.contains("\(sid) \(m.at) \(k)") ? .brief : .message
+                        for t in try ix(k)! { try tasks.link(t, session: sid, how: how, start: m.at, end: end); n += 1 }
+                    }
                 }
             }
         }
@@ -260,11 +290,15 @@ public struct TaskLinker {
         }.sorted { $0.ts < $1.ts }
     }
 
-    /// Keys of sessions active in [from, to) — in branches, titles and typed messages — that match no task.
+    /// Keys of sessions active in [from, to) — in branches, titles, typed messages and their briefs — that match no task
+    /// (only keys of known projects, `allowed`).
     public func unknownKeys(_ store: Store, from: Timestamp, to: Timestamp) throws -> [String: [String]] {
-        let ix = try index(store)
+        let ix = try index(store), ps = knownProjects(jira: JiraCache.load(store).projects, registry: ix)
         var out: [String: [String]] = [:]
-        func add(_ k: String, _ sid: String) { if ix[k] == nil && !(out[k]?.contains(sid) ?? false) { out[k, default: []].append(sid) } }
+        func add(_ k: String, _ sid: String) {
+            guard ix[k] == nil, Self.allowed(k, ps), !(out[k]?.contains(sid) ?? false) else { return }
+            out[k, default: []].append(sid)
+        }
         try store.db.query("""
             SELECT id, git_branch, title FROM session WHERE last_at >= ? AND coalesce(started_at, last_at) < ?
             """, [.real(from), .real(to)]) { r in

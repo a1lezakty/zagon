@@ -304,6 +304,23 @@ extension Daemon {
 }
 
 extension Daemon {
+    /// The day's worklog texts built again at 23:55 in `[worklog] tz` (`[worklog] rebuild_at_end`): `zagon log at-end`
+    /// in a child process, which may cut days in another zone than this process (whose threads all use the
+    /// database's); it answers with the seconds until it is due again.
+    public static func startWorklogTexts(dataDir: String, claudeDir: String, log: @escaping @Sendable (String) -> Void) {
+        startThread {
+            z_background_thread()
+            while true {
+                let r = Sys.capture([Sys.executablePath(), "log", "at-end", "--data-dir", dataDir, "--claude-dir", claudeDir], timeout: 1200)
+                for l in String(decoding: r.err, as: UTF8.self).split(separator: "\n").prefix(3) { log("worklog: \(l)") }
+                let wait = r.status == 0 ? Int(String(decoding: r.out, as: UTF8.self).trimmed(" \n")) : nil
+                sleep(UInt32(min(max(wait ?? 600, 60), 3600)))
+            }
+        }
+    }
+}
+
+extension Daemon {
     /// The transcript archive (`Archive.tick`) every `every` seconds on a background-priority thread with its own
     /// connection: the first pass compresses gigabytes, the watcher must not wait for it.
     public static func startArchiver(dbPath: String, dir: String, every: Double = 600, log: @escaping @Sendable (String) -> Void) {

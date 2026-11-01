@@ -24,7 +24,11 @@ public struct UserSlice: Sendable {
 public struct TaskTimeReport: Sendable {
     public var lines: [Int?: TaskTimeLine]
     public var slices: [UserSlice]
-    public var userSec: Double { slices.reduce(0) { $0 + $1.interval.length } }
+    /// Time of the `Exclude` items (by index) on the chosen base; it is in no line and no slice share.
+    public var excluded: [Int: Double] = [:]
+    /// The "no task" time (`lines[nil].userSec`) by the session it came from; "" = time no session covered.
+    public var noTask: [String: Double] = [:]
+    public var userSec: Double { slices.reduce(0) { $0 + $1.shares.values.reduce(0, +) } }
 }
 
 public enum TaskTime {
@@ -34,6 +38,13 @@ public enum TaskTime {
     /// time their agents worked) or only your time (`user_activity`, around your own actions).
     public enum Base: String, Sendable, CaseIterable { case user, sessions }
 
+    /// Work that counts nowhere (`[worklog] exclude`): each item is a set of sessions (a project's, or one) or of tasks.
+    /// Its share of parallel time is taken out as if it were a task of its own.
+    public struct Exclude: Sendable {
+        public var items: [(sessions: Set<String>, tasks: Set<Int>)] = []
+        public init(_ items: [(sessions: Set<String>, tasks: Set<Int>)] = []) { self.items = items }
+    }
+
     /// Your time in [from, to) is cut at the edges of every session's activity cover (working intervals plus the
     /// gaps between its own user actions up to `idleGap`) and where its task links start or end. Each piece goes to the
     /// tasks the sessions active in it were linked to at that moment, one share per linked session (split equally
@@ -41,12 +52,16 @@ public enum TaskTime {
     /// as people log it) and count as "no task" only when no linked session is active. Pieces where no session was
     /// active go to the tasks in proportion to the rest of the same stretch.
     public static func compute(_ store: Store, from: Timestamp, to: Timestamp, idleGap: Double = 20 * 60,
-                                base: Base = .sessions) throws -> TaskTimeReport {
+                                base: Base = .sessions, exclude: Exclude = Exclude()) throws -> TaskTimeReport {
         let db = store.db
         let links = try Tasks(store: store).linkMap()
+        // Excluded items are tasks -1, -2, … here and are taken out at the end.
+        let exSession = Dictionary(exclude.items.enumerated().flatMap { i, x in x.sessions.map { ($0, -(i + 1)) } }, uniquingKeysWith: max)
+        let exTask = Dictionary(exclude.items.enumerated().flatMap { i, x in x.tasks.map { ($0, -(i + 1)) } }, uniquingKeysWith: max)
         func tasks(_ s: String, at t: Timestamp) -> [(task: Int?, weight: Double)] {
+            if let e = exSession[s] { return [(e, 1)] }
             let x = links.tasks(s, at: t)
-            return x.isEmpty ? [(nil, 1)] : x.map { ($0.task, $0.weight) }
+            return x.isEmpty ? [(nil, 1)] : x.map { (exTask[$0.task] ?? $0.task, $0.weight) }
         }
         /// Seconds of a session's intervals per task, cut where its links start or end.
         func byTask(_ s: String, _ ivs: [Interval]) -> [Int?: Double] {
@@ -86,7 +101,7 @@ public enum TaskTime {
         var lines: [Int?: TaskTimeLine] = [:]
         func line(_ t: Int?) -> TaskTimeLine { lines[t] ?? TaskTimeLine(taskId: t) }
 
-        var slices: [UserSlice] = []
+        var slices: [UserSlice] = [], excluded: [Int: Double] = [:], noTask: [String: Double] = [:]
         for u in users where u.end > u.start {
             let active = cover.filter { $0.value.contains { $0.start < u.end && $0.end > u.start } }
             var cuts = [u.start, u.end]
@@ -96,28 +111,37 @@ public enum TaskTime {
             }
             cuts = Array(Set(cuts)).sorted()
             var covered: [Int?: Double] = [:], first: [Int?: Timestamp] = [:], uncovered = 0.0
+            var nilBy: [String: Double] = [:]  // the "no task" part by session
             for i in 0..<(cuts.count - 1) {
                 let a = cuts[i], b = cuts[i + 1], mid = (a + b) / 2
-                var w: [Int?: Double] = [:]
+                var w: [Int?: Double] = [:], nw: [String: Double] = [:]
                 for (sid, ivs) in active where ivs.contains(where: { $0.start <= mid && mid < $0.end }) {
-                    for (t, x) in tasks(sid, at: mid) { w[t, default: 0] += x }
+                    for (t, x) in tasks(sid, at: mid) { w[t, default: 0] += x; if t == nil { nw[sid, default: 0] += x } }
                 }
-                if w.keys.contains(where: { $0 != nil }) { w[nil] = nil }
+                // A linked session takes the piece from unlinked and excluded ones (one slot, one task); without one
+                // "no task" and excluded work share it.
+                if w.keys.contains(where: { ($0 ?? 0) > 0 }) { w = w.filter { ($0.key ?? 0) > 0 }; nw = [:] }
                 let total = w.values.reduce(0, +)
                 guard total > 0 else { uncovered += b - a; continue }
                 for (t, x) in w {
                     covered[t, default: 0] += (b - a) * x / total
                     first[t] = min(first[t] ?? a, a)
                 }
+                for (sid, x) in nw { nilBy[sid, default: 0] += (b - a) * x / total }
             }
             let sum = covered.values.reduce(0, +)
             var shares: [Int?: Double] = [:]
             if sum > 0 { for (t, c) in covered { shares[t] = c + uncovered * c / sum } }
             else { shares[nil] = u.length; first[nil] = u.start }
+            if let n = shares[nil] {
+                let by = nilBy.values.reduce(0, +)
+                if by > 0 { for (sid, x) in nilBy { noTask[sid, default: 0] += n * x / by } } else { noTask["", default: 0] += n }
+            }
             for (t, s) in shares {
+                if let t, t < 0 { excluded[-t - 1, default: 0] += s; continue }
                 var l = line(t); l.userSec += s; l.firstActive = min(l.firstActive ?? first[t]!, first[t]!); lines[t] = l
             }
-            slices.append(UserSlice(interval: u, shares: shares, first: first))
+            slices.append(UserSlice(interval: u, shares: shares.filter { ($0.key ?? 0) >= 0 }, first: first))
         }
 
         // Session time per task: the session's working time cut by its links. Tokens: per hour, in proportion to the
@@ -169,7 +193,8 @@ public enum TaskTime {
             guard delta > 0, let all = toolWeight[tl], all > 0 else { continue }
             for (t, w) in taskToolWeight { if let x = w[tl], x > 0 { lines[t]?.weekPct[tl] = delta * x / all } }
         }
-        return TaskTimeReport(lines: lines, slices: slices)
+        for t in lines.keys where (t ?? 0) < 0 { lines[t] = nil }
+        return TaskTimeReport(lines: lines, slices: slices, excluded: excluded, noTask: noTask)
     }
 
     /// ponytail: tokens weighted roughly by price (output 5x, cache reads 0.1x), one model; per-model prices if needed.

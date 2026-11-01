@@ -13,9 +13,7 @@ import Darwin
 extension Common {
     var configText: String { Sys.readFile(dataDir + "/config.toml").map { String(decoding: $0, as: UTF8.self) } ?? "" }
 
-    func linker() throws -> TaskLinker {
-        try TaskLinker(patterns: [TOMLLite.string(in: configText, section: "tasks", key: "key_pattern") ?? TaskLinker.defaultPattern])
-    }
+    func linker() throws -> TaskLinker { try TaskLinker.load(configText: configText) }
 
     /// `--time`, else `[worklog] time` in config.toml, else the sessions' wall-clock time.
     func timeBase(_ flag: TaskTime.Base?) -> TaskTime.Base {
@@ -48,6 +46,13 @@ extension Common {
         if let m = TOMLLite.raw(in: configText, section: "worklog", key: "reconcile_tolerance_min").flatMap({ Int($0) }), m >= 0 {
             w.reconcileToleranceMin = m
         }
+        w.config = WorklogConfig.load(configText: configText)
+        let paths = ZagonPaths(dir: dataDir)
+        var engine = DaySummary(store: store, config: NotifyConfig.load(paths), paths: paths, claudeRoot: claudeDir)
+        engine.log = warn
+        var texts = WorklogTextBuilder(engine: engine)
+        texts.log = warn
+        w.texts = texts
         return w
     }
 }

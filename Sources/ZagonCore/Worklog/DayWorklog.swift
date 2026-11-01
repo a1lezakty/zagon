@@ -9,6 +9,10 @@ public struct DayWorklog {
     public var base: TaskTime.Base
     /// `[worklog] reconcile_tolerance_min`: a task's day where sessions and worklogs differ by more is a mismatch.
     public var reconcileToleranceMin = Reconcile.defaultToleranceMin
+    /// `[worklog]`: zone, projects, day summary, exclusions. The caller cuts days in `config.tz` (`Settings.inZone`).
+    public var config = WorklogConfig()
+    /// Builds the rows' texts with an AI (nil: no engine set up here; the plan keeps the texts it has).
+    public var texts: WorklogTextBuilder?
 
     public init(store: Store, linker: TaskLinker, jira: JiraClient?, jiraSetupError: String? = nil, idleGap: Double = 20 * 60,
                 base: TaskTime.Base = .sessions) {
@@ -19,7 +23,8 @@ public struct DayWorklog {
     /// Links the day's sessions (branch, title, messages, commits), reads the day from Jira and rebuilds the plan.
     /// `JiraCache` is read again first when older than an hour.
     /// Without `strict` a Jira failure comes back as `jiraError` and the plan is made without Jira.
-    public func plan(_ day: String, strict: Bool = false) throws -> (plan: DayPlan, jiraError: String?) {
+    /// With `refresh` the day's texts are built again (one AI call) when they never were or a session worked after.
+    public func plan(_ day: String, strict: Bool = false, refresh: Bool = false, now: Timestamp = Time.now()) throws -> (plan: DayPlan, jiraError: String?) {
         guard let (from, to) = Time.dayBounds(day) else { throw TaskError("bad day \(day)") }
         _ = JiraCache.current(store, jira)  // your Jira issues found in the day's work become tasks
         try linker.linkSessions(store)
@@ -33,12 +38,89 @@ public struct DayWorklog {
         // Rows an earlier write left `writing` are settled first, so their time counts as it is in Jira.
         var settled: [String] = []
         if jira != nil {
-            do { settled = try settle(day) } catch { if strict { throw error }; jiraError = jiraError ?? "\(error)" }
+            do { settled = try settle(day) + settleComments(day) } catch { if strict { throw error }; jiraError = jiraError ?? "\(error)" }
         }
-        var p = try Worklog(store: store).plan(day: day, idleGap: idleGap, base: base, jira: jiraDay, linker: linker)
+        let wl = Worklog(store: store)
+        var p = try wl.plan(day: day, idleGap: idleGap, base: base, jira: jiraDay, linker: linker, config: config)
         p.notes += settled
+        if refresh, p.summaryBuiltAt == nil || (p.sessionsAfterSummary ?? 0) > 0 {
+            if try buildTexts(day, p, now: now) {
+                p.rows = try wl.filled(day: day, config: config, exclude: try wl.exclusions(config))
+                p.summaryBuiltAt = try WorklogTexts(store: store).builtAt(day)
+                p.sessionsAfterSummary = 0
+                p.commitDigest = DayPlan.commitDigest(p.rows)
+            } else { p.notes.append("texts not rebuilt: " + (texts == nil ? "no AI engine" : texts!.engine.failure.reason ?? "the engine gave no texts")) }
+        }
         return (p, jiraError)
     }
+
+    /// The plan's rows by task, as the text builder takes them (planned rows with a task).
+    func textInputs(_ p: DayPlan) throws -> [WorklogTextBuilder.TaskInput] {
+        let tasks = Tasks(store: store)
+        var out: [WorklogTextBuilder.TaskInput] = []
+        for r in p.rows where r.state == "planned" {
+            guard let t = r.taskId else { continue }
+            let row = WorklogTextBuilder.RowInput(id: r.id, task: t, start: r.start, end: r.end, sessions: r.sessions ?? [])
+            if let i = out.firstIndex(where: { $0.id == t }) { out[i].rows.append(row); continue }
+            let item = try tasks.get(t)
+            out.append(.init(id: t, key: r.jiraKey ?? r.taskKey ?? "#\(t)", title: item?.title ?? "", rows: [row]))
+        }
+        return out
+    }
+
+    /// Builds the day's texts (one AI call); false when there is no engine, nothing to write about or it failed.
+    @discardableResult
+    public func buildTexts(_ day: String, _ p: DayPlan, now: Timestamp = Time.now()) throws -> Bool {
+        guard let texts else { return false }
+        let inputs = try textInputs(p)
+        guard !inputs.isEmpty else { return false }
+        return try texts.build(day: day, tasks: inputs, summaries: config.daySummary, now: now) != nil
+    }
+
+    /// One planned row's text again (`summary`: its task's day summary) with one AI call; `shorten` shortens the text it
+    /// has. A rebuilt text replaces one set by hand; a shortened one keeps its source. Returns the row as planned now.
+    public func rebuildText(row id: Int, day: String, summary: Bool, shorten: Bool) throws -> WorklogRow {
+        guard let texts else { throw TaskError("no AI engine for texts ([summary] engine in config.toml)") }
+        let wl = Worklog(store: store)
+        let rows = try wl.filled(day: day, config: config, exclude: try wl.exclusions(config))
+        guard let r = rows.first(where: { $0.id == id }), r.state == "planned", let t = r.taskId else { throw TaskError("no planned row #\(id) on \(day)") }
+        if summary, r.daySummary != true { throw TaskError("row #\(id) does not carry its task's day summary") }
+        let plan = DayPlan(day: day, userSec: 0, sessionSec: 0, jiraSec: nil, rows: rows, tasks: [], unassignedSec: 0, unknownKeys: [],
+                           unplaced: [:], notes: [])
+        guard let task = try textInputs(plan).first(where: { $0.id == t }), let row = task.rows.first(where: { $0.id == id }) else {
+            throw TaskError("no planned row #\(id) on \(day)")
+        }
+        let current = shorten ? (summary ? r.summary : r.text) : nil
+        if shorten, (current ?? "").isEmpty { throw TaskError("row #\(id) has no text to shorten") }
+        guard let text = try texts.rebuild(day: day, task: task, row: row, summary: summary, shorten: current) else {
+            throw TaskError("no text: " + (texts.engine.failure.reason ?? "the engine gave nothing usable"))
+        }
+        let kept = WorklogTexts(store: store)
+        let manual = shorten && (summary ? r.summarySource : r.textSource) == "manual"
+        if summary {
+            if manual { try kept.setManualSummary(day: day, task: t, text: text) }
+            else { try kept.setManualSummary(day: day, task: t, text: nil); try kept.put(WorklogTexts.sumKey("auto", day, t), text) }
+        } else if manual { try kept.setManual(day: day, task: t, start: r.start, text: text) }
+        else {
+            try kept.put(WorklogTexts.rowKey("manual", day, t, r.start), nil)
+            try kept.put(WorklogTexts.rowKey("auto", day, t, r.start), text)
+        }
+        return try wl.filled(day: day, config: config, exclude: try wl.exclusions(config)).first { $0.id == id }!
+    }
+
+    /// Sets a planned row's text (or with `summary` its task's day summary) by hand; nil or "" goes back to the built one.
+    public func setText(row id: Int, day: String, summary: Bool, text: String?) throws -> WorklogRow {
+        let wl = Worklog(store: store)
+        let rows = try wl.filled(day: day, config: config, exclude: try wl.exclusions(config))
+        guard let r = rows.first(where: { $0.id == id }), r.state == "planned", let t = r.taskId else { throw TaskError("no planned row #\(id) on \(day)") }
+        if summary {
+            guard r.daySummary == true else { throw TaskError("row #\(id) does not carry its task's day summary") }
+            try WorklogTexts(store: store).setManualSummary(day: day, task: t, text: text)
+        } else { try WorklogTexts(store: store).setManual(day: day, task: t, start: r.start, text: text) }
+        return try wl.filled(day: day, config: config, exclude: try wl.exclusions(config)).first { $0.id == id }!
+    }
+
+    var db: SQLite { store.db }
 
     /// A row's claim older than this has no write in flight (curl gives up after 60 s).
     static let claimTimeout: Double = 5 * 60
@@ -74,6 +156,8 @@ public struct DayWorklog {
                           try store.db.run("UPDATE worklog_plan SET state = 'planned' WHERE id = ? AND state = 'writing'", [.int(Int64(row.id))]) == 1
                     else { return false }
                     try dropClaim(row.id)
+                    // Its day summary did not reach Jira either: offered again.
+                    try store.db.run("DELETE FROM meta WHERE key LIKE 'wlsummary:%' AND value = ?", [.text("worklog:\(row.id)")])
                     return true
                 }
                 if done { out.append("\(span) did not reach Jira: planned again") }
@@ -116,7 +200,11 @@ public struct DayWorklog {
 
     public struct WriteResult: Sendable {
         public var lines: [String] = []
+        /// Worklogs.
         public var logged = 0, failed = 0
+        /// Day summaries as issue comments, and their lines (apart: `log commit` prints them after its 0.1.4 line).
+        public var commented = 0, commentsFailed = 0
+        public var commentLines: [String] = []
     }
 
     /// Writes planned rows that have a Jira key — call it only on an explicit command. Rows left `writing` are
@@ -126,11 +214,16 @@ public struct DayWorklog {
     /// lost reply, 5xx) or a failed local update leaves it `writing` for the next settle. One failed row does not stop
     /// the others.
     /// `now` is for settling only; a claim records the moment it is made.
-    public func write(_ rows: [WorklogRow], day: String, now: Timestamp = Time.now()) throws -> WriteResult {
+    /// A row's worklog gets `Worklog.comment`: its text; with `withSummary` on its task's summary row also the day
+    /// summary (marked `wlsummary:<day>:<key>` from the claim on, dropped if the POST surely failed), unless the task
+    /// is in `commentKeys`: then the summary goes as one comment on the issue (`writeComments`).
+    public func write(_ rows: [WorklogRow], day: String, withSummary: Bool = false, commentKeys: Set<String> = [],
+                      now: Timestamp = Time.now()) throws -> WriteResult {
         guard let jira else { throw TaskError("Jira is not connected" + (jiraSetupError.map { ": \($0)" } ?? " ([jira] in config.toml)")) }
         guard let (from, to) = Time.dayBounds(day) else { throw TaskError("bad day \(day)") }
         var r = WriteResult()
         r.lines = try settle(day, now: now)
+        r.commentLines = try settleComments(day, now: now)
         let me = try jira.accountId()
         var taken = try jira.myWorklogs(from: from, to: to).map(\.interval)
         var mine: [String: [JiraWorklog]] = [:]
@@ -156,11 +249,20 @@ public struct DayWorklog {
                 continue
             }
             // Claim the row first: a second writer (CLI, MCP, bot at once) finds it taken; a re-plan meanwhile keeps it.
+            var text = Worklog.comment(row, withSummary: withSummary, commentKeys: commentKeys)
+            var summaryMark = text != row.text ? "wlsummary:\(day):\(key)" : nil
+            // A comment of the same summary written or on its way (another commit at once): the worklog gets the text only.
+            if summaryMark != nil, try store.db.one("SELECT 1 FROM meta WHERE key = ?", [.text("wlcomment:\(day):\(key)")], { _ in true }) == true {
+                text = row.text; summaryMark = nil
+            }
             let claimed = try store.db.transaction { () throws -> Bool in
                 guard try store.db.run("UPDATE worklog_plan SET state = 'writing' WHERE id = ? AND state = 'planned'", [.int(Int64(row.id))]) == 1
                 else { return false }
                 try store.db.run("INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
                                  [.text("worklog:claim:\(row.id)"), .real(Time.now())])
+                if let summaryMark {
+                    try store.db.run("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", [.text(summaryMark), .text("worklog:\(row.id)")])
+                }
                 return true
             }
             guard claimed else {
@@ -168,9 +270,10 @@ public struct DayWorklog {
                 continue
             }
             let id: String
-            do { id = try jira.addWorklog(issue: key, started: row.start, seconds: row.seconds, comment: row.text) }
+            do { id = try jira.addWorklog(issue: key, started: row.start, seconds: row.seconds, comment: text) }
             catch let e as JiraError where !e.mayHaveArrived {
                 try? wl.mark(row.id, state: "planned"); try? dropClaim(row.id)
+                if let summaryMark { _ = try? store.db.run("DELETE FROM meta WHERE key = ?", [.text(summaryMark)]) }
                 r.lines.append("not logged \(span): \(e)"); r.failed += 1
                 continue
             } catch {
@@ -186,6 +289,78 @@ public struct DayWorklog {
                 r.lines.append("logged \(span) \(Txt.dur(Double(row.seconds)))")
             } catch {
                 r.lines.append("logged \(span) in Jira, but not marked here (\(error)): the next plan or commit marks it")
+            }
+        }
+        let c = try writeComments(Worklog.issueComments(rows, commentKeys: commentKeys), day: day)
+        r.commentLines += c.lines; r.commented = c.commented; r.commentsFailed = c.commentsFailed
+        return r
+    }
+
+    /// Day-summary comments left `writing` (a lost reply, a crash): found among your comments on the issue → written;
+    /// not found and the claim older than `claimTimeout` → the mark goes and the summary is offered again.
+    @discardableResult
+    public func settleComments(_ day: String, now: Timestamp = Time.now()) throws -> [String] {
+        guard let jira else { return [] }
+        let prefix = "wlcomment:\(day):"
+        var open: [(mark: String, at: Double)] = []
+        try db.query("SELECT key, value FROM meta WHERE key >= ?1 AND key < ?2", [.text(prefix), .text(prefix + "\u{7F}")]) { r in
+            if let k = r.text(0), let v = r.text(1), v.hasPrefix("writing:") { open.append((k, Double(v.dropFirst(8)) ?? 0)) }
+        }
+        var out: [String] = []
+        for o in open {
+            let key = String(o.mark.dropFirst(prefix.count)), what = "day summary on \(key)"
+            do {
+                if let had = try jira.myComments(issue: key).first(where: { WorklogTexts.isCommentOf($0.body, day: day) }) {
+                    try db.run("UPDATE meta SET value = ? WHERE key = ?", [.text("id:" + had.id), .text(o.mark)])
+                    out.append("\(what) is in Jira: marked")
+                } else if now - o.at > Self.claimTimeout {
+                    try db.run("DELETE FROM meta WHERE key = ? AND value = ?", [.text(o.mark), .text("writing:\(o.at)")])
+                    out.append("\(what) did not reach Jira: offered again")
+                }
+            } catch { out.append("\(what) not checked (\(error))") }
+        }
+        return out
+    }
+
+    /// Writes each day summary as one comment on its issue, once per issue and day: a comment of yours that starts with
+    /// the day's header (`WorklogTexts.commentHeader`) means it is there (lost reply, another writer); meta
+    /// `wlcomment:<day>:<key>` holds `writing:<time>` while a POST is out and `id:<id>` after. A claim older than
+    /// `claimTimeout` with no such comment in Jira is taken over.
+    func writeComments(_ cs: [(key: String, task: Int?, text: String)], day: String) throws -> WriteResult {
+        var r = WriteResult()
+        guard let jira, !cs.isEmpty else { return r }
+        let w = texts.map { $0.engine.config.lang.words() } ?? NotifyLang.auto.words()
+        for c in cs {
+            let mark = "wlcomment:\(day):\(c.key)", what = "day summary on \(c.key)"
+            do {
+                if let v = try db.one("SELECT value FROM meta WHERE key = ?", [.text(mark)], { $0.text(0) }) ?? nil, v.hasPrefix("id:") {
+                    r.lines.append("\(what) already commented"); continue
+                }
+                if let had = try jira.myComments(issue: c.key).first(where: { WorklogTexts.isCommentOf($0.body, day: day) }) {
+                    try db.run("INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2", [.text(mark), .text("id:" + had.id)])
+                    r.lines.append("\(what) is in Jira: marked"); r.commented += 1; continue
+                }
+            } catch { r.lines.append("\(what) not written: \(error)"); r.commentsFailed += 1; continue }
+            if try Worklog.summaryWritten(db, day: day, key: c.key) {
+                r.lines.append("\(what) not written: the summary is already in Jira"); r.commentsFailed += 1; continue
+            }
+            let claimed = try db.transaction { () throws -> Bool in
+                if let v = try db.one("SELECT value FROM meta WHERE key = ?", [.text(mark)], { $0.text(0) }) ?? nil {
+                    guard v.hasPrefix("writing:"), let at = Double(v.dropFirst(8)), Time.now() - at > Self.claimTimeout else { return false }
+                }
+                try db.run("INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2", [.text(mark), .text("writing:\(Time.now())")])
+                return true
+            }
+            guard claimed else { r.lines.append("\(what) not written: already being written"); r.commentsFailed += 1; continue }
+            do {
+                let id = try jira.addComment(issue: c.key, body: WorklogTexts.commentHeader(day, w) + "\n\n" + c.text)
+                _ = try? db.run("UPDATE meta SET value = ? WHERE key = ?", [.text("id:" + id), .text(mark)])
+                r.lines.append("commented \(what)"); r.commented += 1
+            } catch let e as JiraError where !e.mayHaveArrived {
+                _ = try? db.run("DELETE FROM meta WHERE key = ?", [.text(mark)])
+                r.lines.append("\(what) not written: \(e)"); r.commentsFailed += 1
+            } catch {
+                r.lines.append("not sure \(what) reached Jira (\(error)): the next commit checks Jira first"); r.commentsFailed += 1
             }
         }
         return r
