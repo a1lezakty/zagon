@@ -140,6 +140,13 @@ jobs:
         env:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: scripts/release-mac.sh "$VERSION" "$GITHUB_RUN_NUMBER" "$RUNNER_TEMP/notes/notes.md"
+      # The CLI inside the app, also on its own: the Homebrew formula and the macOS MCPB take it.
+      - name: Universal CLI
+        working-directory: apps/macos/build
+        run: |
+          cp Zagon.app/Contents/Helpers/zagon zagon-macos-universal
+          lipo zagon-macos-universal -verify_arch arm64 x86_64
+          [ "$(./zagon-macos-universal --version)" = "$VERSION" ] || { echo "::error::zagon-macos-universal --version is not $VERSION"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: macos
@@ -147,15 +154,21 @@ jobs:
             apps/macos/build/Zagon.dmg
             apps/macos/build/Zagon.zip
             apps/macos/build/appcast.xml
+            apps/macos/build/zagon-macos-universal
           if-no-files-found: error
 
-  # Every release file, checked, plus SHA256SUMS: one artifact, on manual runs too.
+  # Every release file, checked, the MCPB bundles and server.json made from them, plus SHA256SUMS: one artifact, on
+  # manual runs too.
   bundle:
     needs: [version, linux, macos]
     runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: packaging
+          path: src
       - uses: actions/download-artifact@v4
         with:
           name: linux
@@ -167,12 +180,16 @@ jobs:
       - name: Check the files, SHA256SUMS
         working-directory: assets
         run: |
-          for f in zagon-linux-x86_64 zagon-linux-aarch64 Zagon.dmg Zagon.zip appcast.xml; do
+          for f in zagon-linux-x86_64 zagon-linux-aarch64 zagon-macos-universal Zagon.dmg Zagon.zip appcast.xml; do
             [ -s "$f" ] || { echo "::error::$f is missing"; exit 1; }
           done
           if ! grep -q 'sparkle:edSignature="' appcast.xml || ! grep -qF "/releases/download/v$VERSION/Zagon.zip" appcast.xml; then
             echo "::error::appcast.xml is not signed or points to another release"; exit 1
           fi
+          file zagon-macos-universal | grep -q 'Mach-O universal binary with 2 architectures' ||
+            { echo "::error::zagon-macos-universal is not a universal Mach-O"; exit 1; }
+          chmod +x zagon-linux-* zagon-macos-universal  # artifacts lose the mode; the MCPB bundles need it
+          ../src/packaging/mcpb/build.sh . "$VERSION"
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
       - uses: actions/upload-artifact@v4
@@ -181,11 +198,31 @@ jobs:
           path: assets/
           if-no-files-found: error
 
+  # Signed build provenance (Sigstore, stored by GitHub) for every release file: gh attestation verify <file> --repo
+  # a1lezakty/zagon. Tags only: a manual run builds any branch, and its attestations would verify just the same for
+  # files that were never released. Before the release, so no file is published without one.
+  attest:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: assets
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: assets/*
+
   # Installed copies read releases/latest: zagon update and install.sh take SHA256SUMS and the binary, Zagon.app takes
   # appcast.xml. So the release is published (not a draft or prerelease) and checked to be `latest` with every file.
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [version, notes, bundle]
+    needs: [version, notes, bundle, attest]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -222,3 +259,66 @@ jobs:
             sleep 10
           done
           echo "::error::releases/latest is not $GITHUB_REF_NAME with appcast.xml and SHA256SUMS"; exit 1
+
+  # Formula/zagon.rb and Casks/zagon.rb in the tap a1lezakty/homebrew-zagon, from packaging/homebrew/ and SHA256SUMS.
+  # After the release, so a failure here leaves it published; Re-run failed jobs pushes again. A manual run shows the
+  # files (artifact homebrew) and checks that the token can push, pushing nothing. Without the secret HOMEBREW_TAP_TOKEN
+  # (a fine-grained token with Contents: write on the tap alone; GITHUB_TOKEN cannot push to another repository) the
+  # push is skipped with a notice; a tap the token cannot read or push to fails the job.
+  homebrew:
+    if: ${{ !cancelled() && needs.bundle.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.release.result == 'success') }}
+    needs: [version, bundle, release]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAP: a1lezakty/homebrew-zagon
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: packaging
+          path: src
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: assets
+      - name: Render
+        run: |
+          src/packaging/homebrew/render.sh "$VERSION" assets/SHA256SUMS tap
+          cat tap/Formula/zagon.rb tap/Casks/zagon.rb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homebrew
+          path: tap/
+          overwrite: true  # Re-run failed jobs uploads it again
+      - name: Push to the tap (a run by hand only checks that the token can push)
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          [ -n "$TAP_TOKEN" ] || { echo "::notice::HOMEBREW_TAP_TOKEN is not set: the tap is not updated (docs/RELEASING.md)"; exit 0; }
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TAP_TOKEN" "https://api.github.com/repos/$TAP")
+          # a set token means the tap is set up: a 404 is a token without access to it, not "no tap yet"
+          [ "$code" = 200 ] || { echo "::error::GitHub answered $code for $TAP: the token cannot read it (docs/RELEASING.md)"; exit 1; }
+          basic=$(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 -w0)
+          echo "::add-mask::$basic"
+          auth="AUTHORIZATION: basic $basic"
+          git -c http.extraheader="$auth" clone -q "https://github.com/$TAP" tap-repo
+          # an older tag finishing after a newer one must not move the tap back
+          have=$(sed -n 's/^  version "\(.*\)"$/\1/p' tap-repo/Formula/zagon.rb 2>/dev/null || true)
+          if [ -n "$have" ] && [ "$have" != "$VERSION" ] && [ "$(printf '%s\n%s\n' "$have" "$VERSION" | sort -V | tail -1)" = "$have" ]; then
+            echo "::notice::$TAP already has zagon $have, newer than $VERSION: not changed"; exit 0
+          fi
+          mkdir -p tap-repo/Formula tap-repo/Casks
+          cp tap/Formula/zagon.rb tap-repo/Formula/zagon.rb
+          cp tap/Casks/zagon.rb tap-repo/Casks/zagon.rb
+          cd tap-repo
+          git add Formula/zagon.rb Casks/zagon.rb
+          if git diff --cached --quiet; then echo "::notice::$TAP already has zagon $VERSION"; exit 0; fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "zagon $VERSION"
+          if [ "$GITHUB_EVENT_NAME" != push ]; then
+            # --dry-run sends nothing, but GitHub still asks for push access: a token that cannot write fails here
+            git -c http.extraheader="$auth" push -q --dry-run origin HEAD
+            echo "::notice::$TAP: the token can push; a run by hand pushes nothing"; exit 0
+          fi
+          git -c http.extraheader="$auth" push -q origin HEAD
+          echo "::notice::$TAP: zagon $VERSION ($(git rev-parse --short HEAD))"

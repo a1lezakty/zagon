@@ -1,0 +1,22 @@
+{
+  "manifest_version": "0.3",
+  "name": "zagon",
+  "display_name": "Zagon",
+  "version": "0.0.0",
+  "description": "Your Claude Code and Codex CLI sessions on this machine: Jira worklog plans, limits, live sessions, time and tokens per day, search over past sessions.",
+  "long_description": "Runs `zagon mcp`, the MCP server of Zagon, over stdio. It reads the local Claude Code transcripts and Codex session files into its database in ~/.zagon and answers from there; nothing leaves the machine unless you connect Jira or notifications. Privacy: https://github.com/a1lezakty/zagon#privacy",
+  "author": { "name": "a1lezakty", "url": "https://github.com/a1lezakty" },
+  "repository": { "type": "git", "url": "https://github.com/a1lezakty/zagon.git" },
+  "homepage": "https://github.com/a1lezakty/zagon",
+  "documentation": "https://github.com/a1lezakty/zagon#mcp",
+  "support": "https://github.com/a1lezakty/zagon/issues",
+  "license": "MIT",
+  "keywords": ["claude-code", "codex", "usage", "limits", "sessions", "worklog"],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/zagon",
+    "mcp_config": { "command": "${__dirname}/server/zagon", "args": ["mcp"], "env": {} }
+  },
+  "tools": [],
+  "compatibility": { "platforms": [] }
+}
