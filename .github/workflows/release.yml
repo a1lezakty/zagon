@@ -289,8 +289,7 @@ jobs:
           name: homebrew
           path: tap/
           overwrite: true  # Re-run failed jobs uploads it again
-      - name: Push to the tap
-        if: github.event_name == 'push'
+      - name: Push to the tap (a run by hand only checks that the token can push)
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
@@ -315,5 +314,10 @@ jobs:
           if git diff --cached --quiet; then echo "::notice::$TAP already has zagon $VERSION"; exit 0; fi
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
             commit -q -m "zagon $VERSION"
+          if [ "$GITHUB_EVENT_NAME" != push ]; then
+            # --dry-run sends nothing, but GitHub still asks for push access: a token that cannot write fails here
+            git -c http.extraheader="$auth" push -q --dry-run origin HEAD
+            echo "::notice::$TAP: the token can push; a run by hand pushes nothing"; exit 0
+          fi
           git -c http.extraheader="$auth" push -q origin HEAD
           echo "::notice::$TAP: zagon $VERSION ($(git rev-parse --short HEAD))"

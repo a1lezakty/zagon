@@ -7,12 +7,13 @@
 ![Platforms: Linux, macOS](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey)
 
 Zagon reads the session files Claude Code and Codex already write (and what Cursor's agent reports through the same
-hooks) and turns them into time per task: a Jira key
-(`PROJ-123`) in the git branch, the session title, a message you typed or a commit links that work to the task. It
-plans the day's worklogs with a short text for each, reconciles a period with what is already in Jira, and writes to
-Jira only after you confirm. Around that: subscription limits, which sessions are waiting for you, tokens and $ per day
-and project, a daily "what was done" summary, alerts in Telegram or ntfy, context handoff between sessions, and an MCP
-server, so Claude or Codex can answer from the same data. Everything stays on your machine.
+hooks) and turns them into time per task: a Jira key (`PROJ-123`) in the git branch, the session title, a message you
+typed or a commit links that work to the task. It plans the day's worklogs with a short text for each, reconciles a
+period with what is already in Jira, and writes to Jira only after you confirm. Around that: subscription limits,
+which sessions are waiting for you, tokens and $ per day and project, a daily "what was done" summary, alerts in
+Telegram or ntfy, context handoff between sessions, and an MCP server, so Claude or Codex can answer from the same
+data. The data stays on your machine: only the AI calls on your own subscription and what you turn on (Jira,
+notifications, updates) use the network ([Privacy](#privacy)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/worklog.png">
@@ -46,8 +47,8 @@ Homebrew installs keep up with `brew upgrade` (the app also updates itself), not
 The hooks and the MCP tools reach sessions started after the install: restart the Claude Code and Codex sessions you
 have open. What install changes and how to undo it: [Install on a Linux server](#install-on-a-linux-server).
 
-**Try it without installing.** The binary reads the transcripts by itself; it writes only its database in
-`~/.zagon` and changes no settings:
+**Try it without installing.** The binary reads the transcripts by itself; it writes only to `~/.zagon` and changes
+no settings:
 
 ```sh
 curl -fsSLO https://github.com/a1lezakty/zagon/releases/latest/download/zagon-linux-x86_64   # or zagon-linux-aarch64
@@ -66,8 +67,8 @@ With the MCP server registered (`zagon install` does it), ask in any session:
 
 - "Where do I stand?" (`status`: limits, sessions waiting for you, what is left to log today)
 - "What did I work on yesterday, and what should go to Jira?" (`worklog_plan`)
-- "Shorten the text of the PROJ-12 row and don't log the scratch one." (`worklog_text`, `worklog_skip`, each after
-  you confirm)
+- "Set the text of the PROJ-12 row to 'Retries made idempotent' and don't log the scratch row." (`worklog_text`,
+  `worklog_skip`, each after you confirm)
 - "Log yesterday to Jira." (`worklog_commit`, only on your explicit request)
 - "Do my Jira worklogs for October match my sessions?" (`worklog_reconcile`)
 - "What did I get done this month?" (`summary`)
@@ -95,12 +96,15 @@ or the other editors' own agents, has no GUI on Linux or Windows, and its Mac ap
 
 ## Privacy
 
-- **Local, no telemetry.** Data stays in `~/.zagon`. The network is used only for what you turn on: a notification
-  channel (Telegram or ntfy), Jira, and updates from GitHub (`zagon update` when you run it, the Mac app once a day).
+- **Local, no telemetry.** Data stays in `~/.zagon`. The network is used for the AI calls below (through your own
+  `claude` or `codex`), a notification channel (Telegram or ntfy) and Jira when you set them up, and updates from
+  GitHub (`zagon update` when you run it; the Mac app checks once a day unless you turn that off).
 - **Files, not accounts.** Zagon reads the transcripts in `~/.claude/projects`, Codex's session files and, for
-  Cursor's agent, its hooks and earlier chats. Limits come from what Claude Code passes to its status line and
-  from Codex's own files: it never reads OAuth tokens, cookies or credential files and calls no usage API.
-- **Numbers, not conversations.** The database keeps numbers, times, projects, branches and session titles. Text goes
+  Cursor's agent, its hooks, earlier chats and its list of conversations in Cursor's `state.vscdb` (ids, times and
+  titles only). Limits come from what Claude Code passes to its status line and from Codex's own files: it never
+  reads OAuth tokens, cookies or credential files and calls no usage API.
+- **Numbers, not conversations.** The database keeps numbers, times, projects, branches and session titles (for an
+  old Cursor chat, the first line you typed in it). Text goes
   only into the local archive of transcripts and into short digests for three AI calls (the day summary, the worklog
   texts, the evening task suggestions), run on your own `claude` or `codex` subscription.
 
@@ -125,6 +129,10 @@ What to turn off when your employer limits where code and conversations go:
   only the evening call. Restart the service after changing either.
 - **Notifications.** Telegram and ntfy messages carry session titles, project names and the day summary. Leave them
   off, or point `[ntfy] url` at your own ntfy server.
+- **Cursor.** Zagon reads Cursor's old chats and its list of conversations whenever they exist; there is no switch
+  for that in Zagon. A chat read from an old transcript is titled by the first line you typed there, and that title
+  goes where titles go (the database, notifications, AI digests). To keep Cursor's agent out from now on, turn off
+  Third-Party Imports in Cursor (Settings → Agents): Cursor then stops running Zagon's hooks.
 - **Search.** Every command that scans indexes your typed words for search (the words, not the text). To keep them
   out, pass `--no-index-prompts` everywhere a scan runs: the service (`zagon daemon`, as for the archive), `zagon scan`
   and the MCP server (`claude mcp add --scope user zagon -- zagon mcp --no-index-prompts`, the same for `codex mcp
@@ -202,12 +210,12 @@ opened, the menu bar, then the Day, Week and Calendar windows.
   worktree's `commondir`) and reads the `origin` URL from its git config; it stores the directory paths and project
   names, never file contents or URLs.
 - Cursor's agent: its hooks (below) count it from when they first fire. For the days before, Zagon reads Cursor's
-  earlier chats (`~/.cursor/projects/*/agent-transcripts`, Cursor up to 2.x): your typed requests there are treated
-  like those of Claude Code (indexed for search, scanned for task keys, placed in the day when they carry a time
-  stamp), and the first line of a chat's first request (up to 80 characters) becomes its title. Cursor 3 keeps no
+  earlier chats (`~/.cursor/projects/*/agent-transcripts`, Cursor up to 2.x): the first line of a chat's first
+  request (up to 80 characters) becomes its title, and the requests that carry a time stamp are treated like typed
+  messages of Claude Code (placed in the day, indexed for search, scanned for task keys). Cursor 3 keeps no
   transcripts: Zagon opens Cursor's own list of conversations in its `state.vscdb` read-only and takes only ids,
-  workspace, times and titles, never the chats' text or Cursor's login; that list is copied to
-  `~/.zagon/cursor/headers.ndjson`.
+  workspace, times and titles, never the chats' text or Cursor's login, plus each workspace's `workspace.json` (its
+  folder); that list is copied to `~/.zagon/cursor/headers.ndjson`.
 - While a Claude session is active, the service also runs `claude agents --json` (Claude Code 2.1.145 or later) for
   the live statuses hooks may miss: session ids, folders and statuses.
 - Limits come only from what Claude Code passes to its status line (`rate_limits`, Claude Code 2.1.80+ on Pro and
@@ -237,8 +245,8 @@ opened, the menu bar, then the Day, Week and Calendar windows.
   worklog text in Jira unless you set one by hand. A week,
   a month or a range is one more call over the days' summaries. With `[summary] engine = "none"` the summary is
   built without AI; `[summary] time = ""` (or `zagon summary --at off`) stops the service writing it at all. When the
-  AI CLI answers about money (credit balance, extra usage, a spending cap), or a call was paid as extra usage, Zagon
-  makes no more AI calls that day and builds the summary without AI, saying why.
+  AI CLI answers about money (credit balance, extra usage, a spending cap), or a call was paid as extra usage (its
+  answer is still used), Zagon makes no more AI calls that day: later summaries are built without AI and say why.
 - Evening task suggestions are a second AI call a day, the same way and on the same engine, at `[notify] worklog_at`
   (19:00) when the service sends notifications. It gets the day's stretches of work no task key linked: project,
   folder, session title, the first 100 characters of up to three typed messages (secrets redacted), edited file
@@ -251,8 +259,9 @@ opened, the menu bar, then the Day, Week and Calendar windows.
   itself is not kept. Pass `--no-index-prompts` to every command that scans (`zagon daemon`, `zagon scan`,
   `zagon mcp`, the reports) to turn that off; the Mac app always indexes.
 - Data lives in `~/.zagon` (or `$ZAGON_DIR`): `zagon.db`, `spool/`, `archive/`, `logs/`, `config.toml`, `backup/`,
-  `exports/`, `cursor/`; `jira-token` and `telegram-token` (mode 0600) when `zagon setup jira` / `zagon notify setup`
-  saved them; `zagon.db.v<N>` copies that `zagon update` keeps before a schema change.
+  `exports/`, `cursor/`, `cursor-hooks` (when Cursor's hooks first fired); `jira-token` and `telegram-token` (mode
+  0600) when `zagon setup jira` / `zagon notify setup` saved them; `zagon.db.v<N>` copies that `zagon update` keeps
+  before a schema change.
 
 ## Install on a Linux server
 
@@ -339,23 +348,21 @@ zagon update            # replace the binary and restart the service
 
 `zagon update` downloads the latest release for your CPU, checks it against `SHA256SUMS`, and only then replaces
 its own binary (atomically, in the same directory). The old binary stays next to it as `zagon.prev`: move it back to
-roll back (not across a database schema change: the older binary refuses a newer database). From 0.1.5 on, an update
-that moves the database to a newer schema says so first, keeps a copy as `~/.zagon/zagon.db.v<N>` and prints how to
-roll back with it (`zagon.prev` plus that copy); with too little disk space for the copy it warns instead, and it
-refuses a version that cannot open your database. `zagon doctor` lists the copies kept. Running services are
-restarted. If the binary is in `/usr/local/bin`, run `sudo zagon update` (behind a
-proxy: `sudo -E zagon update`, since sudo drops the proxy variables). On macOS the app updates itself, the `zagon`
-inside it included.
+roll back (not across a database schema change: the older binary refuses a newer database). An update run by 0.1.5
+or later (so from 0.1.5 to a newer version, not the update to 0.1.5) that moves the database to a newer schema says so
+first, keeps a copy as `~/.zagon/zagon.db.v<N>` (N: the schema it had) and prints how to roll back with it
+(`zagon.prev` plus that copy); with too little disk space for the copy it warns instead, and it refuses a version that
+cannot open your database. `zagon doctor` lists the copies kept. Running services are restarted; restart the open
+Claude Code and Codex sessions too, since their `zagon mcp` keeps running the old binary. If the binary is in
+`/usr/local/bin`, run `sudo zagon update` (behind a proxy: `sudo -E zagon update`, since sudo drops the proxy
+variables). On macOS the app updates itself, the `zagon` inside it included: restart the open sessions after that too.
 
-The first start of 0.1.0 over an earlier build recounts the whole history once (database schema v5: usage by the
-folder of each request, the 1-hour cache split), which takes as long as the very first scan. 0.1.1 moves the database
-to schema v6 (which session drives a worker) and rebuilds the days once; after that 0.1.0 no longer opens it, so
-update servers and the Mac together and do not roll back to 0.1.0.
-
-**0.1.5 moves the database to schema v7** (where a task key came from). 0.1.4 does not open a v7 database, so the
-`zagon.prev` that `zagon update` leaves cannot roll you back. Keep a copy before you update; the update itself is run
-by the old binary, so it cannot make the copy for you. Quit the open Claude Code and Codex sessions first (their
-`zagon mcp` uses the database too), then:
+**0.1.5 moves the database to schema v7** (where a task key came from); its first start re-links the task keys of the
+last 14 days once (about a minute on a busy server). 0.1.4 does not open a v7 database, so the `zagon.prev` that
+`zagon update` leaves cannot roll you back. Keep a copy before you update; the update itself is run by the old binary,
+so it cannot make the copy for you. Quit the open Claude Code and Codex sessions first (their `zagon mcp` uses the
+database too), then stop the one service that runs (`systemctl --user is-active zagon` and
+`systemctl is-active zagon-<user>` tell which), and start that one again after the update:
 
 ```sh
 systemctl --user stop zagon        # a system unit: sudo systemctl stop zagon-<user>
@@ -366,9 +373,16 @@ systemctl --user start zagon       # update restarts only a running service; or:
 
 To go back to 0.1.4 later: stop the service and quit the Claude Code and Codex sessions, move the current
 `~/.zagon/zagon.db*` files aside, copy the saved ones back, move `zagon.prev` over `zagon`, and start the service.
+What Zagon recorded since the update and cannot read again from the transcripts (texts set by hand, exclusions,
+manual links) is lost then.
 
 Update the Mac app with the servers: a 0.1.4 app reads a 0.1.5 server, but lists its Cursor sessions as Claude ones
 and prices their tokens of Claude models at API prices.
+
+Earlier schema changes: the first start of 0.1.0 over an earlier build recounts the whole history once (schema v5:
+usage by the folder of each request, the 1-hour cache split), which takes as long as the very first scan. 0.1.1 moves
+the database to schema v6 (which session drives a worker) and rebuilds the days once; after that 0.1.0 no longer
+opens it.
 
 ## Use
 
@@ -384,7 +398,7 @@ zagon summary --week 2026-10-29  # the week of that day; --month 2026-10, --from
 zagon summary --at 21:00       # when the service writes the day summary (off = never)
 zagon archive stats            # archived sessions, bytes before / after compression
 zagon archive cat <session>    # print an archived transcript (id or a unique prefix)
-zagon notify setup telegram    # your own bot (the chat is found when you write /start to it), or: ntfy; then a test
+zagon notify setup telegram    # your own bot (the chat is found when you write /start to it), or ntfy; sends a test
 zagon notify test              # a test message to every configured channel
 zagon setup jira               # connect Jira Cloud: address, email, API token (typed, not shown), checked before saving
 zagon tz Asia/Almaty           # the zone days are cut in (no argument: show it; `system` = the machine's)
@@ -398,7 +412,7 @@ zagon log text set 41 "…"      # a row's worklog text by hand (log text rebuil
 zagon log exclude add project example-tool   # never log this work (project | task | session; log exclude rm|list)
 zagon log config tz Asia/Nicosia             # [worklog] settings: tz, projects, day_summary, rebuild_at_end
 zagon log reconcile --from 2026-09-01 --to 2026-10-31 --md   # sessions against your Jira worklogs per task and day (--csv, --json)
-zagon log export --from 2026-10-01 --to 2026-10-31 > october.csv   # hours for invoices; --format toggl: Toggl Track's import
+zagon log export --from 2026-10-01 --to 2026-10-31 > october.csv   # hours for invoices; --format toggl --email you@…
 zagon update                   # the latest release (see Update above)
 ```
 
@@ -462,6 +476,7 @@ with Jira before saving anything, writes `[jira]` into `~/.zagon/config.toml` an
 url = "https://example.atlassian.net"
 email = "you@example.com"
 token_file = "~/.config/zagon/jira-token"   # an Atlassian API token, the file's last non-empty line
+                                            # (zagon setup jira keeps it in ~/.zagon/jira-token)
 # review_statuses = ["review", "qa", "test", "release"]   # optional: statuses that mean "in review"
 
 [worklog]
@@ -485,8 +500,9 @@ item with a clock range (a pasted worklog list) gives no key; once Jira's projec
 projects (and `projects`) count.
 
 Hours for invoices: `zagon log export --from 2026-10-01 --to 2026-10-31` prints the plan's rows and your worklogs in
-Jira as CSV (`date,start,end,hours,task,title,text,state`, `state` = `planned` or `logged`), in the worklog zone;
-`--format toggl` gives Toggl Track's import CSV. It plans each day again without AI and exits with 2 when Jira is set
+Jira as CSV (`date,start,end,hours,task,title,text,state`; `state` is `planned`, `logged`, or `writing` for a write
+not settled yet), in the worklog zone; `--format toggl` gives Toggl Track's import CSV (with `--email`, your Toggl
+login, default the `[jira] email`). It plans each day again without AI and exits with 2 when Jira is set
 up but could not be read (the export is then partial).
 
 By hand, create the token at id.atlassian.com → Security → API tokens, then keep it in a file only you can read:
@@ -526,16 +542,15 @@ tasks: their transcripts land in `~/.claude/projects`), but the limits need one 
   setting.
 - JetBrains IDEs: the Claude Code plugin runs the regular `claude` in the IDE's terminal, so the status line and the
   limits work as in any terminal.
-- Cursor's own agent is counted as a third AI next to Claude Code and Codex: its sessions, live status (working /
-  waiting / ended), project, model and the tokens its hooks report. Cursor runs the Claude Code hooks from
-  `~/.claude/settings.json` (Settings → Agents → Third-Party Imports, on by default), so its time is exact from the
-  first hook on; earlier days come from its chats on disk (Cursor up to 2.x) or its list of conversations (Cursor 3),
-  and that time is approximate (each Cursor 3 conversation gets a turn of at most 10 minutes from its start). A
-  conversation stops waiting 30 minutes after its last answer, since Cursor rarely says it ended. No limits and no $:
-  Cursor keeps plan usage and its prices on its servers, reachable only with your Cursor login token or browser
-  cookie, and Zagon never reads credentials, so its tokens are left out of the $ (`$ ?` in the CLI). Over Remote SSH
-  its hooks run on the server, so the Zagon there counts it and the Mac shows it from there; for Cursor windows on the
-  Mac itself, Zagon has to run on the Mac.
+- Cursor's own agent is counted as a third AI next to Claude Code and Codex: sessions, live status, project, model,
+  time and the tokens its hooks report. Cursor runs the Claude Code hooks from `~/.claude/settings.json` (Settings →
+  Agents → Third-Party Imports, on by default), so its time is exact from the first hook on; earlier days come from
+  its old chats or its list of conversations and are approximate (each Cursor 3 conversation gets at most 10 minutes
+  from its start; what is read: [Privacy in detail](#privacy-in-detail)). A conversation stops waiting 30 minutes
+  after its last answer, since Cursor rarely says it ended. No limits and no $ (`$ ?` in the CLI): Cursor keeps plan
+  usage and its prices on its servers, reachable only with your Cursor login, which Zagon never reads. Over Remote SSH
+  its hooks run on the server, so the Zagon there counts it and the Mac shows it from there; for Cursor windows on
+  the Mac itself, Zagon has to run on the Mac.
 - The other editors' own agents (Devin / Windsurf, Trae, VS Code's agent mode) are not counted. Some run the Claude
   Code hooks too ("third-party hooks", on by default in Devin); Zagon ignores those calls, so they do not show up as
   Claude sessions.
@@ -618,6 +633,7 @@ codex.week = [80, 95]
 
 [telegram]
 token_file = "~/.config/zagon/tg-bot-token"   # your bot's token from @BotFather, in a file only you can read
+                                              # (notify setup keeps it in ~/.zagon/telegram-token)
 chat_id = "123456789"       # the only chat the bot writes to and answers
 commands = true             # answer /limits /sessions /today /week /day /tz (one host per bot)
 
@@ -692,8 +708,8 @@ a folder) after an update.
 - A Mac without a server rebuilds the day summary and the worklog texts at 23:55 in the worklog time zone, as a
   server's service does: up to one AI call a day, only when there was work on tasks.
 - Session rows have a button that copies the session's summary to continue it in a new session (the same as
-  `zagon handoff`). A click on a Cursor session copies `cursor <folder>` (`cursor --remote ssh-remote+<server>
-  <folder>` for a server's).
+  `zagon handoff`). A click on a Cursor session copies `cursor <folder>`
+  (`cursor --remote ssh-remote+<server> <folder>` for a server's).
 - macOS asks for notification permission when you first want notifications, not at launch.
 
 ## Build from source
