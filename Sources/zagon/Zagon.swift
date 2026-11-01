@@ -30,6 +30,7 @@ struct Zagon: ParsableCommand {
             LogCommand.self,
             TzCommand.self,
             UpdateCommand.self,
+            SetupCommand.self,
         ])
 
     /// `claude-wrap` hands its arguments to Claude Code untouched, so it runs before the parser sees them.
