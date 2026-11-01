@@ -5,7 +5,8 @@
 public typealias Timestamp = Double
 
 public enum ToolKind: String, Sendable, Codable, CaseIterable {
-    /// `cursor`: Cursor's agent, from its hooks and `agent-transcripts` (sessions and time; no tokens, no limits).
+    /// `cursor`: Cursor's agent, from its hooks, `agent-transcripts` and conversation list (sessions, time, tokens from
+    /// hooks without a price; no limits).
     case claude, codex, cursor
 }
 

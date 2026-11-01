@@ -209,9 +209,11 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 Task { @MainActor in NotificationCenter.default.post(name: .NSSystemTimeZoneDidChange, object: nil) }
             }
             let s = try ingest.scan()
+            let cursor = CursorHeaders.sync(store: writer, paths: paths)
+            if cursor { try ingest.update(paths: [CursorHeaders.file(paths)]) }
             let threads = try CodexThreads.sync(store: writer, codexHome: codex, host: ingest.host)
             let spool = try SpoolIngest.run(store: writer, spoolDir: paths.spool)
-            return s.lines > 0 || threads > 0 || spool.lines > 0
+            return s.lines > 0 || cursor || threads > 0 || spool.lines > 0
         }
         p.dbPath = paths.dir + "/zagon.db"
         p.paths = paths

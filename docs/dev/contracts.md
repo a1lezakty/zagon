@@ -56,14 +56,20 @@ unpacked one as replaced, so it recounts rather than double counts. Our archive 
 `.zst` is one already: if it is deleted later, its counts stay but handoff and search lose it); `Archive.readLog` and
 `transcript(id)` unpack it for handoff and search.
 
-Cursor's agent (`Cursor/CursorSource.swift`, tool `cursor`): sessions and time only, never tokens or limits (Cursor
-keeps them on its servers; Zagon reads no credentials). Two sources, both `CursorSource.specs`:
+Cursor's agent (`Cursor/CursorSource.swift`, tool `cursor`): sessions, time and the tokens its hooks report; never
+limits or prices (Cursor keeps them on its servers; Zagon reads no credentials). Three sources, all `CursorSource.specs`:
 
 - hooks: `spool/<UTC day>.cursor.ndjson` (see Live status from hooks). `UserPromptSubmit` is a typed message whose
   text is only the prompt's task keys (found by the hook as Ingest finds them, no brief keys), `PostToolUse` /
   `SubagentStop` / `PreCompact` / `Stop` are agent events, so turns are exact; each line also gives `SessionMeta`
   (cwd = the first workspace root, model). The daemon passes these files to `Ingest.update` too. Each file is its own
   TurnBuilder: a turn across UTC midnight loses the stretch between its last event before and its first after.
+  `afterAgentResponse` (only when wired in Cursor's own hooks.json: Claude Code has no such event) is an agent event
+  too. Tokens: a line with `input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_write_tokens` (`stop`,
+  `afterAgentResponse`) is a usage record of model `cursor/<model>` (`cursor` without one), which `Pricing.rates`
+  never prices (unpriced: "$ ?"). One `generation_id` counts its largest report per field (parser state keeps the
+  last 64 generations of the file), so `stop` and `afterAgentResponse` of one answer never add up; a generation
+  reported on two UTC days counts in both files.
   These files are kept 40 days (SpoolIngest; other spool files 7): they are the only record of this time.
 - transcripts: `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl` (sub-agent logs and old `.txt` are
   left out). Lines hold no times; a typed message (`<user_query>`, its text for keys and search) is placed only when
@@ -77,6 +83,21 @@ keeps them on its servers; Zagon reads no credentials). Two sources, both `Curso
   neither source (Claude Code and Codex only).
   Only messages more than a minute before `<data-dir>/cursor-hooks` (the first Cursor hook's time, written once by
   `zagon hook`) count: after that the hooks do, and the two never overlap.
+- conversation headers (Cursor 3 writes no transcripts): `CursorHeaders.sync` opens Cursor's
+  `<User>/globalStorage/state.vscdb` (`<User>` = `~/Library/Application Support/Cursor/User` on macOS,
+  `$XDG_CONFIG_HOME/Cursor/User` elsewhere) with `mode=ro` (no copy when that fails) and reads only table
+  `composerHeaders`: `composerId`, `workspaceId`, `createdAt` / `lastUpdatedAt` (ms) and `json_extract(value,
+  '$.name')` inside SQLite; never `ItemTable`, `cursorDiskKV` or any text of a conversation. Rows kept: not
+  `isSubagent`, not a conversation a transcript row of this database counts (`source_file`), and only local ones:
+  `<User>/workspaceStorage/<workspaceId>/workspace.json` gives a `file://` `folder` (its decoded path = cwd) or
+  `workspace` file (no cwd); a remote one (Remote SSH: its hooks run on the server, counted there) or an unknown
+  workspace is left out. It writes `<data-dir>/cursor/headers.ndjson` (`{"id","created","updated","cwd"?,"name"?}`,
+  seconds, `updated` capped at the hooks' start; 0600) only when the content changed, by rename, so Ingest takes the
+  file as replaced and counts it again from the start; then the caller passes it to `Ingest.update`. At most every 5
+  minutes (`meta` `cursor_headers_at`): after `Ingest.scan` in the app's pass, `zagon scan` / report commands and the
+  daemon's full passes. `CursorHeadersParser`: `name` is the title (rank `external`); before the hooks (a minute's
+  margin) the creation is a typed message without text and its turn ends at `updated`, at most 10 minutes, none when
+  that is over 30 minutes away: rougher than the transcripts.
 
 ## Store (`Sources/ZagonCore/Store/`)
 
@@ -326,8 +347,10 @@ Cursor's agent runs the hooks of `~/.claude/settings.json` too (Third-Party Impo
 `UserPromptSubmit`, `PostToolUse`, `Stop`, `SessionStart`, `SessionEnd`, … to its own events and has no
 `Notification` / `PermissionRequest`). Its input is told by `cursor_version` and goes to
 `spool/<UTC day>.cursor.ndjson` with `tool` = `cursor`, `session_id` = `conversation_id` (else `session_id`), `cwd` =
-the first of `workspace_roots` (else `cwd`), `model`, `tool_name`, `transcript_path` and the Claude event name the hook
-was installed for; never `prompt`, `user_email`, tool input or output. The other editors' agents (Devin, Trae, VS
+the first of `workspace_roots` (else `cwd`), `model`, `tool_name`, `transcript_path`, `generation_id`, the four token
+counts (numbers only) and the Claude event name the hook was installed for; never `prompt`, `text`, `user_email`,
+`model_params`, tool input or output. Cursor's `sessionEnd` mostly never runs (Cursor quits first): a `waiting`
+interval of a Cursor session ends at most `Query.idleAfter` (30 min) after it began, not at the next prompt. The other editors' agents (Devin, Trae, VS
 Code) are still dropped (`HookSpool.fromOtherAgent`). The field names are from Cursor's docs, not yet seen live.
 
 The status line wrapper adds `limits` lines (`five_hour` / `seven_day`) only when the reading changed or a minute

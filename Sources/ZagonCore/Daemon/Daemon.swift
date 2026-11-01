@@ -52,9 +52,10 @@ public final class Daemon {
         self.ingest = ingest; self.options = options; self.log = log
     }
 
-    /// Everything once: rollouts and transcripts, threads, spool. `reason` goes to the log.
+    /// Everything once: rollouts and transcripts, Cursor's conversation list, threads, spool. `reason` goes to the log.
     public func fullPass(reason: String) throws {
         let s = try ingest.scan()
+        if let p = options.paths, CursorHeaders.sync(store: store, paths: p) { try ingest.update(paths: [CursorHeaders.file(p)]) }
         try syncThreads()
         try spool()
         fullPasses += 1

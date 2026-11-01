@@ -41,11 +41,13 @@ struct Common: ParsableArguments {
                       + CodexSource.specs(codexHome: codexDir) + CursorSource.specs(paths: ZagonPaths(dir: dataDir)), options: o)
     }
 
-    /// One incremental pass: transcripts and rollouts, then Codex's own thread index (titles, archived).
+    /// One incremental pass: transcripts and rollouts, Cursor's conversation list, then Codex's own thread index (titles,
+    /// archived).
     @discardableResult
     func scan(_ store: Store) throws -> IngestStats {
-        let ingest = ingest(store)
+        let ingest = ingest(store), paths = ZagonPaths(dir: dataDir)
         let stats = try ingest.scan()
+        if CursorHeaders.sync(store: store, paths: paths) { try ingest.update(paths: [CursorHeaders.file(paths)]) }
         try CodexThreads.sync(store: store, codexHome: codexDir, host: ingest.host)
         return stats
     }
