@@ -462,9 +462,10 @@ public struct WorklogRow: Sendable {
     public var end: Date
     public var text: String
     public var destination: WorklogDestination
-    /// The plan row's id there (`log text`), its task's key (`log exclude`); nil: not known.
+    /// The plan row's id there (`log text`), its task's key (`log exclude`), the Jira issue it goes to; nil: not known.
     public var id: Int?
     public var taskKey: String?
+    public var jiraKey: String?
     /// Where `text` came from; nil: a zagon from before texts per row.
     public var textSource: WorklogTextSource?
     /// The task's longest row that day: it carries the day summary.
@@ -482,10 +483,10 @@ public struct WorklogRow: Sendable {
         return text.isEmpty ? s : text + "\n\n" + s
     }
     public init(key: String, start: Date, end: Date, text: String, destination: WorklogDestination, id: Int? = nil,
-                taskKey: String? = nil, textSource: WorklogTextSource? = nil, daySummary: Bool = false, summary: String? = nil,
+                taskKey: String? = nil, jiraKey: String? = nil, textSource: WorklogTextSource? = nil, daySummary: Bool = false, summary: String? = nil,
                 summarySource: WorklogTextSource? = nil, summaryAsComment: Bool = false, sessions: [WorklogSession] = []) {
         self.key = key; self.start = start; self.end = end; self.text = text; self.destination = destination
-        self.id = id; self.taskKey = taskKey; self.textSource = textSource; self.daySummary = daySummary; self.summary = summary
+        self.id = id; self.taskKey = taskKey; self.jiraKey = jiraKey; self.textSource = textSource; self.daySummary = daySummary; self.summary = summary
         self.summarySource = summarySource; self.summaryAsComment = summaryAsComment; self.sessions = sessions
     }
 }
@@ -515,7 +516,7 @@ public struct WorklogPart: Sendable, Equatable {
 }
 
 /// The day summary the texts come from: when it was made (nil: none yet) and the sessions with work after it.
-public struct WorklogTexts: Sendable, Equatable {
+public struct WorklogSummaryInfo: Sendable, Equatable {
     public var builtAt: Date?
     public var newSessions: Int
     public init(builtAt: Date?, newSessions: Int) { self.builtAt = builtAt; self.newSessions = newSessions }
@@ -548,13 +549,13 @@ public struct WorklogData: Sendable {
     /// The worklog time zone the day and the intervals are cut in; nil: not known (the app's).
     public var zone: String?
     /// nil: a zagon from before texts per row.
-    public var texts: WorklogTexts?
+    public var texts: WorklogSummaryInfo?
     public var excluded: [WorklogPart] = []
     /// Time with no task by project (then not in `notes`).
     public var unassigned: [WorklogPart] = []
     public init(day: Date, workStart: Date?, workEnd: Date?, userSec: Double, sessionSec: Double,
                 rows: [WorklogRow], splits: [WorklogSplit], notes: [String] = [], jiraSec: Double? = nil, jiraBlocked: String? = nil,
-                zone: String? = nil, texts: WorklogTexts? = nil, excluded: [WorklogPart] = [], unassigned: [WorklogPart] = []) {
+                zone: String? = nil, texts: WorklogSummaryInfo? = nil, excluded: [WorklogPart] = [], unassigned: [WorklogPart] = []) {
         self.day = day; self.workStart = workStart; self.workEnd = workEnd; self.userSec = userSec
         self.sessionSec = sessionSec; self.rows = rows; self.splits = splits; self.notes = notes
         self.jiraSec = jiraSec; self.jiraBlocked = jiraBlocked

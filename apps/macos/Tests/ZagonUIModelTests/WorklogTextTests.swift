@@ -13,7 +13,8 @@ final class WorklogTextTests: XCTestCase {
         let more = new ? """
             "tz":"Asia/Nicosia","summary_built_at":1793483400.0,"sessions_after_summary":2,
             "unassigned":[{"project":"example-project","seconds":3000},{"project":"—","seconds":1200}],
-            "excluded":[{"kind":"project","name":"dotfiles","seconds":34800},{"kind":"session","name":"3f0c9a2e-0000","seconds":600}],
+            "excluded":[{"kind":"project","name":"dotfiles","seconds":34800},{"kind":"session","name":"3f0c9a2e-0000","seconds":600},
+                        {"kind":"task","name":"PROJ-9","seconds":0}],
             """ : ""
         let row1 = new ? """
             ,"text_source":"summary","day_summary":false,"summary":null,"summary_source":null,
@@ -46,7 +47,7 @@ final class WorklogTextTests: XCTestCase {
             let out: String
             switch (args.first, args.dropFirst().first) {
             case ("log", "plan"): out = plan
-            case ("log", "commit"): out = "1 worklogs logged"
+            case ("log", "commit"): out = "  commented PROJ-1\n  comment on PROJ-2 already commented\n  not sure PROJ-3 reached Jira (timeout)\n2 worklogs logged, 1 not logged"
             case ("log", "config"):
                 out = #"{"tz":"Asia/Nicosia","machine_tz":"Asia/Almaty","projects":["OPS"],"jira_projects":["PROJ","OPS"],"day_summary":true,"rebuild_at_end":false,"exclude":[{"kind":"project","name":"dotfiles"}]}"#
             default: out = ""
@@ -64,19 +65,19 @@ final class WorklogTextTests: XCTestCase {
         XCTAssertEqual(plan.newSessions, 2)
         let f = Self.fmt(.en), w = plan.worklog(f)
         XCTAssertEqual(w.zone, "Asia/Nicosia")
-        XCTAssertEqual(w.texts, WorklogTexts(builtAt: Date(timeIntervalSince1970: 1_793_483_400), newSessions: 2))
+        XCTAssertEqual(w.texts, WorklogSummaryInfo(builtAt: Date(timeIntervalSince1970: 1_793_483_400), newSessions: 2))
         XCTAssertEqual(w.rows.map(\.textSource), [.summary, .manual])
         XCTAssertEqual(w.rows.map(\.daySummary), [false, true])
         XCTAssertEqual(w.rows[1].written, "Row text.\n\nWhat the task was\nA check.", "the day summary goes under the text")
         XCTAssertEqual(w.rows[0].written, "Short text.")
-        XCTAssertEqual(w.excluded.map(\.name), ["dotfiles", "3f0c9a2e-0000"])
+        XCTAssertEqual(w.excluded.map(\.name), ["dotfiles", "3f0c9a2e-0000"], "no line for an exclusion with no time that day")
         XCTAssertEqual(w.unassigned, [WorklogPart(kind: "project", name: "example-project", sec: 3000), WorklogPart(kind: "project", name: "—", sec: 1200)])
         XCTAssertFalse(w.notes.contains { $0.contains("linked to no task") }, "time with no task is shown by project instead")
 
         let vm = WorklogVM(w, f, machine: TimeZone(identifier: "Asia/Almaty"), host: "build-box")
         XCTAssertEqual(vm.textsTitle, "Texts from the day summary")
         XCTAssertEqual(vm.textsDetail, "rebuilt 23:50 · 2 sessions · 2 sessions after it")
-        XCTAssertEqual(vm.zoneLine, "Worklog time zone: Asia/Nicosia · UTC+2 · the day is 00:00–24:00 in it, not in the machine's zone (Asia/Almaty · UTC+5)")
+        XCTAssertEqual(vm.zoneLine, "Worklog time zone: Asia/Nicosia · UTC+2 · the day is 00:00–24:00 in it, not in Zagon's zone (Asia/Almaty · UTC+5)")
         XCTAssertEqual(vm.rows.map(\.span), [f.timeSpan(w.rows[0].start, w.rows[0].end), f.timeSpan(w.rows[1].start, w.rows[1].end)])
         XCTAssertTrue(vm.rows[0].span.hasPrefix("15:45"), "intervals in the worklog zone: \(vm.rows[0].span)")
         XCTAssertEqual(vm.rows[1].sessions.map(\.role), ["leader", "worker"])
@@ -86,11 +87,13 @@ final class WorklogTextTests: XCTestCase {
         XCTAssertTrue(vm.rows.allSatisfy(\.editable))
         XCTAssertEqual(vm.excluded.map(\.text), ["Excluded: 9h 40m — dotfiles", "Excluded: 10m — session 3f0c9a2e"])
         XCTAssertEqual(vm.unassigned.map(\.text), ["No task: 50m — example-project", "No task: 20m — no project"])
+        XCTAssertEqual(vm.unassigned.map(\.action), [true, false], "time of no project cannot be kept out")
+        XCTAssertEqual(vm.rows.map(\.anchor), ["PROJ-1|1793454300", "PROJ-1|summary"])
         XCTAssertTrue(vm.copyText.contains("Row text.\n\nWhat the task was"))
 
         let ru = WorklogVM(plan.worklog(Self.fmt(.ru)), Self.fmt(.ru), machine: TimeZone(identifier: "Asia/Nicosia"), host: nil)
         XCTAssertEqual(ru.textsDetail, "пересобрано 23:50 · 2 сессии · есть 2 новые")
-        XCTAssertEqual(ru.zoneLine, "Пояс ворклогов: Asia/Nicosia · UTC+2 · день 00:00–24:00, как у машины")
+        XCTAssertEqual(ru.zoneLine, "Пояс ворклогов: Asia/Nicosia · UTC+2 · день 00:00–24:00, как в Zagon")
         XCTAssertEqual(ru.rows[0].sessions.map(\.how), ["ключ PROJ-1 в брифе"])
         XCTAssertEqual(ru.unassigned.map(\.text).last, "Без задачи: 20 мин — без проекта")
     }
@@ -118,15 +121,21 @@ final class WorklogTextTests: XCTestCase {
     func testCallsOfTheScreenAndTheSettings() throws {
         let calls = Calls(), b = backend(calls)
         let shown = try b.plan(Self.day, refresh: true, scan: false, comments: ["PROJ-1"])
-        XCTAssertEqual(calls.all.last, ["log", "plan", "--json", "--refresh", "--no-scan", "--summary-comment=PROJ-1", "--", Self.day])
+        XCTAssertEqual(calls.all.last, ["log", "plan", "--json", "--refresh", "--no-scan", "--with-summary", "--summary-comment=PROJ-1", "--", Self.day])
         let w = shown.worklog(Self.fmt(.en))
         XCTAssertTrue(w.rows[1].summaryAsComment)
         XCTAssertEqual(w.rows[1].written, "Row text.", "the summary goes as a comment, the worklog keeps the text")
 
-        guard case .written(let logged, _, _) = try b.commit(Self.day, shown: shown) else { return XCTFail("not written") }
-        XCTAssertEqual(logged, 1)
-        XCTAssertEqual(calls.all.last, ["log", "commit", "--yes", "--no-scan", "--expect", "9a1f", "--summary-comment=PROJ-1", "--", Self.day],
-                       "the commit makes the same comment choice as the plan shown (its digest counts it)")
+        guard case .written(let logged, let failed, let problems) = try b.commit(Self.day, shown: shown) else { return XCTFail("not written") }
+        XCTAssertEqual([logged, failed], [2, 1])
+        XCTAssertEqual(problems, ["comment on PROJ-2 already commented", "not sure PROJ-3 reached Jira (timeout)"])
+        XCTAssertEqual(calls.all.last, ["log", "commit", "--yes", "--no-scan", "--expect", "9a1f", "--with-summary", "--summary-comment=PROJ-1",
+                                        "--", Self.day], "the commit makes the same day summary choice as the plan shown (its digest counts it)")
+        // The words of a core between versions read too.
+        guard case .written(let n, let bad, let why) = try b.written(Proc.Result(status: 1, out: Data("  day summary on PROJ-1 not written: HTTP 400\n1 written, 1 not written\n".utf8), err: Data()))
+        else { return XCTFail("not read") }
+        XCTAssertEqual([n, bad], [1, 1])
+        XCTAssertEqual(why, ["day summary on PROJ-1 not written: HTTP 400"])
 
         try b.setText(44, "-starts with a dash", summary: true)
         XCTAssertEqual(calls.all.last, ["log", "text", "set", "44", "--summary", "--", "-starts with a dash"])
@@ -145,5 +154,41 @@ final class WorklogTextTests: XCTestCase {
             Proc.Result(status: 64, out: Data(), err: Data("Error: Unexpected argument 'config'\nUsage: zagon log <subcommand>\n".utf8))
         }
         XCTAssertNil(try older.worklogConfig(), "a zagon from before `log config`: the card says so instead of failing")
+
+        try b.editProjects(add: "DATA", remove: nil)
+        XCTAssertEqual(calls.all.suffix(2), [["log", "config", "--json"], ["log", "config", "projects", "--", "OPS,DATA"]],
+                       "each machine's own list: read there, one key added")
+        XCTAssertEqual(TaskBackend.edited(["OPS", "DATA"], add: nil, remove: "OPS"), ["DATA"])
+        XCTAssertEqual(TaskBackend.edited(["OPS"], add: "OPS", remove: nil), ["OPS"])
+    }
+
+    func testAnOlderZagonIsAskedWithoutDaySummaries() throws {
+        let calls = Calls(), plan = Self.plan(new: false)
+        let b = TaskBackend(source: .local) { args, _ in
+            calls.add(args)
+            if args.contains("--with-summary") { return Proc.Result(status: 64, out: Data(), err: Data("Error: Unknown option '--with-summary'\n".utf8)) }
+            return Proc.Result(status: 0, out: Data((args[1] == "plan" ? plan : "1 worklogs logged").utf8), err: Data())
+        }
+        let p = try b.plan(Self.day)
+        XCTAssertFalse(p.summaries)
+        XCTAssertEqual(calls.all, [["log", "plan", "--json", "--with-summary", "--", Self.day], ["log", "plan", "--json", "--", Self.day]])
+        _ = try b.commit(Self.day, shown: p)
+        XCTAssertEqual(calls.all.last, ["log", "commit", "--yes", "--no-scan", "--expect", "9a1f", "--", Self.day])
+    }
+
+    func testRebuildOnOpening() throws {
+        let p = try backend(Calls()).plan(Self.day), yesterday = "2026-10-30", now = Self.now
+        XCTAssertFalse(p.staleOnOpen(day: Self.day, today: Self.day, yesterday: yesterday, now: now), "the summary is 8 minutes old")
+        XCTAssertTrue(p.staleOnOpen(day: Self.day, today: "2026-11-01", yesterday: Self.day, now: now.addingTimeInterval(3600)), "yesterday, an hour later")
+        XCTAssertFalse(p.staleOnOpen(day: Self.day, today: "2026-11-03", yesterday: "2026-11-02", now: now.addingTimeInterval(3 * 86400)),
+                       "browsing back costs no AI calls")
+        let none = try backend(Calls(), plan: Self.plan().replacingOccurrences(of: #""summary_built_at":1793483400.0"#, with: #""summary_built_at":null"#))
+            .plan(Self.day)
+        XCTAssertTrue(none.staleOnOpen(day: Self.day, today: Self.day, yesterday: yesterday, now: now))
+        let fresh = try backend(Calls(), plan: Self.plan().replacingOccurrences(of: #""sessions_after_summary":2"#, with: #""sessions_after_summary":0"#))
+            .plan(Self.day)
+        XCTAssertFalse(fresh.staleOnOpen(day: Self.day, today: Self.day, yesterday: yesterday, now: now.addingTimeInterval(3600)))
+        XCTAssertFalse(try backend(Calls(), plan: Self.plan(new: false)).plan(Self.day)
+            .staleOnOpen(day: Self.day, today: Self.day, yesterday: yesterday, now: now), "an older zagon has no rebuild")
     }
 }

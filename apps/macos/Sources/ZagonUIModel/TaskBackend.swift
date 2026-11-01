@@ -75,17 +75,27 @@ public struct TaskBackend: Sendable {
         try decode(["task", "show", "--json"] + (scan ? [] : ["--no-scan"]) + ["--", key]).0
     }
     /// `refresh`: the day summary and the texts made anew first when sessions worked after it (AI calls, minutes).
-    /// `comments`: tasks whose day summary goes as a comment, not in the worklog (the digest counts them).
+    /// `comments`: tasks whose day summary goes as a comment, not in the worklog. The other day summaries go in their
+    /// worklogs (`--with-summary`: this app shows them); the digest counts both. A zagon from before texts is asked again
+    /// without them.
     public func plan(_ day: String, refresh: Bool = false, scan: Bool = true, comments: [String] = []) throws -> WorklogPlan {
+        do { return try plan(day, refresh: refresh, scan: scan, comments: comments, summaries: true) } catch let e as Failure
+            where e.older && !refresh && comments.isEmpty {
+            return try plan(day, refresh: false, scan: scan, comments: [], summaries: false)
+        }
+    }
+
+    func plan(_ day: String, refresh: Bool, scan: Bool, comments: [String], summaries: Bool) throws -> WorklogPlan {
         let args = ["log", "plan", "--json"] + (refresh ? ["--refresh"] : []) + (scan ? [] : ["--no-scan"])
-            + comments.map { "--summary-comment=" + $0 } + ["--", day]
+            + (summaries ? ["--with-summary"] : []) + comments.map { "--summary-comment=" + $0 } + ["--", day]
         let (out, jira) = try call(args, timeout: refresh ? 900 : 120)
         var line = out.split(separator: UInt8(ascii: "\n")).last.map { Data($0) } ?? out
         // `commit_digest` came with `log commit --expect`; a zagon from before sends none, and `DayPlan` may require it.
         let digest = (try? Self.parse(line, args) as Digest)?.commitDigest.flatMap { $0.isEmpty ? nil : $0 }
         let extras = try? Self.parse(line, args) as PlanExtras
         if digest == nil, line.first == UInt8(ascii: "{") { line = Data("{\"commit_digest\":\"\",".utf8) + line.dropFirst() }
-        return WorklogPlan(plan: try Self.parse(line, args), jiraError: jira, digest: digest, extras: extras, comments: comments)
+        return WorklogPlan(plan: try Self.parse(line, args), jiraError: jira, digest: digest, extras: extras, comments: comments,
+                           summaries: summaries)
     }
 
     /// What a zagon from 0.1.5 adds to `log plan --json`: the worklog zone, texts per row, exclusions. All optional:
@@ -150,6 +160,16 @@ public struct TaskBackend: Sendable {
     /// One `[worklog]` key: `tz` (an IANA name, "system" = the machine's), `projects` (comma-separated),
     /// `day_summary`, `rebuild_at_end` (true / false).
     public func setWorklogConfig(_ key: String, _ value: String) throws { _ = try call(["log", "config", key, "--", value]) }
+    /// Adds or removes one key in that machine's own `projects` (read there first: keys typed only there stay).
+    public func editProjects(add: String?, remove: String?) throws {
+        let list = try worklogConfig()?.projects ?? []
+        try setWorklogConfig("projects", Self.edited(list, add: add, remove: remove).joined(separator: ","))
+    }
+    public static func edited(_ list: [String], add: String?, remove: String?) -> [String] {
+        var l = list.filter { $0 != remove }
+        if let add, !l.contains(add) { l.append(add) }
+        return l
+    }
 
     // `--` keeps a text that starts with "-" from being read as an option.
     public func addTodo(_ key: String, _ text: String) throws { _ = try call(["task", "todo", "--", key, text]) }
@@ -218,9 +238,9 @@ public struct TaskBackend: Sendable {
             // The CLI plans the day again and writes only if that is the plan shown (exit 3 otherwise).
             guard shown.plan.jiraSec != nil else { throw Failure(description: "Jira is not connected there ([jira] in config.toml)") }
             guard !Self.toJira(shown.plan).isEmpty else { return .nothing }
-            // The same comment choice as the plan shown: the digest counts it.
-            guard let r = try run(["log", "commit", "--yes", "--no-scan", "--expect", digest] + shown.comments.map { "--summary-comment=" + $0 }
-                                  + ["--", day], 300) else {
+            // The same day summary choice as the plan shown: the digest counts it.
+            guard let r = try run(["log", "commit", "--yes", "--no-scan", "--expect", digest] + (shown.summaries ? ["--with-summary"] : [])
+                                  + shown.comments.map { "--summary-comment=" + $0 } + ["--", day], 300) else {
                 throw Failure(description: "no answer in 300 s: part may be written, reload the plan")
             }
             if r.status == 3 { return .changed(try plan(day, comments: shown.comments)) }
@@ -240,14 +260,18 @@ public struct TaskBackend: Sendable {
         return try written(r)
     }
 
-    /// What `log commit` reported.
+    /// What `log commit` reported: "N worklogs logged, M not logged" (0.1.4) or "N written, M not written" (0.1.5, which
+    /// counts day summary comments too).
     func written(_ r: Proc.Result) throws -> Commit {
         let lines = String(decoding: r.out, as: UTF8.self).split(separator: "\n").map(String.init)
         // Exit 1 with the summary line = some rows failed; anything else is a failure before writing.
-        guard let m = lines.last?.wholeMatch(of: /(\d+) worklogs logged(?:, (\d+) not logged)?/) else { throw failure(r) }
-        return .written(logged: Int(m.1) ?? 0, failed: m.2.flatMap { Int($0) } ?? 0,
-                        problems: lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.hasPrefix("not logged") }
-                            .map(Remote.scrubHomes))
+        guard let m = lines.last?.wholeMatch(of: /(\d+) (?:worklogs logged|written)(?:, (\d+) not (?:logged|written))?/) else {
+            throw failure(r)
+        }
+        let problems = lines.dropLast().map { $0.trimmingCharacters(in: .whitespaces) }.filter {
+            $0.hasPrefix("not logged") || $0.hasPrefix("not sure") || $0.contains(" not written") || $0.hasSuffix("already commented")
+        }
+        return .written(logged: Int(m.1) ?? 0, failed: m.2.flatMap { Int($0) } ?? 0, problems: problems.map(Remote.scrubHomes))
     }
 
     func failure(_ r: Proc.Result) -> Failure {
@@ -277,14 +301,23 @@ public struct WorklogPlan: Sendable {
     /// The plan's `commit_digest`: `log commit --expect` writes only this plan (nil: a zagon from before it).
     public var digest: String?
     var extras: TaskBackend.PlanExtras?
-    /// Tasks whose day summary this plan sends as a comment (`--summary-comment`).
+    /// Tasks whose day summary this plan sends as a comment (`--summary-comment`); the others' go in their worklogs
+    /// (`--with-summary`, false: a zagon from before texts).
     public var comments: [String] = []
+    public var summaries = false
     /// The worklog zone the plan is cut in (nil: a zagon from before it).
     public var zone: String? { extras?.tz }
     /// Sessions with work after the day summary, or all of them with no summary (nil: a zagon from before texts).
     public var newSessions: Int? { extras?.sessionsAfterSummary }
     /// When its day summary was made (epoch seconds; nil: none, or a zagon from before texts).
     public var summaryBuiltAt: Double? { extras?.summaryBuiltAt }
+    /// Rebuilt when "What to log" opens: sessions worked after its summary, the day is today or yesterday (browsing back
+    /// costs no AI calls), and the summary is not from the last half hour (a live session is newer at once).
+    // ponytail: two days and 30 min fixed; settings if they turn out wrong.
+    public func staleOnOpen(day: String, today: String, yesterday: String, now: Date) -> Bool {
+        guard (newSessions ?? 0) > 0, day == today || day == yesterday else { return false }
+        return summaryBuiltAt.map { now.timeIntervalSince1970 - $0 >= 30 * 60 } ?? true
+    }
     public func worklog(_ f: Fmt) -> WorklogData { TaskBackend.worklog(plan, jiraError: jiraError, extras: extras, comments: comments, f) }
 }
 
@@ -364,7 +397,7 @@ extension TaskBackend {
             let m = more[r.id], task = r.taskKey ?? r.jiraKey
             return WorklogRow(key: key, start: StoreDataProvider.date(r.start), end: StoreDataProvider.date(r.end), text: r.text,
                               destination: r.state == "logged" || r.state == "writing" ? .alreadyLogged : r.jiraKey != nil ? .jira : .zagonOnly,
-                              id: r.id, taskKey: task, textSource: m?.textSource.flatMap(WorklogTextSource.init(rawValue:)),
+                              id: r.id, taskKey: task, jiraKey: r.jiraKey, textSource: m?.textSource.flatMap(WorklogTextSource.init(rawValue:)),
                               daySummary: m?.daySummary ?? false, summary: m?.summary,
                               summarySource: m?.summarySource.flatMap(WorklogTextSource.init(rawValue:)),
                               summaryAsComment: task.map(comments.contains) ?? false,
@@ -376,7 +409,7 @@ extension TaskBackend {
             StoreDataProvider.date($0.start), StoreDataProvider.date($0.end))) }
         // By project when the zagon there says so: each can be kept out of the plans.
         let unassigned = (x?.unassigned ?? []).filter { $0.seconds >= 60 }.map { WorklogPart(kind: "project", name: $0.project ?? "—", sec: $0.seconds) }
-        if p.unassignedSec >= 60, x?.unassigned == nil { notes.append(f.t("worklog.noTask", f.duration(p.unassignedSec))) }
+        if p.unassignedSec >= 60, unassigned.isEmpty { notes.append(f.t("worklog.noTask", f.duration(p.unassignedSec))) }
         if !p.unknownKeys.isEmpty { notes.append(f.t("worklog.unknownKeys", p.unknownKeys.joined(separator: ", "))) }
         notes += p.unplaced.sorted { $0.key < $1.key }.map { f.t("worklog.unplaced", $0.key, f.duration(Double($0.value))) }
         notes += p.notes.map(Remote.scrubHomes)
@@ -385,9 +418,11 @@ extension TaskBackend {
         return WorklogData(day: StoreDataProvider.start(p.day, f.calendar.timeZone), workStart: nil, workEnd: nil,
                            userSec: p.userSec, sessionSec: p.sessionSec, rows: rows, splits: [], notes: notes,
                            jiraSec: p.jiraSec, jiraBlocked: blocked, zone: x?.tz,
-                           texts: x?.tz == nil ? nil : WorklogTexts(builtAt: x?.summaryBuiltAt.map(StoreDataProvider.date),
+                           texts: x?.tz == nil ? nil : WorklogSummaryInfo(builtAt: x?.summaryBuiltAt.map(StoreDataProvider.date),
                                                                     newSessions: x?.sessionsAfterSummary ?? 0),
-                           excluded: (x?.excluded ?? []).map { WorklogPart(kind: $0.kind ?? "", name: $0.name ?? "", sec: $0.seconds) },
+                           // Every exclusion of config.toml comes, with no time that day too.
+                           excluded: (x?.excluded ?? []).filter { $0.seconds >= 60 }
+                               .map { WorklogPart(kind: $0.kind ?? "", name: $0.name ?? "", sec: $0.seconds) },
                            unassigned: unassigned)
     }
 }
@@ -400,7 +435,11 @@ extension TaskBackend {
     public static func inProcess(_ store: Store, queue: DispatchQueue, now: Date) -> TaskBackend {
         nonisolated(unsafe) let store = store
         return TaskBackend(source: .local) { args, _ in
-            try queue.sync {
+            // As the CLI of this core answers options it does not have (the texts of 0.1.5).
+            if let unknown = args.first(where: { $0 == "--with-summary" || $0 == "--refresh" || $0.hasPrefix("--summary-comment") }) {
+                return Proc.Result(status: 64, out: Data(), err: Data("Error: Unknown option '\(unknown)'\n".utf8))
+            }
+            return try queue.sync {
                 let e = JSONEncoder()
                 e.keyEncodingStrategy = .convertToSnakeCase
                 e.outputFormatting = [.sortedKeys]

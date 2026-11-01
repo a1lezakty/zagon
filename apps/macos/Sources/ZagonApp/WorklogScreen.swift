@@ -92,11 +92,13 @@ struct WorklogScreen: View {
                     Flow(spacing: 8, lineSpacing: 8) {
                         if let commit = vm.commitTitle {
                             // Day summaries that go to Jira as comments, said in the confirmation.
-                            let comments = vm.rows.filter { $0.kind == .jira && $0.daySummary && $0.summaryAsComment && $0.summary != nil }
-                                .compactMap(\.taskKey).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+                            let comments = vm.rows.filter { $0.kind == .jira && $0.daySummary && $0.summaryAsComment && !($0.summary ?? "").isEmpty }
+                                .compactMap { $0.jiraKey ?? $0.taskKey }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+                            // Not while the plan loads or is rebuilt: what is shown is about to change.
                             PillButton(title: commit, primary: true, height: 38, radius: 10, fontSize: 14) {
                                 if app.taskBackend != nil, cache.loading == 0 { confirm = true }
                             }
+                            .disabled(cache.loading > 0)
                             .confirmationDialog(commit + "?", isPresented: $confirm) {
                                 Button(f.t("worklog.commitYes")) { app.commitPlan(key) }
                                 Button(f.t("common.cancel"), role: .cancel) {}
@@ -116,7 +118,7 @@ struct WorklogScreen: View {
                 Text(m).font(.system(size: 13)).foregroundColor(Z.muted).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .task(id: "\(String(describing: app.currentTaskSource))|\(key)") { app.openPlan(key) }
+        .task(id: "\(String(describing: app.currentTaskSource))|\(key)|\(app.planEpoch)") { app.openPlan(key) }
         .onChange(of: app.zoneShown) { _ in day = nil }
     }
 
@@ -153,7 +155,7 @@ struct WorklogScreen: View {
             .font(.system(size: 12, weight: .medium)).foregroundColor(Z.muted)
             .padding(.vertical, 6).padding(.horizontal, 6)
             ForEach(rows.indices, id: \.self) { i in
-                let r = rows[i], open = r.editable && app.worklogOpen == r.id
+                let r = rows[i], open = r.editable && app.worklogOpen == r.anchor
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
                         Text(r.key).font(code(13)).foregroundColor(Z.link).frame(width: 84, alignment: .leading)
@@ -170,12 +172,12 @@ struct WorklogScreen: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         HStack(spacing: 4) {
                             DestChip(text: r.destination, kind: r.kind)
-                            if r.kind != .alreadyLogged, let task = r.taskKey { rowMenu(task, day, f) }
+                            if r.editable, let task = r.taskKey { rowMenu(task, day, f) }
                         }
                         .frame(width: 120, alignment: .leading)
                     }
                     .padding(.vertical, 10).padding(.horizontal, 6)
-                    if open { RowEditor(row: r, day: day).id(r.id).padding(.bottom, 12) }
+                    if open { RowEditor(row: r, day: day).id(r.anchor).padding(.bottom, 12) }
                 }
                 .foregroundColor(r.kind == .alreadyLogged ? Z.muted : Z.text)
                 .overlay(alignment: .top) { Divider1(color: Z.border) }
@@ -192,7 +194,7 @@ struct WorklogScreen: View {
             }
             if let s = r.source { TextSourceLabel(source: s) }
             Text("·").foregroundColor(Z.faint)
-            Button { app.worklogOpen = open ? nil : r.id } label: {
+            Button { app.worklogOpen = open ? nil : r.anchor } label: {
                 HStack(spacing: 3) {
                     Text(f.t(open ? "worklog.collapse" : "worklog.expand"))
                     Image(systemName: open ? "chevron.up" : "chevron.down").font(.system(size: 9, weight: .semibold))
@@ -224,7 +226,7 @@ struct WorklogScreen: View {
             let p = lines[i].0, add = lines[i].1
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(p.text).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
-                if app.taskBackend != nil || snapshot {
+                if (app.taskBackend != nil || snapshot) && p.action {
                     Text("·").foregroundColor(Z.faint)
                     Button(f.t(add ? "worklog.excludeLink" : "worklog.unexclude")) {
                         app.editPlan(day, others: true) { try $0.exclude(p.kind, p.name, add: add) }
@@ -293,6 +295,7 @@ struct RowEditor: View {
                                 .fixedSize(horizontal: false, vertical: true).padding(.bottom, 18)
                         } else {
                             TextEditor(text: text).scrollContentBackground(.hidden).frame(minHeight: summary ? 280 : 90)
+                                .disabled(running != nil)
                         }
                     }
                     .font(.system(size: 13)).foregroundColor(Z.text)
@@ -313,7 +316,7 @@ struct RowEditor: View {
                         run("save") { [id = row.id ?? 0] in try $0.setText(id, typed, summary: summary) }
                     }
                     .disabled(draft == nil || draft == saved)
-                    if row.daySummary, let task = row.taskKey {
+                    if row.daySummary, row.kind == .jira, let task = row.taskKey {
                         Segmented(items: [f.t("worklog.summaryHere"), f.t("worklog.summaryComment")], selected: row.summaryAsComment ? 1 : 0,
                                   height: 30) { i in
                             if (i == 1) != row.summaryAsComment { app.setSummaryComment(day, task: task, i == 1) }

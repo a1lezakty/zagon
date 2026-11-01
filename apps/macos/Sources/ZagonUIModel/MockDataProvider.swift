@@ -344,7 +344,7 @@ public struct MockDataProvider: ZagonDataProvider {
                               id: 4, taskKey: "ZAG-1", textSource: .titles)],
             splits: [WorklogSplit(start: at(30, 8), end: at(30, 9),
                                   parts: [("web-app", 1800), (tr("API question", "вопрос по API"), 1800)])],
-            zone: cal.timeZone.identifier, texts: WorklogTexts(builtAt: at(30, 12.75), newSessions: 0),
+            zone: cal.timeZone.identifier, texts: WorklogSummaryInfo(builtAt: at(30, 12.75), newSessions: 0),
             excluded: [WorklogPart(kind: "project", name: "dotfiles", sec: 2 * Self.h + 40 * 60)],
             unassigned: [WorklogPart(kind: "project", name: "scratch", sec: 25 * 60)])
     }

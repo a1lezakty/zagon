@@ -25,9 +25,9 @@ final class AppState: ObservableObject {
     /// The worklog screen's period (nil: one day and its plan) and the open task row of its reconciliation.
     @Published var worklogPeriod: ClosedRange<Date>?
     @Published var reconcileOpen: String?
-    /// The plan row expanded in "What to log" (its id there), the tasks whose day summary goes as a comment by
+    /// The plan row expanded in "What to log" (`WorklogRowVM.anchor`), the tasks whose day summary goes as a comment by
     /// "source|day", and plans being rebuilt by "source|day" (`TaskSource.swift`).
-    @Published var worklogOpen: Int?
+    @Published var worklogOpen: String?
     @Published var summaryComments: [String: Set<String>] = [:]
     @Published var planRebuilding: Set<String> = []
     /// Rebuilds made on opening, by "source|day|summary time": one per summary.
@@ -38,8 +38,10 @@ final class AppState: ObservableObject {
     /// write could not save.
     @Published var worklogConfig: [TaskBackend.Source: TaskBackend.WorklogConfig?] = [:]
     @Published var worklogConfigMessage: String?
-    /// Writes of `[worklog]` one after another: each rewrites config.toml there.
+    /// Writes of `[worklog]` one after another: each rewrites config.toml there. Each written one bumps `planEpoch`:
+    /// plans asked before it are dropped, and the screen asks again.
     var worklogWrite: Task<Void, Never>?
+    @Published var planEpoch = 0
     /// What the period shows with no task source (the design sample, snapshots).
     var sampleReconcile: Reconciliation?
     /// Bumped when new data arrived (or a minute passed), so the screens read the store again.

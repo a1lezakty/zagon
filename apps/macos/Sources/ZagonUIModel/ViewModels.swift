@@ -735,6 +735,10 @@ public struct WorklogRowVM: Sendable, Equatable {
     public var kind: WorklogDestination
     public var id: Int? = nil
     public var taskKey: String? = nil
+    public var jiraKey: String? = nil
+    /// The row as it stays across reloads (an id changes when a row is planned anew): the task's day summary row, or the
+    /// task and the row's start.
+    public var anchor = ""
     /// The text alone, and the day summary of the task's longest row.
     public var plain = ""
     public var source: WorklogTextSource? = nil
@@ -762,6 +766,8 @@ public struct WorklogPartVM: Sendable, Equatable {
     public var text: String
     public var kind: String
     public var name: String
+    /// Time of no project cannot be kept out.
+    public var action = true
 }
 
 public struct WorklogVM: Sendable {
@@ -819,6 +825,7 @@ public struct WorklogVM: Sendable {
             let span = f.timeSpan(r.start, r.end), key = r.taskKey ?? r.key
             return WorklogRowVM(key: r.key, span: span, time: f.duration(r.sec), text: r.written,
                                 destination: f.t("dest.\(r.destination)"), kind: r.destination, id: r.id, taskKey: r.taskKey,
+                                jiraKey: r.jiraKey, anchor: key + "|" + (r.daySummary ? "summary" : String(Int(r.start.timeIntervalSince1970))),
                                 plain: r.text, source: r.textSource, daySummary: r.daySummary, summary: r.summary,
                                 summarySource: r.summarySource, summaryAsComment: r.summaryAsComment,
                                 sessions: r.sessions.map { s in
@@ -846,7 +853,10 @@ public struct WorklogVM: Sendable {
             zoneLine = machine.map { $0.secondsFromGMT(for: at) == z.secondsFromGMT(for: at) } ?? true
                 ? f.t("worklog.zone.same", label) : f.t("worklog.zone", label, machine.map { Zones.label($0, at: at) } ?? "")
         }
-        unassigned = w.unassigned.map { WorklogPartVM(text: f.t("worklog.noTaskIn", f.duration($0.sec), WorklogVM.part($0, f)), kind: $0.kind, name: $0.name) }
+        unassigned = w.unassigned.map {
+            WorklogPartVM(text: f.t("worklog.noTaskIn", f.duration($0.sec), WorklogVM.part($0, f)), kind: $0.kind, name: $0.name,
+                          action: !$0.name.isEmpty && $0.name != "—")
+        }
         excluded = w.excluded.map { WorklogPartVM(text: f.t("worklog.excluded", f.duration($0.sec), WorklogVM.part($0, f)), kind: $0.kind, name: $0.name) }
 
         var notes = w.splits.map { s in

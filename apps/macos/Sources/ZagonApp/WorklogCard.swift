@@ -24,7 +24,10 @@ struct WorklogCard: View {
         }
         .font(.system(size: 13)).foregroundColor(Z.text)
         .frame(maxWidth: 640, alignment: .leading)
-        .task(id: s) { app.loadWorklogConfig() }
+        .task(id: s) {
+            app.worklogConfigMessage = nil
+            app.loadWorklogConfig()
+        }
     }
 
     @ViewBuilder func rows(_ c: TaskBackend.WorklogConfig, _ s: TaskBackend.Source, _ f: Fmt) -> some View {
@@ -51,10 +54,7 @@ struct WorklogCard: View {
             Flow(spacing: 6, lineSpacing: 6) {
                 ForEach(jira, id: \.self) { chip($0) }
                 ForEach(own, id: \.self) { k in
-                    chip(k) {
-                        let rest = own.filter { $0 != k }
-                        app.setWorklog("projects", rest.joined(separator: ",")) { $0.projects = rest }
-                    }
+                    chip(k) { app.editProjects(remove: k) }
                 }
                 if let typed = adding {
                     Field(placeholder: "PROJ", text: Binding(get: { typed }, set: { adding = $0.uppercased() }), height: 28)
@@ -106,8 +106,7 @@ struct WorklogCard: View {
         adding = nil
         guard k.count >= 2, k.first?.isLetter == true, k.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }),
               !own.contains(k) else { return }
-        let all = own + [k]
-        app.setWorklog("projects", all.joined(separator: ",")) { $0.projects = all }
+        app.editProjects(add: k)
     }
 
     func line<V: View>(_ title: String, sub: String? = nil, @ViewBuilder _ content: () -> V) -> some View {
