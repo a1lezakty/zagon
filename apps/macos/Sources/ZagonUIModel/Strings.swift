@@ -349,6 +349,9 @@ enum Strings {
         "main.copyHandoff": "Copy a summary to continue in a new session",
         "handoff.copied": "Summary copied: paste it into a new chat to continue the work there.",
         "handoff.failed": "Summary not made: {0}",
+        "settings.tab.general": "General", "settings.tab.connect": "Claude Code and Codex", "settings.tab.jira": "Jira and worklogs",
+        "settings.tab.notify": "Notifications", "settings.tab.servers": "Servers",
+        "settings.look": "Appearance", "settings.look.system": "As the system", "settings.look.dark": "Dark", "settings.look.light": "Light",
     ]
 
     static let ru: [String: String] = [
@@ -708,5 +711,8 @@ enum Strings {
         "main.copyHandoff": "Скопировать сводку, чтобы продолжить в новой сессии",
         "handoff.copied": "Сводка скопирована: вставь её в новый чат, чтобы продолжить работу там.",
         "handoff.failed": "Сводка не собрана: {0}",
+        "settings.tab.general": "Общие", "settings.tab.connect": "Claude Code и Codex", "settings.tab.jira": "Jira и ворклоги",
+        "settings.tab.notify": "Уведомления", "settings.tab.servers": "Серверы",
+        "settings.look": "Оформление", "settings.look.system": "Как в системе", "settings.look.dark": "Тёмное", "settings.look.light": "Светлое",
     ]
 }

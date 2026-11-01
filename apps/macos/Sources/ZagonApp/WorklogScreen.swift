@@ -186,8 +186,8 @@ struct WorklogScreen: View {
     func labels(_ r: WorklogRowVM, open: Bool, _ f: Fmt) -> some View {
         HStack(spacing: 8) {
             if r.daySummary {
-                Text(f.t("worklog.daySummary")).foregroundColor(Color(hex: 0xC7B6FF))
-                    .padding(.horizontal, 8).frame(height: 20).background(Capsule().fill(Color(hex: 0x2E2846)))
+                Text(f.t("worklog.daySummary")).foregroundColor(Z.summaryTag)
+                    .padding(.horizontal, 8).frame(height: 20).background(Capsule().fill(Z.summaryTagFill))
             }
             if let s = r.source { TextSourceLabel(source: s) }
             Text("·").foregroundColor(Z.faint)

@@ -9,37 +9,76 @@ extension Color {
     }
 }
 
-/// Design colours (dark). Accents come from `Palette`; the rest are the mockups' greys and tints.
+/// One colour per appearance: `dark` in Dark Mode, `light` in Light Mode, picked where it is drawn (the window, the
+/// panel and the snapshots follow the app's appearance, `Appearance`).
+extension Color {
+    init(dark: UInt32, light: UInt32) {
+        self.init(nsColor: NSColor(name: nil) { a in
+            let hex = a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255,
+                           blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+        })
+    }
+}
+
+/// Design colours, dark and light. Dark ones come from `Palette` (the mockups); light ones are their counterparts,
+/// accents a shade deeper so text in them stays readable on white. Ring colours are the user's and stay as chosen.
 enum Z {
-    static let ground = Color(hex: Palette.ground)
-    static let sidebar = Color(hex: Palette.sidebar)
-    static let card = Color(hex: Palette.card)
-    static let popover = Color(hex: Palette.popover)
-    static let inset = Color(hex: Palette.inset)
-    static let border = Color(hex: Palette.border)
-    static let control = Color(hex: Palette.control)
-    static let text = Color(hex: Palette.text)
-    static let body = Color(hex: Palette.body)
-    static let secondary = Color(hex: Palette.secondary)
-    static let muted = Color(hex: Palette.muted)
-    static let track = Color(hex: Palette.track)
-    static let week = Color(hex: Palette.week)
-    static let working = Color(hex: Palette.working)
-    static let waiting = Color(hex: Palette.waiting)
-    static let good = Color(hex: Palette.good)
-    static let bad = Color(hex: Palette.bad)
-    static let link = Color(hex: Palette.link)
-    static let selection = Color(hex: Palette.selection)
-    static let divider = Color(hex: 0x2A2A2F)
-    static let barTrack = Color(hex: 0x2A2A2E)
-    static let laneBorder = Color(hex: 0x26262A)
-    static let button = Color(hex: 0x2C2C30)
-    static let buttonBorder = Color(hex: 0x44444A)
-    static let onAccent = Color(hex: 0x0E1420)
-    static let faint = Color(hex: 0x55555C)
-    static let soft = Color(hex: 0xD6D6DA)
-    static let focus = Color(hex: 0x3A4B69)
-    static let focusFill = Color(hex: 0x232C3B)
+    static let ground = Color(dark: Palette.ground, light: 0xF4F4F6)
+    static let sidebar = Color(dark: Palette.sidebar, light: 0xEBEBEE)
+    static let card = Color(dark: Palette.card, light: 0xFFFFFF)
+    static let popover = Color(dark: Palette.popover, light: 0xF7F7F9)
+    static let inset = Color(dark: Palette.inset, light: 0xF1F1F4)
+    static let border = Color(dark: Palette.border, light: 0xDCDCE2)
+    static let control = Color(dark: Palette.control, light: 0xE6E6EB)
+    static let text = Color(dark: Palette.text, light: 0x1C1C1F)
+    static let body = Color(dark: Palette.body, light: 0x38383E)
+    static let secondary = Color(dark: Palette.secondary, light: 0x5C5C64)
+    static let muted = Color(dark: Palette.muted, light: 0x74747C)
+    static let track = Color(dark: Palette.track, light: 0xDEDEE4)
+    static let week = Color(dark: Palette.week, light: 0x2E6AD6)
+    static let working = Color(dark: Palette.working, light: 0x138A6E)
+    static let waiting = Color(dark: Palette.waiting, light: 0xD8473A)
+    static let good = Color(dark: Palette.good, light: 0x12866A)
+    static let bad = Color(dark: Palette.bad, light: 0xC2382B)
+    static let link = Color(dark: Palette.link, light: 0x2459BF)
+    static let selection = Color(dark: Palette.selection, light: 0xD5E3FA)
+    static let divider = Color(dark: 0x2A2A2F, light: 0xE2E2E7)
+    static let barTrack = Color(dark: 0x2A2A2E, light: 0xE4E4E9)
+    static let laneBorder = Color(dark: 0x26262A, light: 0xE0E0E5)
+    static let button = Color(dark: 0x2C2C30, light: 0xFFFFFF)
+    static let buttonBorder = Color(dark: 0x44444A, light: 0xC8C8CF)
+    static let onAccent = Color(dark: 0x0E1420, light: 0xFFFFFF)
+    static let faint = Color(dark: 0x55555C, light: 0xB2B2BA)
+    static let soft = Color(dark: 0xD6D6DA, light: 0x3A3A40)
+    static let focus = Color(dark: 0x3A4B69, light: 0x9DB9EA)
+    static let focusFill = Color(dark: 0x232C3B, light: 0xE7EEFB)
+    /// A highlighted stat tile and an open row: a blue tint, its label.
+    static let blueFill = Color(dark: 0x1F2733, light: 0xEAF1FD)
+    static let blueInk = Color(dark: 0xC9D8EE, light: 0x2D4870)
+    static let openRow = Color(dark: 0x1C2230, light: 0xEAF1FD)
+    /// A session waiting for you (panel, Day): its card, border, button, second line and warning text.
+    static let alarmFill = Color(dark: 0x2E2425, light: 0xFDEEEC)
+    static let alarmBorder = Color(dark: 0x4D3234, light: 0xF0C6C1)
+    static let alarmButton = Color(dark: 0x3A2C2D, light: 0xFADCD8)
+    static let alarmSub = Color(dark: 0xB9AEB0, light: 0x7A5D5A)
+    static let alarmInk = Color(dark: 0xF0D9D6, light: 0x5C2A25)
+    /// Banners: amber (forecasts) and blue (notes).
+    static let amberFill = Color(dark: 0x2B2A24, light: 0xFFF6E0)
+    static let amberBorder = Color(dark: 0x4A4330, light: 0xEDD394)
+    static let amberInk = Color(dark: 0xEDE6D6, light: 0x4A3B12)
+    static let blueBorder = Color(dark: 0x2F4363, light: 0xB7CCF2)
+    static let blueText = Color(dark: 0xDCE7F7, light: 0x1F3354)
+    /// The day summary's tag in "What to log".
+    static let summaryTag = Color(dark: 0xC7B6FF, light: 0x5B3FC4)
+    static let summaryTagFill = Color(dark: 0x2E2846, light: 0xEEE8FF)
+    /// Time logged in Jira (stripes), and days before the sessions' coverage.
+    static let hatch = Color(dark: 0x2E2E33, light: 0xE6E6EB)
+    static let hatchLine = Color(dark: 0x4A4A52, light: 0xC9C9D0)
+    static let before = Color(dark: 0x3A3A40, light: 0xD0D0D7)
+    /// Calendar heat levels 0…5 (`Palette.heat` in the dark).
+    static let heat: [Color] = zip(Palette.heat, [0xEDEDF1, 0xDCE8FB, 0xBAD2F7, 0x8DB4F0, 0x5B91E6, 0x2E6AD6] as [UInt32])
+        .map { Color(dark: $0.0, light: $0.1) }
 }
 
 /// Numbers: the system font with monospaced digits.
@@ -184,7 +223,7 @@ struct StatTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: size >= 22 ? 4 : 3) {
             Text(stat.value).font(mono(size, .semibold)).foregroundColor(Z.text).lineLimit(1)
-            Text(stat.label).font(.system(size: 12)).foregroundColor(highlight ? Color(hex: 0xC9D8EE) : Z.secondary)
+            Text(stat.label).font(.system(size: 12)).foregroundColor(highlight ? Z.blueInk : Z.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let d = stat.delta {
                 Text(d).font(.system(size: 12)).foregroundColor(stat.good == false ? Z.bad : Z.good)
@@ -192,7 +231,7 @@ struct StatTile: View {
         }
         .padding(.vertical, size >= 22 ? 14 : 12).padding(.horizontal, size >= 22 ? 16 : 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(RoundedRectangle(cornerRadius: 12).fill(highlight ? Color(hex: 0x1F2733) : Z.card))
+        .background(RoundedRectangle(cornerRadius: 12).fill(highlight ? Z.blueFill : Z.card))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(highlight ? Z.focus : Z.border))
     }
 }
@@ -360,7 +399,7 @@ struct Banner: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Dot(color: dot).padding(.top, 5)
-            (Text(text.before) + Text(text.bold).bold().foregroundColor(.white) + Text(text.after))
+            (Text(text.before) + Text(text.bold).bold().foregroundColor(Z.text) + Text(text.after))
                 .font(.system(size: 13)).foregroundColor(ink).lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
@@ -371,12 +410,11 @@ struct Banner: View {
     }
 
     static func amber(_ e: Emphasis) -> Banner {
-        Banner(text: e, dot: Color(hex: Palette.fiveHour), fill: Color(hex: 0x2B2A24), border: Color(hex: 0x4A4330),
-               ink: Color(hex: 0xEDE6D6))
+        Banner(text: e, dot: Color(hex: Palette.fiveHour), fill: Z.amberFill, border: Z.amberBorder, ink: Z.amberInk)
     }
 
     static func blue(_ e: Emphasis) -> Banner {
-        Banner(text: e, dot: Z.week, fill: Color(hex: 0x1E2633), border: Color(hex: 0x2F4363), ink: Color(hex: 0xDCE7F7))
+        Banner(text: e, dot: Z.week, fill: Z.blueFill, border: Z.blueBorder, ink: Z.blueText)
     }
 }
 
@@ -479,7 +517,7 @@ struct Flow: Layout {
 struct Hatch: View {
     var body: some View {
         Canvas { ctx, size in
-            ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(hex: 0x2E2E33)))
+            ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Z.hatch))
             var p = Path()
             var x = -size.height
             while x < size.width {
@@ -487,7 +525,7 @@ struct Hatch: View {
                 p.addLine(to: CGPoint(x: x + size.height, y: 0))
                 x += 8.5
             }
-            ctx.stroke(p, with: .color(Color(hex: 0x4A4A52)), lineWidth: 3)
+            ctx.stroke(p, with: .color(Z.hatchLine), lineWidth: 3)
         }
     }
 }

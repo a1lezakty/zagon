@@ -295,7 +295,7 @@ struct RecRow: View {
             RecChip(kind: row.kind).frame(width: 120, alignment: .leading)
         }
         .padding(.vertical, 10).padding(.horizontal, 6)
-        .background(RoundedRectangle(cornerRadius: 8).fill(open == true ? Color(hex: 0x1C2230) : Color.clear))
+        .background(RoundedRectangle(cornerRadius: 8).fill(open == true ? Z.openRow : Color.clear))
         .contentShape(Rectangle())
         .overlay(alignment: .top) { Divider1(color: Z.border) }
     }
@@ -472,7 +472,7 @@ struct DayBars: View {
                     }
                     .font(.system(size: 12)).foregroundColor(Z.secondary)
                 }
-                if vm.coverageIndex != nil { Legend(color: Color(hex: 0x3A3A40), label: f.t("rec.lg.before")) }
+                if vm.coverageIndex != nil { Legend(color: Z.before, label: f.t("rec.lg.before")) }
             }
             GeometryReader { g in
                 let slot = g.size.width / n
@@ -516,7 +516,7 @@ struct DayBars: View {
             if b.kind == .before {
                 if b.jiraH > 0 {
                     ctx.fill(Path(roundedRect: CGRect(x: x, y: base - y(b.jiraH), width: w, height: y(b.jiraH)), cornerRadius: 2),
-                             with: .color(Color(hex: 0x3A3A40)))
+                             with: .color(Z.before))
                 }
                 continue
             }
@@ -544,14 +544,14 @@ struct DayBars: View {
         var c = ctx
         let shape = Path(roundedRect: r, cornerRadius: 2)
         c.clip(to: shape)
-        c.fill(shape, with: .color(Color(hex: 0x2E2E33)))
+        c.fill(shape, with: .color(Z.hatch))
         var lines = Path(), x = r.minX - r.height
         while x < r.maxX {
             lines.move(to: CGPoint(x: x, y: r.maxY))
             lines.addLine(to: CGPoint(x: x + r.height, y: r.minY))
             x += 8.5
         }
-        c.stroke(lines, with: .color(Color(hex: 0x4A4A52)), lineWidth: 3)
+        c.stroke(lines, with: .color(Z.hatchLine), lineWidth: 3)
     }
 }
 

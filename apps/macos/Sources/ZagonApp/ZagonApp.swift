@@ -9,11 +9,33 @@ enum Screen: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// The settings' tabs, in order.
+enum SettingsTab: String, CaseIterable {
+    case general, connect, jira, notify, servers
+}
+
+/// The look of the window and the panel: as the system, or always dark / light. The menu bar icon follows the bar.
+enum Appearance: String, CaseIterable {
+    case system, dark, light
+    var scheme: ColorScheme? { self == .system ? nil : self == .dark ? .dark : .light }
+    var ns: NSAppearance? { self == .system ? nil : NSAppearance(named: self == .dark ? .darkAqua : .aqua) }
+}
+
 @MainActor
 final class AppState: ObservableObject {
     let provider: any ZagonDataProvider
     let lang: Lang
     @Published var screen: Screen = .day
+    /// The settings tab shown (the last one is kept).
+    @Published var settingsTab = SettingsTab.general {
+        didSet { if persist { UserDefaults.standard.set(settingsTab.rawValue, forKey: "settingsTab") } }
+    }
+    @Published var appearance = Appearance.system {
+        didSet {
+            if persist { UserDefaults.standard.set(appearance.rawValue, forKey: "appearance") }
+            MainWindow.shared.setAppearance(appearance.ns)
+        }
+    }
     /// Day shown by the Day screen (and preselected in the calendar).
     @Published var day: Date
     /// "Day summary" opens this many days before today (the samples' detailed day is yesterday).
@@ -283,6 +305,8 @@ final class AppState: ObservableObject {
             state.macNotifyRemote = d.bool(forKey: "macNotifyRemote")
             state.rebuildOnOpen = d.object(forKey: "worklogRebuildOnOpen") as? Bool ?? true
             state.zoneID = d.string(forKey: "timeZone").flatMap { TimeZone(identifier: $0) == nil ? nil : $0 }
+            state.settingsTab = d.string(forKey: "settingsTab").flatMap(SettingsTab.init(rawValue:)) ?? .general
+            state.appearance = d.string(forKey: "appearance").flatMap(Appearance.init(rawValue:)) ?? .system
             // Open at login: on by default the first time Zagon runs from Applications (it can be turned off in settings).
             if cliPath != nil, Bundle.main.bundlePath.hasPrefix("/Applications/"), !d.bool(forKey: "launchAtLoginSet") {
                 d.set(true, forKey: "launchAtLoginSet")
@@ -669,7 +693,7 @@ struct ZagonApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MainPanel().environmentObject(state).preferredColorScheme(.dark)
+            MainPanel().environmentObject(state).preferredColorScheme(state.appearance.scheme)
         } label: {
             // Rebuilt on every AppState change: takes the picture as it is, drawing and reading nothing.
             let icon = state.statusImage
@@ -1052,25 +1076,25 @@ struct WaitingRow: View {
             Dot(color: Z.waiting)
             VStack(alignment: .leading, spacing: 1) {
                 Text(s.title).font(.system(size: 13, weight: .semibold)).foregroundColor(Z.text).lineLimit(1)
-                Text(s.subtitle).font(.system(size: 12)).foregroundColor(Color(hex: 0xB9AEB0)).lineLimit(1)
+                Text(s.subtitle).font(.system(size: 12)).foregroundColor(Z.alarmSub).lineLimit(1)
             }
             Spacer(minLength: 0)
             Text(s.time).font(mono(12)).foregroundColor(Z.bad).lineLimit(1)
-            HandoffButton(s: s, color: Z.text, background: Color(hex: 0x3A2C2D), border: Color(hex: 0x4D3234))
+            HandoffButton(s: s, color: Z.text, background: Z.alarmButton, border: Z.alarmBorder)
             Button { copy(s.command, $copied) } label: {
                 Image(systemName: copied ? "checkmark" : "terminal").font(.system(size: 12))
                     .foregroundColor(copied ? Z.good : Z.text)
                     .frame(width: 28, height: 28)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(hex: 0x3A2C2D)))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(hex: 0x4D3234)))
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Z.alarmButton))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Z.alarmBorder))
             }
             .buttonStyle(Pressable())
             .help(copied ? app.f.t("copied") : app.f.t("main.copyCommand") + ": " + s.command)
             .accessibilityLabel(app.f.t("main.copyCommand"))
         }
         .padding(.vertical, 9).padding(.horizontal, 10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(hex: 0x2E2425)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(hex: 0x4D3234)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Z.alarmFill))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Z.alarmBorder))
     }
 }
 

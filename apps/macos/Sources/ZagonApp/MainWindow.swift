@@ -59,6 +59,9 @@ final class MainWindow: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private weak var app: AppState?
 
+    /// nil: as the system.
+    func setAppearance(_ a: NSAppearance?) { window?.appearance = a }
+
     func show(_ app: AppState) {
         self.app = app
         let w = window ?? make(app)
@@ -73,13 +76,13 @@ final class MainWindow: NSObject, NSWindowDelegate {
     }
 
     private func make(_ app: AppState) -> NSWindow {
-        let host = NSHostingController(rootView: WindowRoot().environmentObject(app).preferredColorScheme(.dark)
+        let host = NSHostingController(rootView: WindowRoot().environmentObject(app)
             .frame(minWidth: 980, minHeight: 620))
         host.sizingOptions = [.minSize]
         let w = MainNSWindow(contentViewController: host)
         w.title = "Zagon"
         w.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        w.appearance = NSAppearance(named: .darkAqua)
+        w.appearance = app.appearance.ns
         w.isReleasedWhenClosed = false
         w.delegate = self
         w.setContentSize(NSSize(width: 1280, height: 860))
