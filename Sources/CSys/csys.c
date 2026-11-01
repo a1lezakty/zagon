@@ -76,3 +76,16 @@ void z_as_root(void) {
 int z_as_user(unsigned uid, unsigned gid) { (void)uid; (void)gid; return -1; }
 void z_as_root(void) {}
 #endif
+
+#include <fcntl.h>
+#include <unistd.h>
+int z_pipe_cloexec(int fd[2]) {
+#ifdef __linux__
+    return pipe2(fd, O_CLOEXEC);
+#else
+    if (pipe(fd) != 0) return -1;
+    fcntl(fd[0], F_SETFD, FD_CLOEXEC);
+    fcntl(fd[1], F_SETFD, FD_CLOEXEC);
+    return 0;
+#endif
+}

@@ -19,34 +19,132 @@ func writeScript(_ path: String, _ text: String) -> Bool {
 let zagonBin = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
     .deletingLastPathComponent().path + "/.build/debug/zagon"
 
+/// A child process for tests, in place of Foundation's Process. On Linux, Process makes its pipes with a plain pipe(2)
+/// and closes in the child only the descriptors it listed in /proc/self/fd a moment before the spawn: a child that a
+/// parallel test starts meanwhile keeps another test's pipe end open, and a read waiting for its end never returns
+/// (`swift test` hung on the farm for an hour: a hook waiting for EOF on a stdin a Jira test's curl held, that curl
+/// waiting on its own stdin the hook held). Here every pipe is close-on-exec from its creation (Sys.pipeCloexec,
+/// atomic on Linux), on Darwin the child closes every descriptor it is not given, and every wait has a limit.
+final class Child {
+    let pid: pid_t
+    private(set) var input: Int32, output: Int32  // our ends of its stdin and stdout pipes, -1 without
+    private var status: Int32?  // raw wait status once reaped
+    private let name: String
+
+    /// `argv[0]` is a path; `env` nil keeps this process's environment. stdin and stdout are pipes when asked for,
+    /// else /dev/null like stderr. The child leads a process group of its own.
+    init(_ argv: [String], env: [String: String]? = nil, stdin: Bool = false, stdout: Bool = false) throws {
+        signal(SIGPIPE, SIG_IGN)
+        name = ([String(argv[0].split(separator: "/").last ?? "")] + argv.dropFirst().prefix(3)).joined(separator: " ")
+        var i: [Int32] = [-1, -1], o: [Int32] = [-1, -1]
+        guard (!stdin || Sys.pipeCloexec(&i)) && (!stdout || Sys.pipeCloexec(&o)) else {
+            (i + o).forEach { if $0 >= 0 { close($0) } }
+            throw TaskError("\(name): no pipe")
+        }
+        #if canImport(Darwin)
+        var fa: posix_spawn_file_actions_t?, attr: posix_spawnattr_t?
+        let flags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT
+        #else
+        var fa = posix_spawn_file_actions_t(), attr = posix_spawnattr_t()
+        let flags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK
+        #endif
+        posix_spawn_file_actions_init(&fa)
+        posix_spawnattr_init(&attr)
+        defer { posix_spawn_file_actions_destroy(&fa); posix_spawnattr_destroy(&attr) }
+        // No signal blocked: the spawning thread may be a dispatch worker with most of them blocked, and a mock
+        // started from it would ignore SIGTERM.
+        var none = sigset_t()
+        posix_spawnattr_setsigmask(&attr, &none)
+        posix_spawnattr_setflags(&attr, Int16(flags))
+        if stdin { posix_spawn_file_actions_adddup2(&fa, i[0], 0) } else { posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0) }
+        if stdout { posix_spawn_file_actions_adddup2(&fa, o[1], 1) } else { posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0) }
+        posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0)
+        let cargs = argv.map { strdup($0) } + [nil]
+        let envp = env.map { $0.map { strdup("\($0.key)=\($0.value)") } + [nil] }
+        defer { cargs.forEach { free($0) }; envp?.forEach { free($0) } }
+        var p = pid_t()
+        let rc = envp.map { posix_spawn(&p, argv[0], &fa, &attr, cargs, $0) } ?? posix_spawn(&p, argv[0], &fa, &attr, cargs, environ)
+        if i[0] >= 0 { close(i[0]) }
+        if o[1] >= 0 { close(o[1]) }
+        guard rc == 0 else {
+            [i[1], o[0]].forEach { if $0 >= 0 { close($0) } }
+            throw TaskError("\(name): cannot start (\(rc))")
+        }
+        pid = p; input = i[1]; output = o[0]
+    }
+
+    /// Writes `bytes` to its stdin and closes it; a child that has already exited is not an error.
+    func feed(_ bytes: [UInt8]) {
+        _ = Sys.writeAll(fd: input, bytes)
+        close(input); input = -1
+    }
+
+    /// Its stdout to the end, or with `line` to the first newline. Throws when that does not come within `timeout` s.
+    func readOutput(line: Bool = false, timeout: Double = 60) throws -> [UInt8] {
+        var out: [UInt8] = [], buf = [UInt8](repeating: 0, count: 65536)
+        let deadline = Sys.now() + timeout
+        while !(line && out.contains(0x0A)) {
+            let left = deadline - Sys.now()
+            guard left > 0 else { throw TaskError("\(name): output not done after \(Int(timeout)) s") }
+            var p = pollfd(fd: output, events: Int16(POLLIN), revents: 0)
+            guard poll(&p, 1, Int32(min(left, 1) * 1000) + 1) > 0 else { continue }
+            let n = buf.withUnsafeMutableBytes { read(output, $0.baseAddress, $0.count) }
+            if n < 0 && errno == EINTR { continue }
+            guard n > 0 else { break }
+            out += buf[0..<n]
+        }
+        return out
+    }
+
+    /// Waits for the exit: its code, 128 + n on signal n. One still running after `timeout` s is killed with its group,
+    /// and that throws.
+    @discardableResult
+    func wait(timeout: Double = 60) throws -> Int32 {
+        let deadline = Sys.now() + timeout
+        while status == nil {
+            var s: Int32 = 0
+            let r = waitpid(pid, &s, WNOHANG)
+            if r == pid { status = s; break }
+            if r < 0 && errno != EINTR { status = 127 << 8; break }
+            if Sys.now() > deadline {
+                kill(-pid, SIGKILL)
+                while waitpid(pid, &s, 0) < 0 && errno == EINTR {}
+                status = s
+                throw TaskError("\(name): still running after \(Int(timeout)) s, killed")
+            }
+            usleep(5_000)
+        }
+        let sig = status! & 0x7f
+        return sig == 0 ? (status! >> 8) & 0xff : 128 + sig
+    }
+
+    /// Whether it died of a signal (`wait` gives 128 + n for that and for `exit(128 + n)` alike).
+    var signaled: Bool { status.map { $0 & 0x7f != 0 } ?? false }
+
+    /// Sends `sig` to the child alone, while it is not reaped (its pid may be reused after).
+    func send(_ sig: Int32) { if status == nil { kill(pid, sig) } }
+
+    deinit {
+        if status == nil { kill(-pid, SIGKILL); var s: Int32 = 0; while waitpid(pid, &s, 0) < 0 && errno == EINTR {} }
+        if input >= 0 { close(input) }
+        if output >= 0 { close(output) }
+    }
+}
+
 /// Runs the binary with exactly `env`, feeds `stdin`, returns (exit status, stdout).
 func runZagon(_ args: [String], stdin: [UInt8], env: [String: String]) throws -> (Int32, [UInt8]) {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: zagonBin)
-    p.arguments = args
-    p.environment = env
-    let inP = Pipe(), outP = Pipe()
-    p.standardInput = inP; p.standardOutput = outP; p.standardError = FileHandle.nullDevice
-    try p.run()
-    inP.fileHandleForWriting.write(Data(stdin))
-    try inP.fileHandleForWriting.close()
-    let out = outP.fileHandleForReading.readDataToEndOfFile()
-    p.waitUntilExit()
-    return (p.terminationStatus, Array(out))
+    let c = try Child([zagonBin] + args, env: env, stdin: true, stdout: true)
+    c.feed(stdin)
+    let out = try c.readOutput()
+    return (try c.wait(), out)
 }
 
 func shell(_ cmd: String, stdin: [UInt8]) throws -> [UInt8] {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/bin/sh")
-    p.arguments = ["-c", cmd]
-    let inP = Pipe(), outP = Pipe()
-    p.standardInput = inP; p.standardOutput = outP
-    try p.run()
-    inP.fileHandleForWriting.write(Data(stdin))
-    try inP.fileHandleForWriting.close()
-    let out = outP.fileHandleForReading.readDataToEndOfFile()
-    p.waitUntilExit()
-    return Array(out)
+    let c = try Child(["/bin/sh", "-c", cmd], stdin: true, stdout: true)
+    c.feed(stdin)
+    let out = try c.readOutput()
+    try c.wait()
+    return out
 }
 
 func spoolLines(_ dir: String) -> [String] {
@@ -102,7 +200,7 @@ let hookPayload = Array("""
         let paths = ZagonPaths(home: dir, dir: dir)
         func feed(_ event: String, _ payload: String, tool: String = "claude") {
             var fds: [Int32] = [0, 0]
-            #expect(pipe(&fds) == 0)
+            #expect(Sys.pipeCloexec(&fds))
             let b = Array(payload.utf8)
             _ = b.withUnsafeBytes { write(fds[1], $0.baseAddress, b.count) }
             close(fds[1])

@@ -350,8 +350,7 @@ let day0 = Time.dayBounds("2026-10-30")!.start
 
 /// A local stand-in for api.telegram.org and ntfy.sh (Python in the container): records every request.
 final class MockHTTP {
-    let proc = Process()
-    let stdin = Pipe()
+    let proc: Child
     let port: Int
     let log: String
     static let script = #"""
@@ -394,22 +393,12 @@ final class MockHTTP {
         log = dir + "/requests.ndjson"
         let script = dir + "/mock.py"
         try MockHTTP.script.write(toFile: script, atomically: true, encoding: .utf8)
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        proc.arguments = ["-I", script, log, dir + "/updates.json"]
-        let out = Pipe()
-        proc.standardOutput = out
-        proc.standardInput = stdin
-        proc.standardError = FileHandle.nullDevice
-        try proc.run()
-        var line = Data()
-        while !line.contains(0x0A) {
-            let d = out.fileHandleForReading.availableData
-            if d.isEmpty { throw CocoaError(.fileReadUnknown) }  // the mock did not start
-            line.append(d)
-        }
-        port = Int(String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))!
+        let c = try Child(["/usr/bin/python3", "-I", script, log, dir + "/updates.json"], stdin: true, stdout: true)
+        proc = c
+        guard let p = Int(String(decoding: try c.readOutput(line: true, timeout: 30), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)) else { throw TaskError("the mock did not start") }
+        port = p
     }
-    deinit { proc.terminate() }
 
     struct Request { var path: String; var headers: [String: String]; var body: [UInt8] }
     var requests: [Request] {
