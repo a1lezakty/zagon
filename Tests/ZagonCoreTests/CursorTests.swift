@@ -201,7 +201,7 @@ import Testing
     /// `zagon hook <tool> <event>` with `payload` on stdin, as Cursor runs it.
     func hook(_ paths: ZagonPaths, _ event: String, _ payload: String, tool: String = "claude") {
         var fds: [Int32] = [0, 0]
-        #expect(pipe(&fds) == 0)
+        #expect(Sys.pipeCloexec(&fds))
         let b = Array(payload.utf8)
         _ = b.withUnsafeBytes { write(fds[1], $0.baseAddress, b.count) }
         close(fds[1])

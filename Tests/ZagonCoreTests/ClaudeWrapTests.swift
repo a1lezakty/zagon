@@ -82,7 +82,7 @@ import Testing
         let p = try wrap([dir + "/claude", "--output-format", "stream-json"], dir: dir)
         let child = Int32(String(decoding: try p.readOutput(line: true), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
         p.send(SIGTERM)
-        #expect(try p.wait() == 128 + SIGTERM)
+        #expect(try p.wait() == 128 + SIGTERM && p.signaled)
         #expect(Sys.readFile(dir + "/mark") == Array("term\n".utf8))
         #expect(child.map { kill($0, 0) != 0 } == true)
     }

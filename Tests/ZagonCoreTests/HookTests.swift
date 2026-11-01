@@ -118,8 +118,11 @@ final class Child {
         return sig == 0 ? (status! >> 8) & 0xff : 128 + sig
     }
 
-    /// Sends `sig` to the child alone.
-    func send(_ sig: Int32) { kill(pid, sig) }
+    /// Whether it died of a signal (`wait` gives 128 + n for that and for `exit(128 + n)` alike).
+    var signaled: Bool { status.map { $0 & 0x7f != 0 } ?? false }
+
+    /// Sends `sig` to the child alone, while it is not reaped (its pid may be reused after).
+    func send(_ sig: Int32) { if status == nil { kill(pid, sig) } }
 
     deinit {
         if status == nil { kill(-pid, SIGKILL); var s: Int32 = 0; while waitpid(pid, &s, 0) < 0 && errno == EINTR {} }
@@ -197,7 +200,7 @@ let hookPayload = Array("""
         let paths = ZagonPaths(home: dir, dir: dir)
         func feed(_ event: String, _ payload: String, tool: String = "claude") {
             var fds: [Int32] = [0, 0]
-            #expect(pipe(&fds) == 0)
+            #expect(Sys.pipeCloexec(&fds))
             let b = Array(payload.utf8)
             _ = b.withUnsafeBytes { write(fds[1], $0.baseAddress, b.count) }
             close(fds[1])
