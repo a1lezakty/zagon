@@ -117,7 +117,7 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   `[tasks] key_pattern`, default `[A-Z][A-Z0-9]+-\d+`, upper-cased, a match glued to a letter or digit before it is
   not a key; `""` = off). Only messages Ingest takes as actions (not history copied into a resumed file); filled
   with or without `index_prompts`; retracted with its file. No text is stored. Not from `<system-reminder>` spans
-  (memory, CLAUDE.md) nor from a line holding a clock range (`09:00–10:15`: a pasted worklog list). `how` (v7):
+  (memory, CLAUDE.md) nor from a paragraph or numbered item holding a clock range (`09:00–10:15`: a pasted worklog list). `how` (v7):
   NULL = typed; `brief` = from the first non-empty line of a brief the message names (an absolute or `~/` path to a
   regular .md/.txt file of at most 256 KB on this machine, at most 5 paths per message; never the brief's body). A key
   typed and in a brief at once stays typed. The v7 migration marks Claude files changed in the last 14 days for one

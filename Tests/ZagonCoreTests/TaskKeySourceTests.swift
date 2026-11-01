@@ -22,6 +22,10 @@ import Testing
             1. PROJ-718, 09:00–10:15 (1 h 15 m) — stand
             2. PROJ-670 9:00-10:15 build
             3. PROJ-671, 11:00 — 12:30
+            4. Release of PROJ-672 in the evening,
+               «example-project: build»,
+               18:00–20:00 (2 h).
+
             and now PROJ-5 please
             """, session: "B")])
         env.scan()

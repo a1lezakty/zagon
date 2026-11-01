@@ -627,7 +627,14 @@ public final class Ingest {
     func taskKeys(_ text: String) -> [String] {
         guard let keys else { return [] }
         var out: [String] = []
-        for line in text.split(whereSeparator: \.isNewline) where line.firstMatch(of: clockRange) == nil {
+        // A block (a paragraph, or a numbered item up to the next) that holds a clock range is a pasted worklog list:
+        // none of its keys count, also those on its other lines.
+        var blocks: [[Substring]] = [[]]
+        for line in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            if line.allSatisfy(\.isWhitespace) || line.firstMatch(of: itemStart) != nil { blocks.append([]) }
+            blocks[blocks.count - 1].append(line)
+        }
+        for line in blocks.filter({ !$0.contains { $0.firstMatch(of: clockRange) != nil } }).joined() {
             for m in line.matches(of: keys) {
                 if m.range.lowerBound > line.startIndex {
                     let c = line[line.index(before: m.range.lowerBound)]
@@ -641,6 +648,7 @@ public final class Ingest {
     }
 
     let clockRange = #/\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}/#
+    let itemStart = #/^\s*\d{1,2}[.)]\s/#
 
     /// The message without what the agent's harness added to it (`<system-reminder>` spans: memory, CLAUDE.md, notes
     /// of the tool); an unclosed span runs to the end.

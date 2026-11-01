@@ -23,9 +23,10 @@ public struct JiraCache: Sendable, Equatable {
 
     public static func load(_ store: Store) -> JiraCache { stored(store).cache }
 
-    static func stored(_ store: Store) -> (cache: JiraCache, tried: Timestamp) {
+    /// `legacy`: a read from before the project list (0.1.4).
+    static func stored(_ store: Store) -> (cache: JiraCache, tried: Timestamp, legacy: Bool) {
         guard let raw = try? store.db.one("SELECT value FROM meta WHERE key = ?", [.text(metaKey)], { $0.text(0) }), let text = raw,
-              let v = JValue.parse(text) else { return (JiraCache(), 0) }
+              let v = JValue.parse(text) else { return (JiraCache(), 0, false) }
         var c = JiraCache()
         c.at = v["at"]?.double ?? 0
         if case .object(let m)? = v["issues"] {
@@ -38,7 +39,7 @@ public struct JiraCache: Sendable, Equatable {
         c.logged = Set(v["logged"]?.array?.compactMap(\.string) ?? [])
         c.projects = Set(v["projects"]?.array?.compactMap(\.string) ?? [])
         if let r = v["review"]?.array?.compactMap(\.string) { c.review = r }
-        return (c, v["tried"]?.double ?? c.at)
+        return (c, v["tried"]?.double ?? c.at, v["projects"] == nil && c.at > 0)
     }
 
     func save(_ store: Store, tried: Timestamp) throws {
@@ -91,8 +92,10 @@ public struct JiraCache: Sendable, Equatable {
     /// is logged and the last read is used.
     public static func current(_ store: Store, _ jira: JiraClient?, now: Timestamp = Time.now(),
                                log: (String) -> Void = { _ in }) -> JiraCache {
-        let (c, tried) = stored(store)
-        guard let jira, now - c.at >= ttl, now - tried >= retry else { return c }
+        let (c, tried, legacy) = stored(store)
+        // A read from before the project list (0.1.4) is read again now: until then every key counts.
+        let failedLately = tried > c.at && now - tried < retry
+        guard let jira, now - c.at >= ttl || legacy, !failedLately else { return c }
         do { return try refresh(store, jira, now: now) } catch {
             log("jira: \(error)")
             // Only the time of the try: a read another process saved meanwhile stays.

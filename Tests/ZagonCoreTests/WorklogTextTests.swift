@@ -268,6 +268,15 @@ struct WorklogCommentTests {
         #expect(try later.contains { $0.state == "planned" } && later.allSatisfy { $0.daySummary == false } && comments(m).isEmpty)
     }
 
+    /// A Jira read kept by 0.1.4 has no project list: it is read again at once, so BRIEF-2 and the like stop counting.
+    @Test func aReadFromBeforeTheProjectListIsReadAgain() throws {
+        let m = try JiraMock(state: Self.state)
+        let f = try Fixture()
+        try f.store.db.run("INSERT INTO meta(key, value) VALUES('jira:issues', ?)", [.text(#"{"at": \#(D0), "tried": \#(D0), "issues": {}, "mine": []}"#)])
+        #expect(JiraCache.current(f.store, try JiraClient(m.config), now: D0 + 60).at == D0 + 60)
+        #expect(JiraCache.current(f.store, try JiraClient(m.config), now: D0 + 700).at == D0 + 60)   // now with its list: fresh
+    }
+
     @Test func aLostReplyIsFoundInJiraNextTime() throws {
         let m = try JiraMock(state: #"{"me": "acc-me", "lose_post_replies": 1, "issues": {"PROJ-1": {"summary": "Parser", "status": "In Progress", "category": "indeterminate", "assignee": "acc-me"}}}"#)
         let f = try Fixture()

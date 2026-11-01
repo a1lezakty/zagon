@@ -275,7 +275,7 @@ build) and by the service at 23:55; a text set by hand is never replaced. The su
 `zagon log commit --with-summary` puts it into the task's longest worklog, `--summary-comment PROJ-1` writes it as one
 comment on the issue (once per task and day). A session counts for a task when the key is in what you typed, in the
 first line of a brief file your message points to, in the git branch, a commit, the session title or a manual link —
-never from memory files, CLAUDE.md or files the agent read; a line with a clock range (a pasted worklog list) gives no
+never from memory files, CLAUDE.md or files the agent read; a paragraph or numbered item with a clock range (a pasted worklog list) gives no
 key; once Jira's project list is known, only keys of those projects (and `projects`) count.
 
 Create the token at id.atlassian.com → Security → API tokens, then keep it in a file only you can read:

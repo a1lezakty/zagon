@@ -30,7 +30,7 @@ is about (of the session and its sub-agents, by the folder of each interval, `ac
 - branch the agent recorded (`session.git_branch`): the intervals in the session's folder;
 - typed key (`task_key`, written at ingest, no text; works with `index_prompts` off): from the message on through
   the following intervals while no pause is longer than `idle_gap`, until a message with other keys. Not from
-  `<system-reminder>` spans or lines with a clock range (a pasted worklog list). A key in the title (first non-empty
+  `<system-reminder>` spans or a paragraph or numbered item with a clock range (a pasted worklog list). A key in the title (first non-empty
   line) of a brief the message points to (`read /path/BRIEF.md`) reaches the same way, as `brief` (rank of a typed key);
   the brief's body cites other keys and gives none;
 - `worktree`: the branch checked out in the interval's folder at that time (checkouts from the folder's HEAD
