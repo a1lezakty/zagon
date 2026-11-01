@@ -133,7 +133,15 @@ public struct ClaudeParser: LineParser {
         let isQueued = !isAssistant && !isUser && !isSub && contains(line, "\"queued_command\"")
         let isTitle = !isAssistant && !isUser && !isQueued && !isSub &&
             (contains(line, "\"customTitle\"") || contains(line, "\"agentName\"") || contains(line, "\"aiTitle\""))
-        guard isAssistant || isUser || isQueued || isTitle else { return }
+        guard isAssistant || isUser || isQueued || isTitle else {
+            // JSON written with spaces (`"type": "user"`) never matches the checks above: compact it and look again.
+            // Only lines whose first separator has a space pay for this (none in any version seen so far).
+            if Self.spaced(line) {
+                let b = Self.compacted(line)
+                if b.withUnsafeBytes({ !Self.spaced($0) }) { b.withUnsafeBytes { parse(line: $0, into: &out) } }
+            }
+            return
+        }
         // The text is needed even without indexing: it tells notifications from typed messages.
         let wantText = (isUser || isQueued) && !isSub
         guard let r = Self.scan(line, wantText: wantText) ?? Self.decode(line) else { out.badLines += 1; return }
@@ -144,6 +152,7 @@ public struct ClaudeParser: LineParser {
         let ts = r.timestamp.flatMap { Time.parseISO($0) }
         switch r.type {
         case "assistant":
+            if r.message?.usage == nil { out.noUsage += 1 }  // a renamed `usage` would silently count no tokens
             guard let ts, let m = r.message else { return }
             meta(r, model: m.model, into: &out)
             if let u = m.usage {
@@ -305,6 +314,37 @@ public struct ClaudeParser: LineParser {
     }
 
     // MARK: decoding
+
+    /// A JSON object with whitespace after `{` or around its first key's colon (`{ "type"`, `{"type": "user"`).
+    /// Looks at the first key only, so it costs nothing on compact lines.
+    static func spaced(_ l: UnsafeRawBufferPointer) -> Bool {
+        func ws(_ b: UInt8) -> Bool { b == 0x20 || b == 0x09 || b == 0x0D || b == 0x0A }
+        guard l.count > 3, l[0] == 0x7B else { return false }
+        if ws(l[1]) { return true }
+        guard l[1] == 0x22 else { return false }
+        var i = 2
+        while i < min(l.count, 256), l[i] != 0x22 { i += 1 }  // the first key's closing quote
+        guard i + 2 < l.count else { return false }
+        return ws(l[i + 1]) || (l[i + 1] == 0x3A && ws(l[i + 2]))
+    }
+
+    /// The line without whitespace outside strings.
+    static func compacted(_ l: UnsafeRawBufferPointer) -> [UInt8] {
+        var out: [UInt8] = []
+        out.reserveCapacity(l.count)
+        var inString = false, escaped = false
+        for b in l {
+            if inString {
+                if escaped { escaped = false } else if b == 0x5C { escaped = true } else if b == 0x22 { inString = false }
+            } else if b == 0x22 {
+                inString = true
+            } else if b == 0x20 || b == 0x09 || b == 0x0D || b == 0x0A {
+                continue
+            }
+            out.append(b)
+        }
+        return out
+    }
 
     static let decoder = JSONDecoder()
 

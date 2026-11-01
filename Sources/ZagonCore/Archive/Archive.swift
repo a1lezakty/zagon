@@ -20,6 +20,7 @@ public struct ArchiveError: Error, CustomStringConvertible {
 /// project dir) gets `-<id>` added. One zstd frame per file with its size in the header and a checksum. A file is (re)written
 /// whole once its session has been quiet for `idle` seconds and the original differs from the copy (size or a newer
 /// mtime); a gone original never touches its copy. Writes go to `<name>.tmp`, then rename.
+/// An organization's retention (`retention`) bounds the Claude copies: see `tick`.
 public struct Archive {
     public let store: Store
     /// `~/.zagon/archive`
@@ -29,6 +30,8 @@ public struct Archive {
     public var idle: Double = 3600
     /// Tests: runs after the new copy is complete and before it replaces the old one.
     var beforeRename: (() throws -> Void)?
+    /// Where `tick` reads the retention from (`Archive.retention`); tests point them at temp files.
+    var managedDir = Archive.managedSettingsDir, remoteSettings = Archive.remoteSettingsFile
 
     public init(store: Store, dir: String) { self.store = store; self.dir = dir }
 
@@ -41,18 +44,25 @@ public struct Archive {
         public var rawBytes = 0, packedBytes = 0
         /// Copies whose original is gone (`stats` only).
         public var orphans = 0
+        /// Copies removed by this pass for the retention (`tick` only).
+        public var removed = 0
     }
 
-    struct File { var id: Int64; var path: String; var agent: String; var size: Int; var mtime: Double? }
+    /// `seen`: the mtime Ingest last saw (`source_file.mtime`), for a gone original.
+    struct File { var id: Int64; var path: String; var agent: String; var size: Int; var mtime: Double?; var seen: Double? }
 
     // MARK: pass
 
     /// One pass over the transcripts Ingest knows (`source_file`): copies what is quiet and new or changed.
+    /// With a retention of N days (`Archive.retention`), a Claude file last written more than N days ago (its mtime,
+    /// else the one Ingest last saw, else the session's `last_at`; Claude Code deletes by mtime) is not copied, and its
+    /// copy is removed with its `meta` key and `session.archive_path`. 0 keeps no Claude copies. Codex copies are not
+    /// bound by it.
     @discardableResult
     public func tick(now: Double = Sys.now()) throws -> Stats {
         var sessions: [String: (tool: String, started: Double?, lastAt: Double?, archivePath: String?, files: [File])] = [:]
         try store.db.query("""
-            SELECT f.session_id, f.tool, f.path, f.agent, s.started_at, s.last_at, s.archive_path, f.id
+            SELECT f.session_id, f.tool, f.path, f.agent, s.started_at, s.last_at, s.archive_path, f.id, f.mtime
             FROM source_file f LEFT JOIN session s ON s.id = f.session_id
             WHERE f.session_id IS NOT NULL AND f.tool IN ('claude', 'codex') ORDER BY f.id
             """) { r in
@@ -60,12 +70,19 @@ public struct Archive {
             var st = stat()
             let exists = stat(path, &st) == 0
             let f = File(id: r.int64(7), path: path, agent: r.text(3) ?? "", size: exists ? Int(st.st_size) : -1,
-                         mtime: exists ? Archive.mtime(st) : nil)
+                         mtime: exists ? Archive.mtime(st) : nil, seen: r.optReal(8))
             sessions[sid, default: (r.text(1) ?? "", r.optReal(4), r.optReal(5), r.text(6), [])].files.append(f)
         }
+        let cutoff = Archive.retention(managedDir: managedDir, remoteSettings: remoteSettings).days.map { now - Double($0) * 86400 }
         var out = Stats()
         for (sid, s) in sessions.sorted(by: { $0.key < $1.key }) {
-            let live = s.files.filter { $0.mtime != nil }
+            var files = s.files
+            if let cutoff, s.tool == "claude" {
+                let old = Set(files.filter { ($0.mtime ?? $0.seen ?? s.lastAt ?? .infinity) < cutoff }.map(\.id))
+                for f in files where old.contains(f.id) { if try drop(f, sessionId: sid) { out.removed += 1 } }
+                files.removeAll { old.contains($0.id) }
+            }
+            let live = files.filter { $0.mtime != nil }
             guard !live.isEmpty, live.allSatisfy({ now - $0.mtime! >= idle }), (s.lastAt ?? 0) <= now - idle else { continue }
             let base = s.archivePath.map { String($0.dropLast(".jsonl.zst".count)) } ?? defaultBase(sid, tool: s.tool,
                 at: s.started ?? live.compactMap(\.mtime).min()!)
@@ -100,6 +117,24 @@ public struct Archive {
         if taken { want = String(want.dropLast(".jsonl.zst".count)) + "-\(f.id).jsonl.zst" }
         try store.db.run("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", [.text(key), .text(want)])
         return want
+    }
+
+    /// Removes the copy of a tracked file, then its pointers (`meta`, `session.archive_path`): a crash in between
+    /// leaves a pointer to a missing copy, which readers skip and the next pass drops. Empty folders it leaves go too.
+    func drop(_ f: File, sessionId sid: String) throws -> Bool {
+        let key = "archive:file:\(f.id)"
+        guard let p = try store.db.one("SELECT value FROM meta WHERE key = ?", [.text(key)], { $0.text(0) }) ?? nil else { return false }
+        // Not removed (permissions, a read-only disk): the pointers stay, the next pass tries again.
+        let rc = unlink(p)
+        guard rc == 0 || errno == ENOENT else { return false }
+        let removed = rc == 0
+        var d = Sys.dirname(p)
+        while d.hasPrefix(dir + "/"), rmdir(d) == 0 { d = Sys.dirname(d) }
+        try store.db.transaction {
+            try store.db.run("UPDATE session SET archive_path = NULL WHERE id = ? AND archive_path = ?", [.text(sid), .text(p)])
+            try store.db.run("DELETE FROM meta WHERE key = ?", [.text(key)])
+        }
+        return removed
     }
 
     func defaultBase(_ sid: String, tool: String, at t: Double) -> String {
@@ -291,6 +326,45 @@ public struct Archive {
             let p = dir + "/" + name
             if Sys.isDir(p) { walk(p, body) } else { body(p) }
         }
+    }
+}
+
+// MARK: retention
+
+extension Archive {
+    /// The folder of Claude Code's file-based managed settings (`managed-settings.json`, `managed-settings.d/*.json`).
+    #if os(macOS)
+    public static let managedSettingsDir = "/Library/Application Support/ClaudeCode"
+    #else
+    public static let managedSettingsDir = "/etc/claude-code"
+    #endif
+    /// Claude Code's copy of the organization's server-managed settings.
+    public static var remoteSettingsFile: String {
+        (Sys.env("CLAUDE_CONFIG_DIR") ?? (Sys.env("HOME") ?? "") + "/.claude") + "/remote-settings.json"
+    }
+
+    /// How long the archive may keep Claude Code transcripts: the `cleanupPeriodDays` an organization set in Claude
+    /// Code's managed settings, and the file it came from (`source`); `(nil, nil)` = none set, copies are kept for
+    /// good. Server-managed settings (`remoteSettings`) win over the files; among the files `managed-settings.json` is
+    /// read first, then `managed-settings.d/*.json` (not dot files) in name order, a later file overriding an earlier
+    /// one. A value that is not a whole number >= 0 is ignored (Claude Code rejects it too). `days == 0`: Claude Code
+    /// now rejects 0 (it used to turn transcripts off); the archive takes it as "keep nothing". The user's own
+    /// `~/.claude/settings.json` does not count: keeping beyond it is what the archive is for. Not read: macOS
+    /// configuration profiles (MDM) and the Windows registry.
+    public static func retention(managedDir: String = managedSettingsDir,
+                                 remoteSettings: String = remoteSettingsFile) -> (days: Int?, source: String?) {
+        func days(_ path: String) -> Int? {
+            guard !Sys.isDir(path), let b = Sys.readFile(path), let d = JValue.parse(b)?["cleanupPeriodDays"]?.double,
+                  d >= 0, d < 1e6, d == d.rounded(.down) else { return nil }
+            return Int(d)
+        }
+        if let d = days(remoteSettings) { return (d, remoteSettings) }
+        let dropIns = managedDir + "/managed-settings.d"
+        let files = [managedDir + "/managed-settings.json"]
+            + Sys.listDir(dropIns).filter { $0.hasSuffix(".json") && !$0.hasPrefix(".") }.map { dropIns + "/" + $0 }
+        var out: (days: Int?, source: String?) = (nil, nil)
+        for f in files { if let d = days(f) { out = (d, f) } }
+        return out
     }
 }
 

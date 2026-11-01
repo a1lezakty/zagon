@@ -23,6 +23,10 @@ import Testing
         let line = h.line(watched: 7, batches: 3, files: 5, errors: 1, fullPasses: 0)
         #expect(line.hasPrefix("health: rss "))
         for part in ["watched 7 dirs", "batches 3", "files 5", "errors 1", "full passes 0", " db ", "cpu "] { #expect(line.contains(part)) }
+        var s = IngestStats()
+        s.lines = 900; s.usageRecords = 3; s.noUsage = 1; s.badLines = 2
+        #expect(h.line(watched: 7, batches: 0, files: 0, errors: 0, fullPasses: 1, seen: s)
+            .hasSuffix("full passes 1, lines 900, usage 3, no usage 1 (25.0 %), bad lines 2"))
     }
 
     @Test func permissionWaitKeepsTheToolName() throws {

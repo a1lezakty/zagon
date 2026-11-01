@@ -9,8 +9,10 @@ import Darwin
 
 extension Ingest {
     /// Ingests changed files (e.g. from a watcher) in one transaction, then refreshes the derived tables.
-    /// Paths outside every source root, or not accepted by it, are ignored.
-    public func update(paths: Set<String>) throws {
+    /// Paths outside every source root, or not accepted by it, are ignored. Returns the stats of this update.
+    @discardableResult
+    public func update(paths: Set<String>) throws -> IngestStats {
+        stats = IngestStats()
         try db.transaction {
             for p in paths.sorted() {
                 guard let src = sources.first(where: { p.hasPrefix($0.root + "/") }) else { continue }
@@ -19,6 +21,7 @@ extension Ingest {
             }
         }
         try finish()
+        return stats
     }
 }
 
@@ -47,6 +50,12 @@ public final class Daemon {
 
     /// Counters since the last health line.
     var batches = 0, files = 0, errors = 0, fullPasses = 0
+    /// Lines, usage records, records without usage and bad lines read since the last health line (format drift).
+    var seen = IngestStats()
+
+    func count(_ s: IngestStats) {
+        seen.lines += s.lines; seen.usageRecords += s.usageRecords; seen.noUsage += s.noUsage; seen.badLines += s.badLines
+    }
 
     public init(ingest: Ingest, options: Options, log: @escaping (String) -> Void = { _ = Sys.writeAll(fd: 2, Array("zagon daemon: \($0)\n".utf8)) }) {
         self.ingest = ingest; self.options = options; self.log = log
@@ -58,8 +67,9 @@ public final class Daemon {
         try syncThreads()
         try spool()
         fullPasses += 1
+        count(s)
         log("full pass (\(reason)): \(s.filesSeen) files, \(s.filesRead) read, \(s.bytes >> 10) KB, \(s.badLines) bad lines, "
-            + "\(s.resets) resets, \(s.moves) moves, \(Int(s.seconds * 1000)) ms")
+            + "\(s.resets) resets, \(s.moves) moves, \(Int(s.seconds * 1000)) ms, \(Health.drift(s))")
     }
 
     func syncThreads() throws {
@@ -83,7 +93,7 @@ public final class Daemon {
             else { changed.insert(p) }
         }
         let t0 = Time.monotonic()
-        if !changed.isEmpty { try ingest.update(paths: changed) }
+        if !changed.isEmpty { count(try ingest.update(paths: changed)) }
         // ponytail: every change of Codex's state db re-reads its threads (a few ms); rate-limit if it ever shows up.
         if threadsChanged { try syncThreads() }
         if spoolChanged { try spool() }
@@ -174,8 +184,9 @@ public final class Daemon {
                 }
             }
             if health.due(every: options.healthEvery) {
-                log(health.line(watched: w.watched.count, batches: batches, files: files, errors: errors, fullPasses: fullPasses))
-                batches = 0; files = 0; errors = 0; fullPasses = 0
+                log(health.line(watched: w.watched.count, batches: batches, files: files, errors: errors, fullPasses: fullPasses,
+                                seen: seen))
+                batches = 0; files = 0; errors = 0; fullPasses = 0; seen = IngestStats()
             }
         }
     }
@@ -213,7 +224,7 @@ struct Health {
 
     func due(every: Double) -> Bool { Time.monotonic() - at >= every }
 
-    mutating func line(watched: Int, batches: Int, files: Int, errors: Int, fullPasses: Int) -> String {
+    mutating func line(watched: Int, batches: Int, files: Int, errors: Int, fullPasses: Int, seen: IngestStats = IngestStats()) -> String {
         let now = Time.monotonic(), c = Health.cpuSeconds()
         let interval = now - at, used = c - cpu
         at = now; cpu = c
@@ -222,7 +233,15 @@ struct Health {
         let m = Health.memory()
         return "health: rss \(mb(m.rss)) (anon \(mb(m.anon)), file \(mb(m.file))), cpu \(Double(Int(used * 100)) / 100) s in \(Int(interval)) s "
             + "(\(Double(Int(used / max(interval, 1) * 10_000)) / 100) %), db \(mb(pages)), watched \(watched) dirs, "
-            + "batches \(batches), files \(files), errors \(errors), full passes \(fullPasses)"
+            + "batches \(batches), files \(files), errors \(errors), full passes \(fullPasses), \(Health.drift(seen)), bad lines \(seen.badLines)"
+    }
+
+    /// Signs of a changed log format: `no usage` = records that should carry token usage but did not (Claude
+    /// `assistant` without `message.usage`), with their share of all records that should (usage records of every
+    /// tool count there too).
+    static func drift(_ s: IngestStats) -> String {
+        let share = Double(s.noUsage * 1000 / max(s.usageRecords + s.noUsage, 1)) / 10
+        return "lines \(s.lines), usage \(s.usageRecords), no usage \(s.noUsage) (\(share) %)"
     }
 
     static func cpuSeconds() -> Double {
@@ -344,6 +363,7 @@ extension Daemon {
                         log("archive: \(s.written) files written, \(s.rawBytes >> 20) MB -> \(s.packedBytes >> 20) MB, "
                             + "\(Int((Time.monotonic() - t0) * 1000)) ms")
                     }
+                    if s.removed > 0 { let r = Archive.retention(); log("archive: \(s.removed) copies removed, cleanupPeriodDays \(r.days.map(String.init) ?? "?") in \(r.source ?? "?")") }
                 } catch { log("archive: error: \(error)") }
                 // zstd contexts and buffers of the pass are freed, but the allocator keeps them for this thread.
                 store.db.releaseMemory(); z_release_memory()

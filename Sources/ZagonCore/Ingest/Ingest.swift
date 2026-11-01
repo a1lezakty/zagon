@@ -41,6 +41,8 @@ public struct IngestOptions: Sendable {
 
 public struct IngestStats: Sendable, Codable {
     public var filesSeen = 0, filesRead = 0, bytes = 0, lines = 0, badLines = 0, resets = 0, moves = 0, usageRecords = 0
+    /// Records that should have carried usage but did not (`ParseOutput.noUsage`).
+    public var noUsage = 0
     /// Files recounted from their archive copy (the original is gone; schema v5 recount).
     public var fromArchive = 0
     /// v5 recounts that came out with other totals, so the file kept its old rows (see `Ingest.recount`).
@@ -59,7 +61,7 @@ public final class Ingest {
     /// Host written into sessions and `day_agg`: `options.host` or the database's own.
     public let host: String
     let keys: Regex<AnyRegexOutput>?
-    public private(set) var stats = IngestStats()
+    public internal(set) var stats = IngestStats()
     var db: SQLite { store.db }
 
     // Pending derived work, done once in finish().
@@ -506,6 +508,7 @@ public final class Ingest {
         f.badLines += out.badLines
         stats.badLines += out.badLines
         stats.usageRecords += out.usage.count
+        stats.noUsage += out.noUsage
         guard !out.isEmpty else { return }
         if f.sessionId == nil {
             f.sessionId = out.usage.first?.sessionId ?? out.events.first?.sessionId ?? out.userMessages.first?.sessionId

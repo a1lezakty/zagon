@@ -176,8 +176,8 @@ import Testing
         #expect(s.complete("secret prompt") == nil && s.failure.reason == "claude: " + root)
         #expect(logged == ["summary: claude failed (1): " + root])
         // An error answer: its result is the error (claude exits 1 with it).
-        #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"is_error\":true,\"result\":\"Credit balance is too low\"}'\nexit 1\n"))
-        #expect(s.complete("x") == nil && s.failure.reason == "claude: Credit balance is too low")
+        #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"is_error\":true,\"result\":\"API Error: 500 Internal server error\"}'\nexit 1\n"))
+        #expect(s.complete("x") == nil && s.failure.reason == "claude: API Error: 500 Internal server error")
         #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"is_error\":false,\"result\":\"ok\"}'\n"))
         #expect(s.complete("x")?.text == "ok" && s.failure.reason == nil)
         // codex echoes the prompt to stderr: only its last ERROR line counts, else the exit status.
@@ -201,9 +201,11 @@ import Testing
         s.searchPath = bin + ":/usr/bin:/bin"
         s.runner = { _, _, _, _ in (1, Array(#"{"is_error":true,"result":"Credit balance is too low"}"#.utf8), []) }
         let m = try s.message(d, now: 2)
-        #expect(try DaySummary.whyNoAI(store, d) == "claude: Credit balance is too low")
-        #expect(m.text.contains("\nSummary without AI: claude: Credit balance is too low\n"), "\(m.text)")
-        // An AI summary later: no mark.
+        let why = "claude: billing — Credit balance is too low (no AI calls until tomorrow)"
+        #expect(try DaySummary.whyNoAI(store, d) == why)
+        #expect(m.text.contains("\nSummary without AI: \(why)\n"), "\(m.text)")
+        // An AI summary later (the billing stop lifted, as the next day does): no mark.
+        Sys.remove(s.stopFile)
         s.runner = { _, _, _, _ in
             let answer = #"{\"overview\": \"Parser day.\", \"items\": [{\"project\": \"alpha\", \"title\": \"Parser\", \"refs\": [1], \"done\": [\"fixed\"]}]}"#
             return (0, Array(#"{"is_error":false,"result":"\#(answer)"}"#.utf8), [])
@@ -219,6 +221,50 @@ import Testing
         try Export.run(store: store, since: 0) { lines.append($0) }
         try ExportImport(store: mac, source: "box").apply(lines)
         #expect(try DaySummary.whyNoAI(mac, d) == nil)
+    }
+
+    /// A billing or usage-limit answer, or a call paid as extra usage, says so and stops the engine's calls for the day.
+    @Test func billingStopsTheCallsForTheDay() throws {
+        var s = summary(try Store(path: ":memory:"), engine: "claude")
+        let bin = makeTempDir(), ran = bin + "/ran", paused = " (no AI calls until tomorrow)"
+        s.searchPath = bin + ":/usr/bin:/bin"
+        var logged: [String] = []
+        s.log = { logged.append($0) }
+        #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"type\":\"result\",\"is_error\":true,\"result\":\"Credit balance is too low\"}'\nexit 1\n"))
+        let credit = "claude: billing — Credit balance is too low" + paused
+        #expect(s.complete("x") == nil && s.failure.reason == credit)
+        // The next calls of the day are not made, and not logged again.
+        #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\ntouch \(ran)\nprintf '{\"is_error\":false,\"result\":\"ok\"}'\n"))
+        #expect(s.complete("x", what: "suggest") == nil && s.failure.reason == credit && !Sys.exists(ran) && logged.count == 1)
+        // A stop of another engine or of another day does not count.
+        s.stop("codex: usage limit — x" + paused)
+        #expect(s.complete("x")?.text == "ok" && s.failure.reason == nil)
+        s.stop(credit, now: Sys.now() - 86400)
+        #expect(s.complete("x")?.text == "ok")
+        // The kind may come only from claude's error codes.
+        #expect(writeScript(bin + "/claude", "#!/bin/sh\ncat >/dev/null\nprintf '{\"type\":\"result\",\"is_error\":true,\"result\":\"Request refused\",\"api_error\":\"usage_limit_reached\"}'\nexit 1\n"))
+        #expect(s.complete("x") == nil && s.failure.reason == "claude: usage limit — Request refused")
+        #expect(s.stopped() == nil)  // a reached limit refuses, it does not charge: the next call is made
+        // Extra usage paid for an answer: it is used, the next call is not made.
+        Sys.remove(s.stopFile)
+        #expect(writeScript(bin + "/claude", """
+            #!/bin/sh
+            cat >/dev/null
+            echo '{"type":"system","subtype":"init"}'
+            echo '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","isUsingOverage":true}}'
+            echo '{"type":"result","subtype":"success","is_error":false,"result":"paid"}'
+            """))
+        #expect(s.complete("x")?.text == "paid" && s.failure.reason == nil)
+        #expect(s.complete("x") == nil && s.failure.reason == "claude: billing — the call was paid as extra usage" + paused)
+        // codex: its last ERROR line.
+        s.config.summaryEngine = "codex"
+        #expect(writeScript(bin + "/codex", "#!/bin/sh\ncat >/dev/null\necho 'ERROR: You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits.' >&2\nexit 1\n"))
+        #expect(s.complete("x") == nil
+                && s.failure.reason == "codex: usage limit — You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits.")
+        for e in ["You're out of extra usage · resets 5pm", "Your org is out of usage · add funds to continue",
+                  "Quota exceeded. Check your plan and billing details."] { #expect(DaySummary.billingKind(e) != nil, "\(e)") }
+        for e in ["API Error: 500 Internal server error", "unexpected status 401 Unauthorized", "Not logged in · Please run /login",
+                  "API Error: Rate limit reached", "This organization has been suspended"] { #expect(DaySummary.billingKind(e) == nil, "\(e)") }
     }
 
     @Test func hostsOfTheDaysSessions() throws {
