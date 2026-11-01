@@ -2,32 +2,37 @@ import Foundation
 import Testing
 @testable import ZagonCore
 
-/// Fixtures/claude: one main transcript and one of its sub-agents, real structure with all text replaced
-/// (scripts/sanitize.py, bulky record types the parser ignores left out). The expected numbers are computed
-/// here straight from the JSON, without the byte scanner or Ingest.
+/// Fixtures/claude: per project folder one main transcript and one of its sub-agents of one Claude Code version, real
+/// structure with all text replaced (scripts/sanitize.py, bulky record types the parser ignores left out). The
+/// expected numbers are computed here straight from the JSON, without the byte scanner or Ingest.
 @Suite struct ClaudeFixtureTests {
     static let root = Bundle.module.resourcePath! + "/Fixtures/claude"
+    /// Project folder -> the Claude Code versions its records carry (the newest one is what Zagon is tested with).
+    static let versions = ["-home-user-project-1": ["2.1.233", "2.1.250"], "-home-user-project-2": ["2.1.316"]]
 
     struct Expected {
         var input = 0, output = 0, cacheRead = 0, cacheWrite = 0, requests = 0, tools = Set<String>(), typed = 0
-        var title: String?, titleRank = 0, cwd: String?
+        var title: String?, titleRank = 0, cwd: String?, session = "", versions = Set<String>(), noUsage = 0
     }
 
-    static func expected() throws -> Expected {
+    static func expected(_ project: String) throws -> Expected {
         var e = Expected()
         var last: [String: [String: Any]] = [:]   // message id -> usage of its last record
         var owner: [String: String] = [:]         // message id -> first file that had it
-        let files = Ingest.walk(root).filter { ClaudeSource.layout($0) != nil }.sorted()
+        let files = Ingest.walk(root).filter { $0.hasPrefix(project + "/") && ClaudeSource.layout($0) != nil }.sorted()
         #expect(files.count == 2)
+        e.session = "claude:" + (ClaudeSource.layout(files[0])?.session ?? "")
         for rel in files {
             let isSub = rel.contains("/subagents/")
             let text = try String(contentsOfFile: root + "/" + rel, encoding: .utf8)
             for line in text.split(separator: "\n") {
                 let o = try JSONSerialization.jsonObject(with: Data(line.utf8)) as! [String: Any]
                 let m = o["message"] as? [String: Any]
+                if let v = o["version"] as? String { e.versions.insert(v) }
                 if !isSub, ["assistant", "user"].contains(o["type"] as? String), e.cwd == nil, let c = o["cwd"] as? String { e.cwd = c }  // where it started
                 switch o["type"] as? String {
                 case "assistant":
+                    if m?["usage"] == nil { e.noUsage += 1 }
                     if let id = m?["id"] as? String, let u = m?["usage"] as? [String: Any] {
                         if owner[id, default: rel] == rel { owner[id] = rel; last[id] = u }
                     }
@@ -62,14 +67,14 @@ import Testing
         return e
     }
 
-    @Test func ingestMatchesIndependentCount() throws {
-        let e = try Self.expected()
-        #expect(e.requests > 30 && e.tools.count > 20 && e.typed > 0 && e.title != nil)  // the fixture is not trivial
+    @Test(arguments: versions.keys.sorted()) func ingestMatchesIndependentCount(project: String) throws {
+        let e = try Self.expected(project)
+        #expect(e.versions == Set(Self.versions[project] ?? []))
+        #expect(e.requests > 20 && e.tools.count > 20 && e.typed > 0 && e.title != nil)  // the fixture is not trivial
         let env = ClaudeEnv()
-        try FileManager.default.removeItem(atPath: env.root)
-        try FileManager.default.copyItem(atPath: Self.root, toPath: env.root)
+        try FileManager.default.copyItem(atPath: Self.root + "/" + project, toPath: env.root + "/" + project)
         let st = env.scan()
-        #expect(st.badLines == 0 && st.filesRead == 2)
+        #expect(st.badLines == 0 && st.filesRead == 2 && st.noUsage == e.noUsage && e.noUsage == 0)
         let row = try env.store.db.one("""
             SELECT sum(input), sum(output), sum(cache_read), sum(cache_write), sum(requests), count(DISTINCT session_id),
                    count(DISTINCT agent) FROM usage_hour
@@ -79,7 +84,7 @@ import Testing
         let session = try env.store.db.one("SELECT id, user_msgs, title, title_rank, cwd, project FROM session") { r in
             [r.text(0), "\(r.int(1))", r.text(2), "\(r.int(3))", r.text(4), r.text(5)]
         }
-        #expect(session == ["claude:a19cca56-ae2e-443b-aa60-d6fae7caee25", "\(e.typed)", e.title, "\(e.titleRank)", e.cwd,
+        #expect(session == [e.session, "\(e.typed)", e.title, "\(e.titleRank)", e.cwd,
                             e.cwd.map { ClaudeParser.project($0) }])
         // Day aggregates add up to the same totals, and a second scan changes nothing.
         let days = try env.store.db.one("SELECT sum(input), sum(output), sum(requests), sum(tool_calls) FROM day_agg WHERE tool='' AND project='' AND model=''") {
