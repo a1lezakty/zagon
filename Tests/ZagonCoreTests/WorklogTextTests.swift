@@ -192,6 +192,18 @@ final class FakeEngine: @unchecked Sendable {
         #expect(jr[0].summary != nil && DayPlan.commitDigest(jr) == String(UInt64(bitPattern: fnv1a64(old)), radix: 16))
     }
 
+    /// A row laid outside its sessions' work is described from their words of the day.
+    @Test func aRowAwayFromItsWorkGetsTheDaysWords() throws {
+        let f = try Fixture(), b = FakeEngine([]).builder(f.store)
+        let s = RowSession(id: "claude:a", title: "Parser work", role: "single", how: "branch", seconds: 600)
+        let t = WorklogTextBuilder.TaskInput(id: 1, key: "PROJ-1", title: "Parser", rows: [
+            .init(id: 7, task: 1, start: D0 + 20 * H, end: D0 + 20.5 * H, sessions: [s]),
+            .init(id: 8, task: 1, start: D0 + 9 * H, end: D0 + 10 * H, sessions: [s])])
+        let said = ["claude:a": [WorklogTextBuilder.Said(ts: D0 + 9.5 * H, kind: .prompt, text: "split the parser")]]
+        let d = b.digest([t], said: said, commits: [], prompts: 3, replies: 2, len: 300)
+        #expect(d.components(separatedBy: "split the parser").count == 3)   // both rows
+    }
+
     /// A text kept by hand follows its row when the row moves (here: starts later), not another row of the task.
     @Test func aManualTextFollowsItsMovedRow() throws {
         let f = try Fixture(), kept = WorklogTexts(store: f.store)

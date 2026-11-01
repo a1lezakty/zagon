@@ -288,8 +288,10 @@ public struct WorklogTextBuilder {
             out += w.t("Задача \(t.key) «\(t.title)»\n", "Task \(t.key) “\(t.title)”\n")
             for r in t.rows {
                 out += w.t("  Строка \(r.id): ", "  Row \(r.id): ") + "\(Txt.clock(r.start))–\(Txt.clock(r.end)) (\(w.dur(r.end - r.start)))\n"
+                // A row laid where its sessions did not work (the time was taken in Jira) gets their words of the day.
+                let inRow = r.sessions.prefix(4).contains { s in (said[s.id] ?? []).contains { $0.ts >= r.start && $0.ts < r.end } }
                 for s in r.sessions.prefix(4) {
-                    let in_ = (said[s.id] ?? []).filter { $0.ts >= r.start && $0.ts < r.end }
+                    let in_ = (said[s.id] ?? []).filter { !inRow || ($0.ts >= r.start && $0.ts < r.end) }
                     let p = in_.filter { $0.kind == .prompt }.prefix(prompts).map(\.text)
                     let a = in_.filter { $0.kind == .reply }.suffix(replies).map(\.text)
                     let d = in_.filter { $0.kind == .done }.suffix(2).map(\.text)
