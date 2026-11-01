@@ -1,3 +1,4 @@
+import CSys
 #if canImport(Glibc)
 import Glibc
 #elseif canImport(Musl)
@@ -220,12 +221,11 @@ public enum Sys {
 
     /// pipe(2) with both ends close-on-exec: a child spawned meanwhile by another thread must not inherit them (it
     /// would hold a write end open, and a read here would not see EOF until that child exits). dup2 in our own child
-    /// clears the flag on its fds 0 and 1.
-    /// ponytail: pipe + fcntl leaves a tiny window; pipe2(O_CLOEXEC) needs a C shim (not visible from Glibc).
+    /// clears the flag on its fds 0 and 1. Atomic on Linux (pipe2).
+    /// ponytail: Darwin has no pipe2, so there pipe + fcntl leaves a tiny window; POSIX_SPAWN_CLOEXEC_DEFAULT on our
+    /// spawns would close it if it ever shows up.
     public static func pipeCloexec(_ p: inout [Int32]) -> Bool {
-        guard pipe(&p) == 0 else { return false }
-        _ = fcntl(p[0], F_SETFD, FD_CLOEXEC); _ = fcntl(p[1], F_SETFD, FD_CLOEXEC)
-        return true
+        p.withUnsafeMutableBufferPointer { z_pipe_cloexec($0.baseAddress) } == 0
     }
 
     /// Spawns `argv` (argv[0] must be a path), feeds `stdin` (if given) through a pipe and waits. stdout/stderr are
