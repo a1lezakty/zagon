@@ -65,6 +65,27 @@ private let day = "2026-10-29"
         #expect(try m.call("task_list", #"{"all":true}"#).text.contains("In Jira, no work here in the last 7 days:\nOPS-5"))
     }
 
+    /// worklog_refresh builds the texts again (here no AI engine: says so); worklog_plan does only with refresh: true.
+    @Test func refreshIsItsOwnTool() throws {
+        let m = try TaskMCP()
+        _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)
+        let p = try m.call("worklog_plan", #"{"date":"\#(day)"}"#)
+        #expect(!p.isError && !p.text.contains("texts not rebuilt"), "\(p.text)")
+        let r = try m.call("worklog_refresh", #"{"date":"\#(day)"}"#)
+        #expect(!r.isError && r.text.contains("10:00–10:05") && r.text.contains("note: texts not rebuilt: no AI engine"), "\(r.text)")
+        #expect(try m.call("worklog_plan", #"{"date":"\#(day)","refresh":true}"#).text == r.text)
+        #expect(try m.call("worklog_refresh", #"{"date":"\#(day)","format":"xml"}"#).isError)
+    }
+
+    /// The plan says how to build stale texts again: the CLI's command, or the MCP tool.
+    @Test func refreshHint() {
+        var p = DayPlan(day: day, userSec: 0, sessionSec: 0, jiraSec: nil, rows: [], tasks: [], unassignedSec: 0, unknownKeys: [],
+                        unplaced: [:], notes: [])
+        p.tz = "UTC"; p.sessionsAfterSummary = 2
+        #expect(TaskText.plan(p).hasSuffix("\ndays in UTC · texts not built yet, 2 sessions since (log plan --refresh)"))
+        #expect(TaskText.plan(p, refresh: "worklog_refresh").hasSuffix(", 2 sessions since (worklog_refresh)"))
+    }
+
     @Test func planWithoutJiraAndCommitRefused() throws {
         let m = try TaskMCP()
         _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)
@@ -181,6 +202,16 @@ struct TaskMCPJiraTests {
         #expect(try !m.call("worklog_skip", #"{"ids":[\#(id)],"confirm":true}"#).isError)
         #expect(try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#).text == "Nothing to write to Jira for \(day).")
         #expect((try mock.state()["issues"] as! [String: [String: Any]])["PROJ-1"]!["worklogs"] == nil)
+    }
+
+    /// A plan shown by worklog_refresh counts as shown, as one of worklog_plan.
+    @Test func commitAfterRefresh() throws {
+        let mock = try JiraMock(state: Self.state)
+        let m = try TaskMCP(jira: try JiraClient(mock.config))
+        _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)
+        #expect(try m.call("worklog_refresh", #"{"date":"\#(day)"}"#).text.contains("Nothing was written to Jira."))
+        let ok = try m.call("worklog_commit", #"{"date":"\#(day)","confirm":true}"#)
+        #expect(!ok.isError && ok.text.hasSuffix("1 worklogs written to Jira"), "\(ok.text)")
     }
 
     /// A text set through worklog_text after the plan was shown counts as shown: commit writes it.

@@ -140,7 +140,8 @@ unchanged keeps its id. `TaskViews.swift` holds the data (`TaskListLine`, `TaskC
 
 `TaskTools` implements `TaskService` (MCP/ServiceTools.swift), wired in `zagon mcp`: `task_list`, `task_get`,
 `task_create`, `task_update` (title, description, status, Jira key, note, TODO, TODO done, what was done today),
-`worklog_plan` (writes nothing), `worklog_commit` (only with `confirm: true`). The server remembers, per day, the
+`worklog_plan` (no AI call; writes nothing to Jira), `worklog_refresh` (builds the day's texts again with one AI call and
+saves them; `worklog_plan` with `refresh: true` is its synonym), `worklog_commit` (only with `confirm: true`). The server remembers, per day, the
 planned Jira rows its last `worklog_plan` showed (id, task, start, end, Jira key, text). Commit re-plans against fresh
 data and writes only if the rows to write are still exactly those (all of them without `ids`, else each given id);
 otherwise it writes nothing and returns the new plan to show. No plan shown by this server for the day → refused.

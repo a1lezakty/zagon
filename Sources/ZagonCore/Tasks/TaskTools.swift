@@ -194,7 +194,7 @@ public final class TaskTools: TaskService {
 
     func planText(_ p: DayPlan, _ w: DayWorklog, _ err: String? = nil) throws -> String {
         shown[p.day] = jiraRows(p)
-        return TaskText.plan(p, base: w.base, jiraError: err)
+        return TaskText.plan(p, base: w.base, jiraError: err, refresh: "worklog_refresh")
     }
 
     public func worklogPlan(day: String) throws -> String { try worklogPlan(day: day, refresh: false, json: false) }
@@ -212,7 +212,7 @@ public final class TaskTools: TaskService {
                 e.outputFormatting = [.sortedKeys]
                 return String(decoding: try e.encode(p), as: UTF8.self)
             }
-            return text + "\nNothing was written. To log, the user must ask; then worklog_commit with confirm: true (and ids to pick rows)."
+            return text + "\nNothing was written to Jira. To log, the user must ask; then worklog_commit with confirm: true (and ids to pick rows)."
         }
     }
 

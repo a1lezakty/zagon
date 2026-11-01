@@ -184,7 +184,9 @@ public enum TaskText {
         }.joined(separator: "\n")
     }
 
-    public static func plan(_ p: DayPlan, base: TaskTime.Base = .sessions, jiraError: String? = nil) -> String {
+    /// `refresh`: how to build the texts again, when sessions worked after they were built.
+    public static func plan(_ p: DayPlan, base: TaskTime.Base = .sessions, jiraError: String? = nil,
+                            refresh: String = "log plan --refresh") -> String {
         let toJira = p.rows.filter { $0.state == "planned" && $0.jiraKey != nil }.reduce(0) { $0 + $1.seconds }
         var out = ["\(p.day): \(label(base)) \(Txt.dur(p.userSec)) · sessions \(Txt.dur(p.sessionSec))"
                    + (p.jiraSec.map { " · in Jira \(Txt.dur($0))" } ?? " · Jira not connected")
@@ -206,8 +208,9 @@ public enum TaskText {
         let ex = (p.excluded ?? []).filter { $0.seconds > 0 }
         if !ex.isEmpty { out.append("excluded: " + ex.map { "\($0.kind) \($0.name) \(Txt.dur(Double($0.seconds)))" }.joined(separator: ", ")) }
         if let tz = p.tz {
-            out.append("days in \(tz) · texts " + (p.summaryBuiltAt.map { "built \(Txt.clock($0))" } ?? "not built yet")
-                       + ((p.sessionsAfterSummary ?? 0) > 0 ? ", \(p.sessionsAfterSummary!) sessions since (log plan --refresh)" : ""))
+            let built = p.summaryBuiltAt.map { "built \(Txt.clock($0))" } ?? "not built yet"
+            let since = (p.sessionsAfterSummary ?? 0) > 0 ? ", \(p.sessionsAfterSummary!) sessions since (\(refresh))" : ""
+            out.append("days in \(tz) · texts \(built)\(since)")
         }
         for n in p.notes { out.append("note: \(n)") }
         return out.joined(separator: "\n")
