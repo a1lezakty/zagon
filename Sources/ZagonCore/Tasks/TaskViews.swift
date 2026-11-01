@@ -172,13 +172,15 @@ public enum TaskText {
 
     /// `summary`: the rows whose day summary is shown in full under them (what would go to Jira with it).
     public static func rows(_ rows: [WorklogRow], summary: (WorklogRow) -> Bool = { $0.daySummary == true }) -> String {
+        // Built in steps: as one expression the macOS compiler gives up type-checking it.
         rows.map { r in
-            "#\(pad("\(r.id)", 5)) \(pad(r.taskKey ?? "-", 10)) \(Txt.clock(r.start))–\(Txt.clock(r.end)) \(pad(Txt.dur(Double(r.seconds)), 7)) "
-                + "\(pad(r.state, 8)) \(Txt.oneLine(r.text, 260))" + (r.jiraKey == nil ? "  (Zagon only)" : "")
-                + (r.textSource.map { "  [\($0)]" } ?? "")
-                + (summary(r) && !(r.summary ?? "").isEmpty
-                   ? "\n       + day summary:\n" + r.summary!.split(separator: "\n", omittingEmptySubsequences: false).map { "         " + $0 }.joined(separator: "\n")
-                   : "")
+            var s = "#\(pad("\(r.id)", 5)) \(pad(r.taskKey ?? "-", 10)) \(Txt.clock(r.start))–\(Txt.clock(r.end)) \(pad(Txt.dur(Double(r.seconds)), 7)) "
+            s += "\(pad(r.state, 8)) \(Txt.oneLine(r.text, 260))" + (r.jiraKey == nil ? "  (Zagon only)" : "")
+            if let t = r.textSource { s += "  [\(t)]" }
+            if summary(r), let sum = r.summary, !sum.isEmpty {
+                s += "\n       + day summary:\n" + sum.split(separator: "\n", omittingEmptySubsequences: false).map { "         " + $0 }.joined(separator: "\n")
+            }
+            return s
         }.joined(separator: "\n")
     }
 
