@@ -260,18 +260,21 @@ public struct TaskBackend: Sendable {
         return try written(r)
     }
 
-    /// What `log commit` reported: "N worklogs logged, M not logged" (0.1.4) or "N written, M not written" (0.1.5, which
-    /// counts day summary comments too).
+    /// What `log commit` reported: "N worklogs logged, M not logged", and from 0.1.5 the day summary comments under it,
+    /// "K comments written, F not written"; both count.
     func written(_ r: Proc.Result) throws -> Commit {
-        let lines = String(decoding: r.out, as: UTF8.self).split(separator: "\n").map(String.init)
+        let lines = String(decoding: r.out, as: UTF8.self).split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
         // Exit 1 with the summary line = some rows failed; anything else is a failure before writing.
-        guard let m = lines.last?.wholeMatch(of: /(\d+) (?:worklogs logged|written)(?:, (\d+) not (?:logged|written))?/) else {
+        guard let m = lines.lazy.compactMap({ $0.wholeMatch(of: /(\d+) worklogs logged(?:, (\d+) not logged)?/) }).last else {
             throw failure(r)
         }
-        let problems = lines.dropLast().map { $0.trimmingCharacters(in: .whitespaces) }.filter {
-            $0.hasPrefix("not logged") || $0.hasPrefix("not sure") || $0.contains(" not written") || $0.hasSuffix("already commented")
+        let c = lines.lazy.compactMap { $0.wholeMatch(of: /(\d+) comments written(?:, (\d+) not written)?/) }.last
+        let problems = lines.filter {
+            ($0.hasPrefix("not logged") || $0.hasPrefix("not sure") || $0.contains(" not written") || $0.hasSuffix("already commented"))
+                && $0.wholeMatch(of: /\d+ comments written.*/) == nil
         }
-        return .written(logged: Int(m.1) ?? 0, failed: m.2.flatMap { Int($0) } ?? 0, problems: problems.map(Remote.scrubHomes))
+        func n(_ s: Substring?) -> Int { s.flatMap { Int($0) } ?? 0 }
+        return .written(logged: n(m.1) + n(c?.1), failed: n(m.2) + n(c?.2), problems: problems.map(Remote.scrubHomes))
     }
 
     func failure(_ r: Proc.Result) -> Failure {

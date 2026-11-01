@@ -495,7 +495,9 @@ extension ReconcileVM {
         let lines = rows.map { r in
             "\(r.jiraKey ?? "") \(f.timeSpan(StoreDataProvider.date(r.start), StoreDataProvider.date(r.end))) · \(long(r.seconds, f)) — \(r.text)"
         }
+        // The day summaries go too (under a row's text, or as a comment): said, as on the day screen.
+        let summaries = WorklogVM.summaryNotes(p.worklog(f).rows, f).map { "\n" + $0 }.joined()
         return (f.t.plural("worklog.commit", rows.count, long(sec, f)) + "?",
-                f.t("rec.c.detail", day, lines.joined(separator: "\n")) + missing)
+                f.t("rec.c.detail", day, lines.joined(separator: "\n")) + missing + summaries)
     }
 }

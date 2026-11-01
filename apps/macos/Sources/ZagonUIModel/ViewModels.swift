@@ -779,6 +779,8 @@ public struct WorklogVM: Sendable {
     public var notes: [String]
     /// "Log 2 worklogs to Jira · 1h 00m"; nil when nothing goes to Jira.
     public var commitTitle: String?
+    /// The confirmation's lines on day summaries: in which worklogs, as which comments.
+    public var commitNotes: [String] = []
     public var copyText: String
     /// "Texts from the day summary" and "rebuilt 23:50 · 14 sessions · none newer"; nil: a zagon without texts.
     public var textsTitle: String?
@@ -825,7 +827,8 @@ public struct WorklogVM: Sendable {
             let span = f.timeSpan(r.start, r.end), key = r.taskKey ?? r.key
             return WorklogRowVM(key: r.key, span: span, time: f.duration(r.sec), text: r.written,
                                 destination: f.t("dest.\(r.destination)"), kind: r.destination, id: r.id, taskKey: r.taskKey,
-                                jiraKey: r.jiraKey, anchor: key + "|" + (r.daySummary ? "summary" : String(Int(r.start.timeIntervalSince1970))),
+                                jiraKey: r.jiraKey, anchor: String(Int(w.day.timeIntervalSince1970)) + "|" + key + "|"
+                                    + (r.daySummary ? "summary" : String(Int(r.start.timeIntervalSince1970))),
                                 plain: r.text, source: r.textSource, daySummary: r.daySummary, summary: r.summary,
                                 summarySource: r.summarySource, summaryAsComment: r.summaryAsComment,
                                 sessions: r.sessions.map { s in
@@ -875,8 +878,20 @@ public struct WorklogVM: Sendable {
         self.notes = notes
         commitTitle = toJira.isEmpty || w.jiraBlocked != nil ? nil
             : f.t.plural("worklog.commit", toJira.count, f.duration(toJiraSec))
+        commitNotes = WorklogVM.summaryNotes(w.rows, f)
         copyText = w.rows.filter { $0.destination != .alreadyLogged }
             .map { "\($0.key)\t\(f.timeSpan($0.start, $0.end))\t\(f.duration($0.sec))\t\($0.written)" }.joined(separator: "\n")
+    }
+
+    /// What the confirmation says of day summaries going to Jira: under which rows' texts, and as which comments.
+    public static func summaryNotes(_ rows: [WorklogRow], _ f: Fmt) -> [String] {
+        let s = rows.filter { $0.destination == .jira && $0.daySummary && !($0.summary ?? "").isEmpty }
+        func keys(_ rs: [WorklogRow]) -> String {
+            rs.compactMap { $0.jiraKey ?? $0.taskKey }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.joined(separator: ", ")
+        }
+        let inWorklog = s.filter { !$0.summaryAsComment }, asComment = s.filter(\.summaryAsComment)
+        return (inWorklog.isEmpty ? [] : [f.t("worklog.commitSummary", keys(inWorklog))])
+            + (asComment.isEmpty ? [] : [f.t("worklog.commitComment", keys(asComment))])
     }
 
     /// A word the core sends (a role) in the app's language; one it does not know, as it came.

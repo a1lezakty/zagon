@@ -46,7 +46,7 @@ extension AppState {
         case .plan(let day):
             guard force || have.plans[day] == nil else { return }
             let comments = planComments(s, day), epoch = planEpoch
-            work(s, { try $0.plan(day, comments: comments) }) { self.store(&$0, s, day, $1, epoch) }
+            work(s, { try $0.plan(day, comments: comments) }) { self.store(&$0, s, day, $1, epoch) { self.editPlan(day) { _ in } } }
         case .reconcile(let from, let to):
             let key = reconcileKey(from, to)
             guard force || have.reconciles[key] == nil else { return }
@@ -71,7 +71,7 @@ extension AppState {
         guard let s = currentTaskSource else { return }
         let comments = planComments(s, day), epoch = planEpoch
         work(s, { try $0.plan(day, comments: comments) }) { cache, plan in
-            guard self.store(&cache, s, day, plan, epoch) else { return }
+            guard self.store(&cache, s, day, plan, epoch, retry: { self.reloadPlan(day, done: done) }) else { return }
             DispatchQueue.main.async { done(s, plan) }
         }
     }
@@ -163,18 +163,19 @@ extension AppState {
         if let p = taskCache[s]?.plans[day] { rebuildIfStale(s, day, p); return }
         let comments = planComments(s, day), epoch = planEpoch
         work(s, { try $0.plan(day, comments: comments) }) { cache, plan in
-            guard self.store(&cache, s, day, plan, epoch) else { return }
+            guard self.store(&cache, s, day, plan, epoch, retry: { self.openPlan(day) }) else { return }
             // After `work` has stored this cache: a rebuild bumps its own counter.
             DispatchQueue.main.async { self.rebuildIfStale(s, day, plan) }
         }
     }
 
     /// Keeps a plan unless it was asked before a `[worklog]` write or with another comment choice than the one now:
-    /// then the day is asked again. false: dropped.
+    /// then `retry` asks again (the same source still shown). false: dropped.
     @discardableResult
-    private func store(_ cache: inout TaskCache, _ s: TaskBackend.Source, _ day: String, _ plan: WorklogPlan, _ epoch: Int) -> Bool {
+    private func store(_ cache: inout TaskCache, _ s: TaskBackend.Source, _ day: String, _ plan: WorklogPlan, _ epoch: Int,
+                       retry: @escaping () -> Void) -> Bool {
         guard epoch == planEpoch, plan.comments == planComments(s, day) else {
-            if s == currentTaskSource { DispatchQueue.main.async { self.editPlan(day) { _ in } } }
+            if s == currentTaskSource { DispatchQueue.main.async(execute: retry) }
             return false
         }
         cache.plans[day] = plan
@@ -199,7 +200,7 @@ extension AppState {
         work(s, { b in Result { try b.plan(day, refresh: true, comments: comments) } }) { cache, r in
             self.planRebuilding.remove(k)
             switch r {
-            case .success(let plan): self.store(&cache, s, day, plan, epoch)
+            case .success(let plan): self.store(&cache, s, day, plan, epoch) { self.editPlan(day) { _ in } }
             case .failure(let e): cache.message = f.t("worklog.rebuildFailed", Remote.scrubHomes(String(describing: e)))
             }
         }
@@ -220,7 +221,7 @@ extension AppState {
             switch r {
             case .success(let plan):
                 if others { cache.plans = [:]; cache.reconciles = [:] }
-                self.store(&cache, s, day, plan, epoch)
+                self.store(&cache, s, day, plan, epoch) { self.editPlan(day) { _ in } }
                 done(true)
             case .failure(let e):
                 cache.error = Remote.scrubHomes(String(describing: e))
@@ -257,14 +258,14 @@ extension AppState {
     func setWorklog(_ key: String, _ value: String, _ change: (inout TaskBackend.WorklogConfig) -> Void) {
         guard let make = taskBackend else { return }
         for (s, c) in worklogConfig { if var c { change(&c); worklogConfig[s] = c } }
-        writeWorklog(taskSources.map { (sourceName($0), make($0)) }) { try $0.setWorklogConfig(key, value) }
+        writeWorklog(taskSources.map { (sourceName($0), make($0)) }, all: true) { try $0.setWorklogConfig(key, value) }
     }
 
     /// One project key added to or removed from each machine's own list.
     func editProjects(add: String? = nil, remove: String? = nil) {
         guard let make = taskBackend else { return }
         for (s, c) in worklogConfig { if var c { c.projects = TaskBackend.edited(c.projects ?? [], add: add, remove: remove); worklogConfig[s] = c } }
-        writeWorklog(taskSources.map { (sourceName($0), make($0)) }) { try $0.editProjects(add: add, remove: remove) }
+        writeWorklog(taskSources.map { (sourceName($0), make($0)) }, all: true) { try $0.editProjects(add: add, remove: remove) }
     }
 
     /// Lets an excluded project, task or session back into the plans of the current source.
@@ -274,9 +275,10 @@ extension AppState {
         writeWorklog([(sourceName(s), b)]) { try $0.exclude(e.kind, e.name, add: false) }
     }
 
-    /// Runs `write` on each backend after the writes before it; what failed goes under the card (until the card opens
-    /// again), then the current source's `[worklog]` is read again.
-    private func writeWorklog(_ backends: [(String, TaskBackend)], _ write: @escaping @Sendable (TaskBackend) throws -> Void) {
+    /// Runs `write` on each backend after the writes before it; what failed goes under the card until the card opens
+    /// again or a write to every source (`all`) works, then the current source's `[worklog]` is read again.
+    private func writeWorklog(_ backends: [(String, TaskBackend)], all: Bool = false,
+                              _ write: @escaping @Sendable (TaskBackend) throws -> Void) {
         let f = self.f, before = worklogWrite
         worklogWrite = Task.detached {
             await before?.value
@@ -285,7 +287,7 @@ extension AppState {
                 do { try write(b) } catch { failed.append(f.t("settings.wl.notSaved", name, Remote.scrubHomes(String(describing: error)))) }
             }
             await MainActor.run {
-                if !failed.isEmpty { self.worklogConfigMessage = failed.joined(separator: "\n") }
+                if !failed.isEmpty { self.worklogConfigMessage = failed.joined(separator: "\n") } else if all { self.worklogConfigMessage = nil }
                 for s in self.taskCache.keys { self.taskCache[s]?.plans = [:]; self.taskCache[s]?.reconciles = [:] }
                 self.planEpoch += 1
                 self.loadWorklogConfig()

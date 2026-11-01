@@ -145,7 +145,7 @@ enum Snapshots {
         if prefix.isEmpty {
             // "What to log" with the day summary row open: its editor, where the summary goes, the sessions.
             state.screen = .worklog
-            state.worklogOpen = "PROJ-21|summary"
+            state.worklogOpen = WorklogVM(state.provider.worklog(state.provider.now), state.f).rows.first { $0.daySummary }?.anchor
             let root = WindowRoot().environmentObject(state).fixedSize(horizontal: false, vertical: true)
             ok = write(root, width: 1280, "worklog-row-\(lang.rawValue)", dir) && ok
             state.worklogOpen = nil

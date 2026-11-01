@@ -47,7 +47,16 @@ final class WorklogTextTests: XCTestCase {
             let out: String
             switch (args.first, args.dropFirst().first) {
             case ("log", "plan"): out = plan
-            case ("log", "commit"): out = "  commented PROJ-1\n  comment on PROJ-2 already commented\n  not sure PROJ-3 reached Jira (timeout)\n2 worklogs logged, 1 not logged"
+            // As the core of 0.1.5 answers: the line of 0.1.4, then the day summary comments.
+            case ("log", "commit"): out = """
+                  logged #41 PROJ-1 15:45–16:45 1h
+                  not logged #44 PROJ-1 22:00–23:45: overlaps a worklog now in Jira
+                1 worklogs logged, 1 not logged
+                  commented day summary on PROJ-1
+                  day summary on PROJ-2 already commented
+                  not sure day summary on PROJ-3 reached Jira (timeout): the next commit checks Jira first
+                1 comments written, 1 not written
+                """
             case ("log", "config"):
                 out = #"{"tz":"Asia/Nicosia","machine_tz":"Asia/Almaty","projects":["OPS"],"jira_projects":["PROJ","OPS"],"day_summary":true,"rebuild_at_end":false,"exclude":[{"kind":"project","name":"dotfiles"}]}"#
             default: out = ""
@@ -88,7 +97,10 @@ final class WorklogTextTests: XCTestCase {
         XCTAssertEqual(vm.excluded.map(\.text), ["Excluded: 9h 40m — dotfiles", "Excluded: 10m — session 3f0c9a2e"])
         XCTAssertEqual(vm.unassigned.map(\.text), ["No task: 50m — example-project", "No task: 20m — no project"])
         XCTAssertEqual(vm.unassigned.map(\.action), [true, false], "time of no project cannot be kept out")
-        XCTAssertEqual(vm.rows.map(\.anchor), ["PROJ-1|1793454300", "PROJ-1|summary"])
+        XCTAssertEqual(vm.rows.map(\.anchor), ["1793397600|PROJ-1|1793454300", "1793397600|PROJ-1|summary"])
+        XCTAssertEqual(vm.commitNotes, ["Day summary of PROJ-1: in its worklog, under the row's text."])
+        XCTAssertTrue(ReconcileVM.confirmation(plan, key: "PROJ-1", f).detail.hasSuffix("\nDay summary of PROJ-1: in its worklog, under the row's text."),
+                      "the period's confirmation says it too")
         XCTAssertTrue(vm.copyText.contains("Row text.\n\nWhat the task was"))
 
         let ru = WorklogVM(plan.worklog(Self.fmt(.ru)), Self.fmt(.ru), machine: TimeZone(identifier: "Asia/Nicosia"), host: nil)
@@ -125,16 +137,18 @@ final class WorklogTextTests: XCTestCase {
         let w = shown.worklog(Self.fmt(.en))
         XCTAssertTrue(w.rows[1].summaryAsComment)
         XCTAssertEqual(w.rows[1].written, "Row text.", "the summary goes as a comment, the worklog keeps the text")
+        XCTAssertEqual(WorklogVM(w, Self.fmt(.ru)).commitNotes, ["Итог дня по PROJ-1 — отдельным комментарием к задаче, один на задачу и день."])
 
         guard case .written(let logged, let failed, let problems) = try b.commit(Self.day, shown: shown) else { return XCTFail("not written") }
-        XCTAssertEqual([logged, failed], [2, 1])
-        XCTAssertEqual(problems, ["comment on PROJ-2 already commented", "not sure PROJ-3 reached Jira (timeout)"])
+        XCTAssertEqual([logged, failed], [2, 2], "worklogs and comments both count")
+        XCTAssertEqual(problems, ["not logged #44 PROJ-1 22:00–23:45: overlaps a worklog now in Jira", "day summary on PROJ-2 already commented",
+                                  "not sure day summary on PROJ-3 reached Jira (timeout): the next commit checks Jira first"])
         XCTAssertEqual(calls.all.last, ["log", "commit", "--yes", "--no-scan", "--expect", "9a1f", "--with-summary", "--summary-comment=PROJ-1",
                                         "--", Self.day], "the commit makes the same day summary choice as the plan shown (its digest counts it)")
-        // The words of a core between versions read too.
-        guard case .written(let n, let bad, let why) = try b.written(Proc.Result(status: 1, out: Data("  day summary on PROJ-1 not written: HTTP 400\n1 written, 1 not written\n".utf8), err: Data()))
+        guard case .written(let n, let bad, let why) = try b.written(Proc.Result(status: 1, out: Data(
+            "0 worklogs logged\n  day summary on PROJ-1 not written: HTTP 400\n0 comments written, 1 not written\n".utf8), err: Data()))
         else { return XCTFail("not read") }
-        XCTAssertEqual([n, bad], [1, 1])
+        XCTAssertEqual([n, bad], [0, 1])
         XCTAssertEqual(why, ["day summary on PROJ-1 not written: HTTP 400"])
 
         try b.setText(44, "-starts with a dash", summary: true)

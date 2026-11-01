@@ -91,9 +91,6 @@ struct WorklogScreen: View {
                     .background(RoundedRectangle(cornerRadius: 10).fill(Z.inset))
                     Flow(spacing: 8, lineSpacing: 8) {
                         if let commit = vm.commitTitle {
-                            // Day summaries that go to Jira as comments, said in the confirmation.
-                            let comments = vm.rows.filter { $0.kind == .jira && $0.daySummary && $0.summaryAsComment && !($0.summary ?? "").isEmpty }
-                                .compactMap { $0.jiraKey ?? $0.taskKey }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
                             // Not while the plan loads or is rebuilt: what is shown is about to change.
                             PillButton(title: commit, primary: true, height: 38, radius: 10, fontSize: 14) {
                                 if app.taskBackend != nil, cache.loading == 0 { confirm = true }
@@ -103,9 +100,8 @@ struct WorklogScreen: View {
                                 Button(f.t("worklog.commitYes")) { app.commitPlan(key) }
                                 Button(f.t("common.cancel"), role: .cancel) {}
                             } message: {
-                                Text(([f.t("worklog.commitDetail")]
-                                      + (comments.isEmpty ? [] : [f.t("worklog.commitComment", comments.joined(separator: ", "))]))
-                                    .joined(separator: "\n"))
+                                // With where the day summaries go.
+                                Text(([f.t("worklog.commitDetail")] + vm.commitNotes).joined(separator: "\n"))
                             }
                         }
                         PillButton(title: f.t("worklog.edit"), height: 38, radius: 10, fontSize: 14) {}
@@ -353,6 +349,8 @@ struct RowEditor: View {
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 12).fill(Z.ground))
+        // The day summary follows its task to another row; a row text typed for the old row is not for the new one.
+        .onChange(of: row.id) { _ in if !(onSummary ?? row.daySummary) { draft = nil } }
     }
 
     /// A text call, then the plan again; the typed text stays when it failed.
