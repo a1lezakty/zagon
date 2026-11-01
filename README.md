@@ -165,7 +165,9 @@ zagon update            # replace the binary and restart the service
 
 `zagon update` downloads the latest release for your CPU, checks it against `SHA256SUMS`, and only then replaces
 its own binary (atomically, in the same directory). The old binary stays next to it as `zagon.prev`: move it back to
-roll back (not across a database schema change: the older binary refuses a newer database). Running services are restarted. If the binary is in `/usr/local/bin`, run `sudo zagon update` (behind a
+roll back (not across a database schema change: the older binary refuses a newer database). Before replacing, it
+says when the new version will move the database to a newer schema, and stops when the new version cannot open the
+database. Running services are restarted. If the binary is in `/usr/local/bin`, run `sudo zagon update` (behind a
 proxy: `sudo -E zagon update`, since sudo drops the proxy variables). On macOS the app updates itself, the `zagon`
 inside it included.
 
