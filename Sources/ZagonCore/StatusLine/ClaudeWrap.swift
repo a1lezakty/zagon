@@ -25,10 +25,27 @@ public enum ClaudeWrap {
             guard let claude = Sys.which("claude") else { fail("no claude to run") }
             argv.insert(claude, at: 0)
         }
-        if isStream(argv) && !HookSpool.isInternal, let rc = stream(argv, paths: paths) { exit(rc) }
+        if isStream(argv) && !HookSpool.isInternal {
+            mark(runMark, paths: paths, ts: Sys.now())
+            if let rc = stream(argv, paths: paths) { exit(rc) }
+        }
         let cargs = argv.map { strdup($0) } + [nil]
         execv(argv[0], cargs)
         fail("cannot run \(argv[0]) (errno \(errno))")
+    }
+
+    /// What Zagon.app's "Check the panel" reads: `spool/.panel-run` is rewritten each time the panel starts a chat
+    /// through Zagon, `spool/.panel-reading` each time a limits reading from it is spooled.
+    static let runMark = ".panel-run", readingMark = ".panel-reading"
+
+    static func mark(_ name: String, paths: ZagonPaths, ts: Double) {
+        Sys.mkdirs(paths.spool)
+        _ = Sys.writeFile(paths.spool + "/" + name, Array(HookSpool.fmt(ts).utf8), mode: 0o600)
+    }
+
+    /// When the panel last started Claude through Zagon, and last gave a limits reading; nil = not seen.
+    public static func panelSeen(paths: ZagonPaths = ZagonPaths()) -> (run: Double?, reading: Double?) {
+        (Sys.mtime(paths.spool + "/" + runMark), Sys.mtime(paths.spool + "/" + readingMark))
     }
 
     static func fail(_ s: String) -> Never {
@@ -67,6 +84,7 @@ public enum ClaudeWrap {
         let ts = Sys.now()
         if let l = StatusLine.limitsLine(input, ts: ts), StatusLine.shouldSpool(input, ts: ts, paths: paths) {
             HookSpool.append(l.line, paths: paths, ts: ts)
+            mark(readingMark, paths: paths, ts: ts)
         }
     }
 

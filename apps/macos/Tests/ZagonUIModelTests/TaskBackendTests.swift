@@ -69,7 +69,7 @@ final class TaskBackendTests: XCTestCase {
         let jiraOff = try sample.plan(day)
         XCTAssertEqual(jiraOff.digest, DayPlan.commitDigest(jiraOff.plan.rows), "today's zagon sends the digest of what it would write")
         XCTAssertEqual(jiraOff.worklog(Fmt(lang: .en, now: p.now)).jiraBlocked,
-                       "Jira is not connected there ([jira] in config.toml): the plan stays in Zagon.")
+                       "Jira is not connected: the plan stays in Zagon.")
         XCTAssertEqual(WorklogVM(jiraOff.worklog(Fmt(lang: .en, now: p.now)), Fmt(lang: .en, now: p.now)).stats[2].value, "—")
         // The server as if Jira were connected: 1 h of your worklogs there.
         var connected = jiraOff.plan
@@ -191,6 +191,18 @@ final class TaskBackendTests: XCTestCase {
         XCTAssertThrowsError(try older.list()) {
             XCTAssertEqual("\($0)", "zagon there is older than this app, update it (Unknown option '--json')")
         }
+    }
+
+    /// The handoff is the CLI's: a server prints it, a Mac's zagon copies it itself and prints nothing.
+    func testHandoff() throws {
+        let server = TaskBackend(source: .server("x")) { a, _ in
+            Proc.Result(status: 0, out: Data(("# " + a.joined(separator: " ") + "\n").utf8), err: Data("handoff h1: 10 bytes\n".utf8))
+        }
+        XCTAssertEqual(try server.handoff("claude:s1"), "# handoff --to clipboard -- claude:s1\n")
+        let missing = TaskBackend(source: .local) { _, _ in
+            Proc.Result(status: 1, out: Data(), err: Data("Error: no Claude Code or Codex session matches 'claude:s2'\n".utf8))
+        }
+        XCTAssertThrowsError(try missing.handoff("claude:s2")) { XCTAssertTrue("\($0)".contains("no Claude Code or Codex session")) }
     }
 
     func testSuggestedNewTasksOverSsh() throws {

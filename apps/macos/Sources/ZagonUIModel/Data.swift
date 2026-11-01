@@ -237,10 +237,12 @@ public struct LiveSession: Sendable, Identifiable {
     /// Another session typed its last message (a worker driven over tmux): waiting for input, it waits for that session.
     /// Its title or project, "" = neither; nil = you typed it.
     public var drivenBy: String?
+    /// The ssh alias of the server it runs on; nil = this Mac.
+    public var server: String?
     public init(id: String, title: String, host: String, tool: Tool = .claude, model: String, status: SessionStatus,
-                since: Date, command: String, drivenBy: String? = nil) {
+                since: Date, command: String, drivenBy: String? = nil, server: String? = nil) {
         self.id = id; self.title = title; self.host = host; self.tool = tool; self.model = model
-        self.status = status; self.since = since; self.command = command; self.drivenBy = drivenBy
+        self.status = status; self.since = since; self.command = command; self.drivenBy = drivenBy; self.server = server
     }
 }
 

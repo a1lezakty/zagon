@@ -4,6 +4,7 @@ import ZagonUIModel
 
 struct SettingsScreen: View {
     @EnvironmentObject private var app: AppState
+    @Environment(\.isSnapshot) private var snapshot
     /// The summary time being typed; nil = the file's.
     @State private var summaryTime: String?
     @State private var summaryTimeBad = false
@@ -23,7 +24,13 @@ struct SettingsScreen: View {
                         HStack(spacing: 8) { Dot(color: Z.bad, size: 7); Text(line) }
                     }
                     ForEach(cli.notes, id: \.self) { line in
-                        HStack(spacing: 8) { Dot(color: Z.faint, size: 7); Text(line).foregroundColor(Z.muted) }
+                        // Claude's tools left out matter: said in words, not as doctor's line.
+                        let tools = line.hasPrefix("claude: MCP skipped")
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Dot(color: tools ? Z.waiting : Z.faint, size: 7)
+                            Text(tools ? f.t("connect.mcpSkipped") : line).foregroundColor(tools ? Z.text : Z.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 } else if AppState.cliPath == nil {
                     Text(f.t("connect.onlyApp")).foregroundColor(Z.muted)
@@ -89,10 +96,21 @@ struct SettingsScreen: View {
                 }
                 CheckRow(title: f.t("settings.notify.mac"), on: app.macNotify) {
                     app.macNotify.toggle()
-                    if app.macNotify { MacNotifications.start() }
+                    if app.macNotify { app.askNotify() }
+                }
+                if app.macNotify && app.notifyDenied {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(f.t("settings.notify.denied")).font(.system(size: 12)).foregroundColor(Z.bad)
+                            .fixedSize(horizontal: false, vertical: true)
+                        PillButton(title: f.t("settings.notify.openSystem"), height: 28, radius: 8, fontSize: 12) {
+                            MacNotifications.openSettings()
+                        }
+                    }
+                    .padding(.leading, 25)
                 }
                 if app.macNotify {
-                    CheckRow(title: f.t("settings.notify.remote"), on: app.macNotifyRemote) { app.macNotifyRemote.toggle() }
+                    CheckRow(title: f.t(app.remoteHosts.isEmpty ? "settings.notify.remoteAlone" : "settings.notify.remote"),
+                             on: app.macNotifyRemote) { app.macNotifyRemote.toggle() }
                         .padding(.leading, 25)
                 }
                 let reset = app.notify.limitReset
@@ -103,6 +121,8 @@ struct SettingsScreen: View {
                 }
             }
             .frame(maxWidth: 640, alignment: .leading)
+            // Allowed or denied in System Settings meanwhile: read again whenever settings show.
+            .onAppear { if !snapshot { app.checkNotify() } }
             summary(f)
             Card(spacing: 12) {
                 Text(f.t("settings.servers")).font(.system(size: 15, weight: .semibold))
@@ -121,7 +141,7 @@ struct SettingsScreen: View {
                             Text(h).font(.system(size: 14)).foregroundColor(Z.text)
                             if on { Dot(color: app.serverOnline(h) ? Z.working : Z.faint, size: 7) }
                             if on, let e = errors[h] {
-                                Text(e == Remote.oldZagon ? f.t("servers.oldZagon") : e).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1).truncationMode(.middle)
+                                Text(e == Remote.oldZagon ? f.t("servers.oldZagon") : e == Remote.noZagon ? f.t("servers.noZagonShort") : e).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1).truncationMode(.middle)
                             } else if on, let hint = hints[h] {
                                 Text(f.t(hint)).font(.system(size: 12)).foregroundColor(Z.muted).lineLimit(1)
                             }
@@ -131,6 +151,10 @@ struct SettingsScreen: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    if on, errors[h] == Remote.noZagon {
+                        CopyButton(title: f.t("servers.copyInstall"), height: 28, radius: 8, fontSize: 12) { Remote.installCommand }
+                            .padding(.leading, 25)
+                    }
                 }
             }
             .frame(maxWidth: 640, alignment: .leading)
@@ -160,7 +184,9 @@ struct SettingsScreen: View {
                            set: { summaryTime = $0; summaryTimeBad = false })
         return Card(spacing: 12) {
             Text(f.t("settings.summary")).font(.system(size: 15, weight: .semibold))
-            Text(f.t(servers.isEmpty ? "settings.summary.noServer" : "settings.summary.note")).font(.system(size: 13))
+            // Without a server the Mac rebuilds at the end of the day itself, when that is on (`startWorklogTexts`).
+            let mac = servers.isEmpty && app.endOfDayTexts && (app.worklogConfig[.local] ?? nil)?.rebuildAtEnd != false
+            Text(f.t(!servers.isEmpty ? "settings.summary.note" : mac ? "settings.summary.mac" : "settings.summary.noServer")).font(.system(size: 13))
                 .foregroundColor(Z.secondary).fixedSize(horizontal: false, vertical: true)
             CheckRow(title: f.t("settings.summary.on"), on: at != nil) {
                 summaryTime = nil
@@ -402,14 +428,22 @@ struct EditorPanelsCard: View {
                             PillButton(title: f.t("editors.disable"), busy: busy && running == "editor-panels off") {
                                 app.runCLI("editor-panels off")
                             }
+                            // Reads the editors again; the line below reads the panel's marks on every redraw.
+                            PillButton(title: f.t("editors.check")) { app.readEditors() }
                         }
                     }
                     .disabled(app.cliBusy)
+                    if vm.canDisable {
+                        // The samples' line is made up: a real one reads the machine rendering them.
+                        Text(snapshot ? EditorPanelsVM.panelCheck(run: f.now - 3600, reading: f.now - 3000, f) : EditorPanelsVM.panelCheck(f)).font(.system(size: 12)).foregroundColor(Z.body).fixedSize(horizontal: false, vertical: true)
+                    }
                 } else {
                     Text(f.t("connect.onlyApp")).foregroundColor(Z.muted)
                 }
             }
             Text(f.t("editors.effects")).font(.system(size: 12)).foregroundColor(Z.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(f.t("editors.cursorAgent")).font(.system(size: 12)).foregroundColor(Z.muted)
                 .fixedSize(horizontal: false, vertical: true)
             if let e = app.cliError, Self.ran(app) {
                 Text(f.t("connect.failed", e)).font(.system(size: 12)).foregroundColor(Z.bad)

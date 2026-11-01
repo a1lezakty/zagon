@@ -199,6 +199,32 @@ import Testing
         #expect(offCalls.argv.isEmpty)
     }
 
+    /// No claude on PATH (Claude Code only in an editor): the MCP server is registered with the extension's own claude,
+    /// the newest one; without any, doctor says it was skipped.
+    @Test func mcpThroughTheEditorExtensionsClaude() throws {
+        let (home, o) = setUp()
+        let calls = Calls()
+        var i = installer(o, calls)
+        #expect(i.doctor().contains { $0.ok && $0.text == "claude: MCP skipped (no claude CLI on PATH or in an editor extension)" })
+        let ext = home + "/.cursor/extensions/anthropic.claude-code-"
+        for v in ["2.1.300-darwin-arm64", "2.1.99-darwin-arm64"] {
+            Sys.mkdirs(ext + v + "/resources/native-binary")
+            Sys.writeFile(ext + v + "/resources/native-binary/claude", [0], mode: 0o755)
+        }
+        i.runner = { argv in
+            calls.argv.append(argv)
+            if Array(argv.dropFirst().prefix(2)) == ["mcp", "add"] { Sys.writeFile(home + "/.claude.json", Array("{\"mcpServers\":{\"zagon\":{}}}".utf8)) }
+            return 0
+        }
+        #expect(i.doctor().contains { !$0.ok && $0.text == "claude: MCP server zagon not registered" })
+        try i.install()
+        let claude = ext + "2.1.300-darwin-arm64/resources/native-binary/claude"
+        #expect(calls.argv.contains([claude, "mcp", "add", "--scope", "user", "zagon", "--", home + "/bin/zagon", "mcp"]))
+        #expect(i.doctor().contains { $0.ok && $0.text == "claude: MCP server zagon registered" })
+        try i.uninstall()
+        #expect(calls.argv.contains([claude, "mcp", "remove", "--scope", "user", "zagon"]))
+    }
+
     /// `doctor`'s info lines: the status line's last limit reading, the summary engine's CLI, Jira without its token.
     @Test func doctorInfo() throws {
         var (home, o) = setUp()
