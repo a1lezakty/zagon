@@ -40,7 +40,7 @@ final class CursorUITests: XCTestCase {
 
         let day = DayVM(p.day(now), f)
         XCTAssertGreaterThanOrEqual(p.day(now).cursorSec, 120)
-        XCTAssertTrue(day.limitNotes.contains { $0.text.hasPrefix("Cursor ") && $0.text.contains("without cost") },
+        XCTAssertTrue(day.limitNotes.contains { $0.text.hasPrefix("Cursor ") && $0.text.contains("not in the $") },
                       "\(day.limitNotes.map(\.text))")
         // Its tokens count, at no price ("gpt-5" alone would be priced).
         XCTAssertEqual(p.day(now).totals.tokens, 1200)

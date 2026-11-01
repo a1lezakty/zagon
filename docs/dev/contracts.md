@@ -69,7 +69,9 @@ limits or prices (Cursor keeps them on its servers; Zagon reads no credentials).
   `afterAgentResponse`) is a usage record of model `cursor/<model>` (`cursor` without one), which `Pricing.rates`
   never prices (unpriced: "$ ?"). One `generation_id` counts its largest report per field (parser state keeps the
   last 64 generations of the file), so `stop` and `afterAgentResponse` of one answer never add up; a generation
-  reported on two UTC days counts in both files.
+  reported on two UTC days counts in both files, reports without a generation id add up. `requests` = the reports
+  that added tokens. Whether a report is one answer's tokens (not the conversation's running total) is from Cursor's
+  bundle, not yet seen live.
   These files are kept 40 days (SpoolIngest; other spool files 7): they are the only record of this time.
 - transcripts: `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl` (sub-agent logs and old `.txt` are
   left out). Lines hold no times; a typed message (`<user_query>`, its text for keys and search) is placed only when
@@ -85,19 +87,23 @@ limits or prices (Cursor keeps them on its servers; Zagon reads no credentials).
   `zagon hook`) count: after that the hooks do, and the two never overlap.
 - conversation headers (Cursor 3 writes no transcripts): `CursorHeaders.sync` opens Cursor's
   `<User>/globalStorage/state.vscdb` (`<User>` = `~/Library/Application Support/Cursor/User` on macOS,
-  `$XDG_CONFIG_HOME/Cursor/User` elsewhere) with `mode=ro` (no copy when that fails) and reads only table
-  `composerHeaders`: `composerId`, `workspaceId`, `createdAt` / `lastUpdatedAt` (ms) and `json_extract(value,
-  '$.name')` inside SQLite; never `ItemTable`, `cursorDiskKV` or any text of a conversation. Rows kept: not
-  `isSubagent`, not a conversation a transcript row of this database counts (`source_file`), and only local ones:
+  `$XDG_CONFIG_HOME/Cursor/User` elsewhere) with `mode=ro` (no copy when that fails; busy timeout 0.25 s; closed
+  before anything else is read) and reads only table `composerHeaders`: `composerId`, `workspaceId`, `createdAt` /
+  `lastUpdatedAt` (ms), `isSubagent` and `json_extract(value, '$.name')` inside SQLite (the conversation's title,
+  stored as the session title); never `ItemTable`, `cursorDiskKV` or the text of a conversation. Kept: main
+  conversations without a transcript row in this database (`source_file`) whose workspace is local:
   `<User>/workspaceStorage/<workspaceId>/workspace.json` gives a `file://` `folder` (its decoded path = cwd) or
-  `workspace` file (no cwd); a remote one (Remote SSH: its hooks run on the server, counted there) or an unknown
-  workspace is left out. It writes `<data-dir>/cursor/headers.ndjson` (`{"id","created","updated","cwd"?,"name"?}`,
-  seconds, `updated` capped at the hooks' start; 0600) only when the content changed, by rename, so Ingest takes the
-  file as replaced and counts it again from the start; then the caller passes it to `Ingest.update`. At most every 5
-  minutes (`meta` `cursor_headers_at`): after `Ingest.scan` in the app's pass, `zagon scan` / report commands and the
-  daemon's full passes. `CursorHeadersParser`: `name` is the title (rank `external`); before the hooks (a minute's
-  margin) the creation is a typed message without text and its turn ends at `updated`, at most 10 minutes, none when
-  that is over 30 minutes away: rougher than the transcripts.
+  `workspace` file (no cwd). A remote one (Remote SSH: its hooks run on the server, counted there) is left out; an
+  unknown one (no `workspace.json`) adds nothing new but keeps its old line, as does a conversation gone from the
+  list. Assumed, not yet seen live: `workspaceId` is the `workspaceStorage` folder name, `composerId` the hooks'
+  `conversation_id`. File `<data-dir>/cursor/headers.ndjson` (`{"id","created","updated","cwd"?,"name"?}`, seconds,
+  `updated` at most a second before the hooks' start; 0600): kept / gone lines first, then the listed ones oldest
+  first; only new lines at the end → appended (Ingest tails it), else replaced by rename (a new inode: Ingest takes
+  back what it counted and counts it again). The caller passes it to `Ingest.update` when `sync` returns true. At most
+  every 5 minutes (`meta` `cursor_headers_at`): after `Ingest.scan` in the app's pass, `zagon scan` / report commands
+  and the daemon's full passes. `CursorHeadersParser`: `name` is the title (rank `external`); before the hooks (a
+  minute's margin) the creation is a typed message without text and its turn ends at `updated`, at most 10 minutes,
+  none when that is over 30 minutes away: rougher than the transcripts.
 
 ## Store (`Sources/ZagonCore/Store/`)
 

@@ -334,7 +334,7 @@ enum Strings {
         "settings.wl.exclude": "Not logged", "settings.wl.excludeNone": "Nothing is excluded. “Don't log” in a plan row's menu adds here.",
         "settings.wl.kind.project": "project {0}", "settings.wl.kind.task": "task {0}", "settings.wl.kind.session": "session {0}",
         "settings.wl.remove": "Remove", "settings.wl.notSaved": "{0}: not saved ({1})",
-        "day.cursor": "Cursor {0}: tokens from its hooks, without cost (Cursor's prices are unknown), no limits; its time before Zagon's hooks is approximate.",
+        "day.cursor": "Cursor {0}: tokens as its hooks report them, not in the $ (Cursor's prices are unknown), no limits; its time before Zagon's hooks is approximate.",
     ]
 
     static let ru: [String: String] = [
@@ -679,6 +679,6 @@ enum Strings {
         "settings.wl.exclude": "Не логировать", "settings.wl.excludeNone": "Ничего не исключено. «Не логировать» в меню строки плана добавляет сюда.",
         "settings.wl.kind.project": "проект {0}", "settings.wl.kind.task": "задача {0}", "settings.wl.kind.session": "сессия {0}",
         "settings.wl.remove": "Убрать", "settings.wl.notSaved": "{0}: не сохранено ({1})",
-        "day.cursor": "Cursor {0}: токены — из его хуков, без стоимости (цены Cursor неизвестны), лимитов нет; время до хуков Загона — приблизительное.",
+        "day.cursor": "Cursor {0}: токены — какие сообщают его хуки, в $ не входят (цены Cursor неизвестны), лимитов нет; время до хуков Загона — приблизительное.",
     ]
 }

@@ -240,30 +240,35 @@ import Testing
         hook(paths, "UserPromptSubmit", envelope("beforeSubmitPrompt", gen: "g-1", secrets))
         hook(paths, "PostToolUse", envelope("postToolUse", gen: "g-1", #","tool_name":"Shell","duration_ms":12"# + secrets))
         hook(paths, "afterAgentResponse", envelope("afterAgentResponse", gen: "g-1", tokens(1000, 300, 5000, 700) + secrets), tool: "cursor")
+        // The parser's state carries a generation over to the next pass.
+        let store = try Store(path: ":memory:"), ingest = Ingest(store: store, sources: CursorSource.specs(paths: paths, root: home + "/none"))
+        try ingest.scan()
         hook(paths, "Stop", envelope("stop", gen: "g-1", #","status":"completed","loop_count":0"# + tokens(1200, 300, 5000, 700)))
         hook(paths, "Stop", envelope("stop", gen: "g-2", tokens(100, 50, 0, 0)))
         hook(paths, "afterAgentResponse", envelope("afterAgentResponse", gen: "g-2", tokens(100, 50, 0, 0)), tool: "cursor")
         hook(paths, "Stop", envelope("stop", gen: "g-3", #","input_tokens":"x""#))  // no number: no tokens
+        // Without a generation id reports add up.
+        hook(paths, "Stop", envelope("stop", gen: "", tokens(10, 0, 0, 0)))
+        hook(paths, "Stop", envelope("stop", gen: "", tokens(10, 0, 0, 0)))
         let lines = spoolLines(paths.dir)
-        #expect(lines.count == 8)
+        #expect(lines.count == 10)
         let first = try #require(lines.first.flatMap { JValue.parse($0) })
         #expect(first["session_id"]?.string == "c-5" && first["composer_mode"] == nil && first["generation_id"]?.string == "g-0")
         let spool = lines.joined()
         #expect(!spool.contains("SECRET") && !spool.contains("example.com") && !spool.contains("for PROJ"))
         #expect(spool.contains(#""keys":"PROJ-3""#) && spool.contains(#""cache_write_tokens":700"#))
 
-        let store = try Store(path: ":memory:")
-        try Ingest(store: store, sources: CursorSource.specs(paths: paths, root: home + "/none")).scan()
+        try ingest.scan()
         try SpoolIngest.run(store: store, spoolDir: paths.spool)
         let u = try #require(try store.db.one("""
             SELECT sum(input), sum(output), sum(cache_read), sum(cache_write), group_concat(DISTINCT model), group_concat(DISTINCT session_id)
             FROM usage_hour
             """) { [$0.int(0), $0.int(1), $0.int(2), $0.int(3)].map(String.init) + [$0.text(4) ?? "", $0.text(5) ?? ""] })
-        #expect(u == ["1300", "350", "5000", "700", "cursor/claude-opus-4-8", "cursor:c-5"])
+        #expect(u == ["1320", "350", "5000", "700", "cursor/claude-opus-4-8", "cursor:c-5"])
         // Cursor's own prices are unknown: none, also for a model the price table knows.
         #expect(Pricing.rates("claude-opus-4-8") != nil && Pricing.rates("cursor/claude-opus-4-8") == nil)
         let line = try #require(try Reports(store: store).sessions(from: 0, to: 4e9).first { $0.id == "cursor:c-5" })
-        #expect(line.cost == 0 && line.unpriced == 1300 + 350 + 5000 + 700)
+        #expect(line.cost == 0 && line.unpriced == 1320 + 350 + 5000 + 700)
         #expect(try store.db.one("SELECT status FROM session WHERE id = 'cursor:c-5'") { $0.text(0) } == "waiting_input")
         let db = try dump(store)
         #expect(!db.contains("SECRET") && !db.contains("example.com") && db.contains("PROJ-3"))
@@ -315,8 +320,11 @@ import Testing
         try cursorDatabase(user, rows)
         let store = try Store(path: ":memory:"), ingest = Ingest(store: store, sources: CursorSource.specs(paths: paths))
         try ingest.scan()
+        let cursorFiles = Sys.listDir(user + "/globalStorage").sorted(), cursorDB = Sys.readFile(user + "/globalStorage/state.vscdb")
         #expect(CursorHeaders.sync(store: store, paths: paths, user: user, now: 1000))
         try ingest.update(paths: [CursorHeaders.file(paths)])
+        // Cursor's database is only read: no new file beside it, not a byte changed.
+        #expect(Sys.listDir(user + "/globalStorage").sorted() == cursorFiles && Sys.readFile(user + "/globalStorage/state.vscdb") == cursorDB)
 
         let file = try #require(Sys.readFile(CursorHeaders.file(paths)).map { String(decoding: $0, as: UTF8.self) })
         #expect(file.split(separator: "\n").compactMap { JValue.parse(String($0))?["id"]?.string } == ["h-2", "h-1", "h-6", "h-7"])
@@ -344,18 +352,51 @@ import Testing
         #expect(try working(store, "cursor:h-1") == [[t1 - d, t1 - d + 500]])
         #expect(try row("h-1")?.last == "1")
         #expect(!CursorHeaders.sync(store: store, paths: paths, user: user, now: 1800))
-        // A conversation Cursor dropped from its list keeps its time; a table in another format changes nothing.
-        rows.removeAll { $0.id == "h-6" }
+        // A new conversation at the end is appended (the same file: Ingest reads just it).
+        func inode() -> UInt64? { (try? FileManager.default.attributesOfItem(atPath: CursorHeaders.file(paths)))?[.systemFileNumber] as? UInt64 }
+        let ino = inode()
+        rows.append(("h-8", "ws-local", since + 300, since + 400, 0, named("Newest")))
         try cursorDatabase(user, rows)
-        CursorHeaders.sync(store: store, paths: paths, user: user, now: 2200)
+        #expect(CursorHeaders.sync(store: store, paths: paths, user: user, now: 2200))
+        #expect(inode() == ino)
+        try ingest.update(paths: [CursorHeaders.file(paths)])
+        #expect(try row("h-8")?.first == "Newest" && working(store, "cursor:h-1") == [[t1 - d, t1 - d + 500]])
+        // A conversation Cursor dropped from its list, or whose workspace is gone, keeps its time; a table in another
+        // format changes nothing.
+        rows.removeAll { $0.id == "h-1" }
+        try cursorDatabase(user, rows)
+        Sys.remove(user + "/workspaceStorage/ws-multi/workspace.json")
+        CursorHeaders.sync(store: store, paths: paths, user: user, now: 2600)
         try ingest.update(paths: [CursorHeaders.file(paths)])
         #expect(try working(store, "cursor:h-6") == [[t3, t3 + 600]] && working(store, "cursor:h-1") == [[t1 - d, t1 - d + 500]])
+        #expect(try row("h-1")?.last == "1")
         let kept = Sys.readFile(CursorHeaders.file(paths))
         _ = try SQLite(path: user + "/globalStorage/state.vscdb").run("DROP TABLE composerHeaders")
-        #expect(!CursorHeaders.sync(store: store, paths: paths, user: user, now: 2600))
+        #expect(!CursorHeaders.sync(store: store, paths: paths, user: user, now: 3000))
         #expect(Sys.readFile(CursorHeaders.file(paths)) == kept)
         // No Cursor here: nothing written.
         #expect(!CursorHeaders.sync(store: store, paths: ZagonPaths(home: home, dir: home + "/z2"), user: home + "/none", now: 1800))
         #expect(!Sys.exists(home + "/z2/cursor"))
+    }
+
+    /// Hooks that begin after a conversation was synced: its turn before them stays, and the file stops following it.
+    @Test func headersBeforeAndAfterTheHooks() throws {
+        let home = makeTempDir(), paths = ZagonPaths(home: home, dir: home + "/z"), user = home + "/CursorUser"
+        try cursorDatabase(user, [("h-9", "ws-local", t1, t1 + 300, 0, #"{"name":"Ongoing"}"#)])
+        let store = try Store(path: ":memory:"), ingest = Ingest(store: store, sources: CursorSource.specs(paths: paths))
+        #expect(CursorHeaders.sync(store: store, paths: paths, user: user, now: 1000))
+        try ingest.update(paths: [CursorHeaders.file(paths)])
+        #expect(try working(store, "cursor:h-9") == [[t1, t1 + 300]])
+        Sys.mkdirs(paths.dir)
+        Sys.append(paths.cursorHooks, Array("\(t1 + 1000)\n".utf8))
+        try cursorDatabase(user, [("h-9", "ws-local", t1, t1 + 5000, 0, #"{"name":"Ongoing"}"#)])
+        #expect(CursorHeaders.sync(store: store, paths: paths, user: user, now: 1400))
+        try ingest.update(paths: [CursorHeaders.file(paths)])
+        let file = Sys.readFile(CursorHeaders.file(paths)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        #expect(JValue.parse(String(file.split(separator: "\n").first ?? ""))?["updated"]?.double == t1 + 999)
+        #expect(try working(store, "cursor:h-9") == [[t1, t1 + 600]])
+        // Later turns change nothing in the file.
+        try cursorDatabase(user, [("h-9", "ws-local", t1, t1 + 9000, 0, #"{"name":"Ongoing"}"#)])
+        #expect(!CursorHeaders.sync(store: store, paths: paths, user: user, now: 1800))
     }
 }

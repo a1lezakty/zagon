@@ -50,8 +50,9 @@ public enum CursorSource {
 
 /// Cursor's lines of the hook spool: a typed prompt starts a turn, tool calls and the end of the answer extend it.
 /// Tokens: `stop` and `afterAgentResponse` both report a generation's (`generation_id`); one generation counts its
-/// largest report per field, so the two (or a repeat) never add up. They count under the model `cursor/<model>`, which
-/// `Pricing` never prices: Cursor's own prices are unknown.
+/// largest report per field, so the two (or a repeat) never add up; reports without a generation id add up. They count
+/// under the model `cursor/<model>` (`cursor` without one), which `Pricing` never prices: Cursor's own prices are
+/// unknown. Each report that adds tokens is one request.
 /// ponytail: the largest report of the last `keep` generations of this file; a generation whose reports fall on two
 /// UTC days (two spool files) counts in both.
 struct CursorHookParser: LineParser {
@@ -87,7 +88,7 @@ struct CursorHookParser: LineParser {
             out.events.append(ActivityEvent(sessionId: id, ts: ts, cwd: cwd))
         default: break
         }
-        let n = HookSpool.cursorTokens.map { v[$0]?.double.map { Int($0) } }
+        let n = HookSpool.cursorTokens.map { v[$0]?.double.flatMap { $0 >= 0 && $0 < 1e15 ? Int($0) : nil } }
         guard n.contains(where: { $0 != nil }) else { return }
         let new = n.map { $0 ?? 0 }
         var counted = [0, 0, 0, 0]

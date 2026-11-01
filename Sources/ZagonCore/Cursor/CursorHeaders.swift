@@ -1,3 +1,4 @@
+import CSQLite
 #if canImport(FoundationEssentials)
 import FoundationEssentials
 #else
@@ -25,10 +26,13 @@ public enum CursorHeaders {
         #endif
     }
 
-    /// Rewrites `file(paths)` when the conversations changed; true = rewritten (ingest it). At most once per `every`
+    /// Rewrites `file(paths)` when the conversations changed; true = changed (ingest it). At most once per `every`
     /// seconds (`meta` `cursor_headers_at`, shared by the app, the CLI and the service): Cursor writes this database all
     /// the time, and it is history, the hooks count what happens now. Never throws: no Cursor, a database it cannot open
-    /// or read now (locked, another format) leaves the file as it was.
+    /// or read now (locked, another format) leaves the file as it was. A conversation gone from Cursor's list (Cursor
+    /// cleans up), or whose workspace is no longer known, keeps its line, as a deleted transcript keeps its count; only
+    /// new conversations at the end: they are appended, so Ingest reads just them, else the file is replaced (renamed)
+    /// and counted again from the start.
     @discardableResult
     public static func sync(store: Store, paths: ZagonPaths = ZagonPaths(), user: String? = nil, every: Double = 300,
                             now: Double = Sys.now()) -> Bool {
@@ -37,16 +41,35 @@ public enum CursorHeaders {
         let last = (try? store.db.one("SELECT value FROM meta WHERE key = 'cursor_headers_at'") { $0.real(0) }) ?? nil
         if let last, now >= last, now - last < every { return false }
         _ = try? store.db.run("INSERT OR REPLACE INTO meta(key, value) VALUES('cursor_headers_at', ?)", [.real(now)])
-        guard let (lines, seen) = (try? read(db, user: user, since: CursorSource.hooksSince(paths.cursorHooks),
-                                             skip: transcripts(store))) ?? nil else { return false }
-        // A conversation gone from Cursor's list (Cursor cleans up) keeps what it counted, as a deleted transcript does.
+        guard let rows = (try? read(db)) ?? nil, let skip = try? transcripts(store) else { return false }
+        let since = CursorSource.hooksSince(paths.cursorHooks)
+        var lines: [String] = [], drop = Set<String>(), places: [String: Place] = [:]
+        for r in rows {
+            guard r.main, !skip.contains(r.id) else { drop.insert(r.id); continue }
+            if places[r.ws] == nil { places[r.ws] = place(user: user, workspace: r.ws) }
+            switch places[r.ws]! {
+            case .unknown: continue  // an old line stays
+            case .remote: drop.insert(r.id)
+            case .local(let cwd):
+                drop.insert(r.id)
+                var m: [JValue.Member] = [.init("id", .string(String(r.id.prefix(256)))),
+                                          .init("created", .number(HookSpool.fmt(r.created))),
+                                          .init("updated", .number(HookSpool.fmt(min(r.updated, (since ?? .infinity) - 1))))]
+                if let cwd { m.append(.init("cwd", .string(cwd))) }
+                if let n = r.name?.trimmingSpaces, !n.isEmpty { m.append(.init("name", .string(String(n.prefix(80))))) }
+                lines.append(JValue.object(m).compact)
+            }
+        }
         let old = Sys.readFile(out)
-        let gone = old.map { String(decoding: $0, as: UTF8.self).split(separator: "\n").map(String.init) }?.filter { l in
-            JValue.parse(l)?["id"]?.string.map { !seen.contains($0) } ?? false
+        let kept = old.map { String(decoding: $0, as: UTF8.self).split(separator: "\n").map(String.init) }?.filter { l in
+            JValue.parse(l)?["id"]?.string.map { !drop.contains($0) } ?? false
         } ?? []
-        let text = (lines + gone).map { $0 + "\n" }.joined()
-        if let old { if old == Array(text.utf8) { return false } } else if text.isEmpty { return false }
-        return Sys.mkdirs(dir(paths)) && Sys.writeFile(out, Array(text.utf8), mode: 0o600)
+        let new = Array((kept + lines).map { $0 + "\n" }.joined().utf8)
+        if let old {
+            if old == new { return false }
+            if !old.isEmpty, new.starts(with: old) { return Sys.append(out, Array(new[old.count...])) }
+        } else if new.isEmpty { return false }
+        return Sys.mkdirs(dir(paths)) && Sys.writeFile(out, new, mode: 0o600)
     }
 
     /// Conversation ids whose transcript this database counts (also one Cursor has deleted since).
@@ -58,12 +81,14 @@ public enum CursorHeaders {
         return ids
     }
 
-    /// One line per local main conversation, oldest first: `{"id", "created", "updated", "cwd"?, "name"?}` (seconds).
-    /// `updated` stops at `since`: the hooks count from there, and the file does not change with each turn. `seen`:
-    /// every id the table lists, kept or not. nil = no such table or columns (another format: keep what was counted).
-    static func read(_ path: String, user: String, since: Double?, skip: Set<String>) throws
-        -> (lines: [String], seen: Set<String>)? {
+    struct Row { var id: String, ws: String, created: Double, updated: Double, name: String?, main: Bool }
+
+    /// Every conversation `composerHeaders` lists, oldest first (seconds); `main` = not a sub-agent. nil = no such table
+    /// or columns (another format: keep what was counted). The connection waits at most 0.25 s for Cursor's writer and
+    /// is closed before anything else is read.
+    static func read(_ path: String) throws -> [Row]? {
         let db = try SQLite(path: CodexThreads.uri(path) + "?mode=ro", readOnly: true)
+        sqlite3_busy_timeout(db.handle, 250)
         var cols = Set<String>()
         try db.query("PRAGMA table_info(composerHeaders)") { if let n = $0.text(1) { cols.insert(n) } }
         guard ["composerId", "workspaceId", "createdAt", "lastUpdatedAt"].allSatisfy(cols.contains) else { return nil }
@@ -71,38 +96,31 @@ public enum CursorHeaders {
         // Only `name` of the JSON in `value`, inside SQLite.
         let name = cols.contains("value")
             ? "CASE WHEN json_valid(CAST(value AS TEXT)) THEN json_extract(CAST(value AS TEXT), '$.name') END" : "NULL"
-        var out: [String] = [], seen = Set<String>(), folders: [String: String?] = [:]
+        var out: [Row] = []
         try db.query("""
-            SELECT composerId, workspaceId, createdAt, lastUpdatedAt, \(name), \(sub) FROM composerHeaders
+            SELECT composerId, coalesce(workspaceId, ''), createdAt, lastUpdatedAt, \(name), \(sub) FROM composerHeaders
             ORDER BY createdAt, composerId
             """) { r in
             guard let id = r.text(0), !id.isEmpty else { return }
-            seen.insert(id)
-            guard r.int(5) == 1, !skip.contains(id), let ws = r.text(1) else { return }
-            if folders[ws] == nil { folders[ws] = .some(folder(user: user, workspace: ws)) }
-            guard let cwd = folders[ws] ?? nil else { return }
-            let created = seconds(r.real(2)), updated = max(created, seconds(r.real(3)))
-            guard created > 0 else { return }
-            var m: [JValue.Member] = [.init("id", .string(String(id.prefix(256)))), .init("created", .number(HookSpool.fmt(created))),
-                                      .init("updated", .number(HookSpool.fmt(min(updated, since ?? .infinity))))]
-            if !cwd.isEmpty { m.append(.init("cwd", .string(cwd))) }
-            if let n = r.text(4)?.trimmingSpaces, !n.isEmpty { m.append(.init("name", .string(String(n.prefix(80))))) }
-            out.append(JValue.object(m).compact)
+            let created = seconds(r.real(2))
+            out.append(Row(id: id, ws: r.text(1) ?? "", created: created, updated: max(created, seconds(r.real(3))),
+                           name: r.text(4), main: r.int(5) == 1 && created > 0))
         }
-        return (out, seen)
+        return out
     }
 
     /// JavaScript milliseconds (or seconds) → seconds.
     static func seconds(_ x: Double) -> Double { x > 1e11 ? x / 1000 : x }
 
-    /// The folder of a local workspace, "" for a local one without a single folder (a workspace file); nil = remote or
-    /// not known (no `workspace.json`: an empty window, or an id this layout does not know).
-    static func folder(user: String, workspace ws: String) -> String? {
+    /// Where a workspace is: local (its folder; nil for a workspace file), remote, or not known (no `workspace.json`:
+    /// an empty window, a cleaned-up workspace, or an id this layout does not know).
+    enum Place: Equatable { case local(String?), remote, unknown }
+
+    static func place(user: String, workspace ws: String) -> Place {
         guard !ws.isEmpty, !ws.contains("/"), ws != "..", let b = Sys.readFile(user + "/workspaceStorage/\(ws)/workspace.json"),
-              let v = JValue.parse(b) else { return nil }
-        if let f = v["folder"]?.string { return f.hasPrefix("file:///") ? percentDecoded(f.dropFirst(7)) : nil }
-        if let w = v["workspace"]?.string, w.hasPrefix("file:///") { return "" }
-        return nil
+              let v = JValue.parse(b), let uri = (v["folder"] ?? v["workspace"])?.string else { return .unknown }
+        guard uri.hasPrefix("file:///") else { return .remote }
+        return .local(v["folder"] != nil ? percentDecoded(uri.dropFirst(7)) : nil)
     }
 
     /// `%XX` → the byte (URIs in `workspace.json`: `file:///Users/me/My%20App`).
@@ -120,7 +138,9 @@ public enum CursorHeaders {
     }
 }
 
-/// `<data-dir>/cursor/headers.ndjson` (`CursorHeaders.sync`): one conversation per line. `name` is its title. Time,
+/// `<data-dir>/cursor/headers.ndjson` (`CursorHeaders.sync`): one conversation per line, `{"id", "created",
+/// "updated", "cwd"?, "name"?}` (seconds; `updated` stops a second before the hooks began, so the file does not change
+/// with each turn after that and a conversation also used later keeps its earlier turn). `name` is its title. Time,
 /// rougher than the transcripts': the creation is a typed message, and its turn lasts until the last update by the
 /// transcripts' rule (at most `CursorTranscriptParser.cap`, none when the two are over `gap` apart); only before the
 /// hooks (a minute's margin, as the transcripts). The file is rewritten whole, so Ingest counts it again from the start.
