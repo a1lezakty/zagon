@@ -598,7 +598,8 @@ final class AppState: ObservableObject {
         guard let bin = Self.cliPath, worklogTexts == nil else { return }
         worklogTexts = Task.detached(priority: .background) { [weak self] in
             while !Task.isCancelled {
-                guard let now = await MainActor.run(body: { self.map { (servers: $0.remoteHosts, path: $0.cliEnvPath) } }) else { return }
+                let app = self
+                guard let now = await MainActor.run(body: { app.map { (servers: $0.remoteHosts, path: $0.cliEnvPath) } }) else { return }
                 guard now.servers.isEmpty else {
                     try? await Task.sleep(nanoseconds: 600 * 1_000_000_000)
                     continue

@@ -147,7 +147,7 @@ struct WorklogScreen: View {
                 Text(f.t("worklog.col.span")).frame(width: 104, alignment: .leading)
                 Text(f.t("worklog.col.time")).frame(width: 72, alignment: .trailing)
                 Text(f.t("worklog.col.text")).frame(maxWidth: .infinity, alignment: .leading)
-                Text(f.t("worklog.col.dest")).frame(width: 120, alignment: .leading)
+                Text(f.t("worklog.col.dest")).frame(width: 136, alignment: .leading)
             }
             .font(.system(size: 12, weight: .medium)).foregroundColor(Z.muted)
             .padding(.vertical, 6).padding(.horizontal, 6)
@@ -171,7 +171,8 @@ struct WorklogScreen: View {
                             DestChip(text: r.destination, kind: r.kind)
                             if r.editable, let task = r.taskKey { rowMenu(task, day, f) }
                         }
-                        .frame(width: 120, alignment: .leading)
+                        // "только Zagon" and the row's menu side by side.
+                        .frame(width: 136, alignment: .leading)
                     }
                     .padding(.vertical, 10).padding(.horizontal, 6)
                     if open { RowEditor(row: r, day: day).id(r.anchor).padding(.bottom, 12) }

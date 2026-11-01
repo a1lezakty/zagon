@@ -820,8 +820,8 @@ public struct WorklogVM: Sendable {
         segments = w.rows.map { r in
             let isLogged = r.destination == .alreadyLogged
             return WorklogSegmentVM(x: r.start.timeIntervalSince(origin) / span0, width: r.sec / span0,
-                                    label: isLogged ? "" : r.sec >= 3600 ? r.key + " · " + f.duration(r.sec)
-                                        : String(r.key.prefix { $0 != "-" }),
+                                    // The whole key: PROJ-21 and PROJ-12 side by side must not both read "PROJ".
+                                    label: isLogged ? "" : r.sec >= 3600 ? r.key + " · " + f.duration(r.sec) : r.key,
                                     color: isLogged ? Palette.control : Palette.series(keys.firstIndex(of: r.key) ?? 0),
                                     logged: isLogged)
         }
