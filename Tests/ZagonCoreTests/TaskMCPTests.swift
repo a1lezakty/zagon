@@ -65,6 +65,18 @@ private let day = "2026-10-29"
         #expect(try m.call("task_list", #"{"all":true}"#).text.contains("In Jira, no work here in the last 7 days:\nOPS-5"))
     }
 
+    /// worklog_refresh builds the texts again (here no AI engine: says so); worklog_plan does only with refresh: true.
+    @Test func refreshIsItsOwnTool() throws {
+        let m = try TaskMCP()
+        _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)
+        let p = try m.call("worklog_plan", #"{"date":"\#(day)"}"#)
+        #expect(!p.isError && !p.text.contains("texts not rebuilt"), "\(p.text)")
+        let r = try m.call("worklog_refresh", #"{"date":"\#(day)"}"#)
+        #expect(!r.isError && r.text.contains("10:00–10:05") && r.text.contains("note: texts not rebuilt: no AI engine"), "\(r.text)")
+        #expect(try m.call("worklog_plan", #"{"date":"\#(day)","refresh":true}"#).text == r.text)
+        #expect(try m.call("worklog_refresh", #"{"date":"\#(day)","format":"xml"}"#).isError)
+    }
+
     @Test func planWithoutJiraAndCommitRefused() throws {
         let m = try TaskMCP()
         _ = try m.call("task_create", #"{"title":"Parser work","key":"PROJ-1"}"#)

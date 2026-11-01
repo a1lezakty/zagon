@@ -142,6 +142,15 @@ enum ServiceTools {
             return f
         }
         let ref = MCPSchema.string("Task id, own key (ZAG-3) or Jira key (PROJ-123)")
+        let planSchema = MCPSchema.object([
+            "date": MCPSchema.day("The day (default today in the worklog zone)"),
+            "format": MCPSchema.string("text (default) or json (the fields of zagon log plan --json)", enum: ["text", "json"]),
+        ])
+        func plan(_ a: MCPArgs, _ name: String, refresh: Bool) throws -> String {
+            let format = try a.string("format") ?? "text"
+            guard ["text", "json"].contains(format) else { throw MCPToolError("format must be text or json") }
+            return try t(name).worklogPlan(day: try a.day("date", old: "day"), refresh: refresh, json: format == "json")
+        }
         return [
             MCPTool(name: "handoff_create", title: "Create a handoff",
                     description: "Builds a handoff summary of a session (or of all sessions of a task) from its logs and "
@@ -218,16 +227,18 @@ enum ServiceTools {
             MCPTool(name: "worklog_plan", title: "Worklog plan",
                     description: "The plan of Jira worklogs for a day: the user's working time split by task, without "
                         + "overlap with worklogs already in Jira, rounded to 5 minutes, each row with 1-2 sentences about its "
-                        + "stretch and, on each task's longest row, the day's summary. refresh: true builds the texts again "
-                        + "(one AI call) if sessions worked after they were built. Writes nothing to Jira.",
-                    inputSchema: MCPSchema.object([
-                        "date": MCPSchema.day("The day (default today in the worklog zone)"),
-                        "refresh": ["type": "boolean", "description": "Build the day's texts again if they are older than the work (default false)"],
-                        "format": MCPSchema.string("text (default) or json (the fields of zagon log plan --json)", enum: ["text", "json"]),
-                    ])) { a in
-                let format = try a.string("format") ?? "text"
-                guard ["text", "json"].contains(format) else { throw MCPToolError("format must be text or json") }
-                return try t("worklog_plan").worklogPlan(day: try a.day("date", old: "day"), refresh: try a.bool("refresh") ?? false, json: format == "json")
+                        + "stretch and, on each task's longest row, the day's summary. Makes no AI call and writes nothing to "
+                        + "Jira. To build the texts again use worklog_refresh; refresh: true here (from older versions) does "
+                        + "the same: one AI call, the texts saved in Zagon's database.",
+                    inputSchema: planSchema) { a in
+                try plan(a, "worklog_plan", refresh: try a.bool("refresh") ?? false)
+            },
+            MCPTool(name: "worklog_refresh", title: "Rebuild worklog texts",
+                    description: "Builds the day's worklog texts again with one AI call (a little of the subscription limit) "
+                        + "if sessions worked after they were built, saves them in Zagon's database (texts set by hand stay) "
+                        + "and returns the plan as worklog_plan does. Writes nothing to Jira.",
+                    inputSchema: planSchema, readOnly: false) { a in
+                try plan(a, "worklog_refresh", refresh: true)
             },
             MCPTool(name: "worklog_config", title: "Worklog settings",
                     description: "The [worklog] settings: the zone worklog days are cut in, extra Jira projects, whether the "

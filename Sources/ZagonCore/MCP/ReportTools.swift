@@ -395,7 +395,8 @@ final class ReportTools {
         let from = try a.day("from").flatMap { Time.dayBounds($0)?.start }, to = try a.day("to").flatMap { Time.dayBounds($0)?.end }
         let hits = try reports.search(text, from: from, to: to)
         guard !hits.isEmpty else { return "No sessions match \"\(text)\"." }
-        var out = ["\(hits.count) sessions match \"\(text)\"" + (hits.count > limit ? ", showing \(limit)" : "") + ":"]
+        let head = hits.count == 1 ? "1 session matches" : "\(hits.count) sessions match"
+        var out: [String] = ["\(head) \"\(text)\"" + (hits.count > limit ? ", showing \(limit)" : "") + ":"]
         let t = now()
         for h in hits.prefix(limit) {
             guard let s = try store.db.one("""

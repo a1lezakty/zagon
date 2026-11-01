@@ -111,7 +111,7 @@ struct MCPFixture {
         #expect(tools.compactMap { $0["name"]?.string } == [
             "status", "limits", "sessions", "day", "week", "range", "summary", "search", "export_day",
             "handoff_create", "handoff_get", "handoff_list", "task_list", "task_get", "task_create", "task_update",
-            "worklog_plan", "worklog_config", "worklog_commit", "worklog_text", "worklog_skip", "worklog_reconcile",
+            "worklog_plan", "worklog_refresh", "worklog_config", "worklog_commit", "worklog_text", "worklog_skip", "worklog_reconcile",
             "task_suggestions", "task_suggestions_answer", "task_create_in_jira"])
         for t in tools {
             #expect(t["inputSchema"]?["type"]?.string == "object")
@@ -126,6 +126,10 @@ struct MCPFixture {
             #expect(t["annotations"] == ["readOnlyHint": true])
         }
         #expect(tools.first { $0["name"]?.string == "worklog_text" }?["annotations"] == ["readOnlyHint": false, "destructiveHint": false])
+        // The AI call and the write of the texts are worklog_refresh's; worklog_plan no longer offers refresh.
+        let plan = try #require(tools.first { $0["name"]?.string == "worklog_plan" })
+        #expect(plan["annotations"] == ["readOnlyHint": true] && plan["inputSchema"]?["properties"]?["refresh"] == nil)
+        #expect(tools.first { $0["name"]?.string == "worklog_refresh" }?["annotations"] == ["readOnlyHint": false, "destructiveHint": false])
         #expect(tools.first { $0["name"]?.string == "worklog_skip" }?["annotations"] == ["readOnlyHint": false, "destructiveHint": true])
         #expect(commit["description"]?.string?.contains("ONLY when the user explicitly asks") == true)
     }
@@ -251,7 +255,7 @@ struct MCPFixture {
     @Test func search() throws {
         let f = try MCPFixture()
         let (s, _) = try f.call("search", #"{"text":"PARSE"}"#)   // prefix, any case; title + message
-        #expect(s.hasPrefix("1 sessions match") && s.contains("aaaaaaaa") && s.contains("matches: title + 1 message"))
+        #expect(s.hasPrefix("1 session matches \"PARSE\":") && s.contains("aaaaaaaa") && s.contains("matches: title + 1 message"))
         let (flaky, _) = try f.call("search", #"{"text":"flaky test"}"#)
         #expect(flaky.contains("bbbbbbbb") && flaky.contains("matches: 1 message") && !flaky.contains("aaaaaaaa"))
         #expect(try f.call("search", #"{"text":"parser flaky"}"#).0.hasPrefix("No sessions match"))

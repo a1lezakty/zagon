@@ -194,7 +194,7 @@ public final class TaskTools: TaskService {
 
     func planText(_ p: DayPlan, _ w: DayWorklog, _ err: String? = nil) throws -> String {
         shown[p.day] = jiraRows(p)
-        return TaskText.plan(p, base: w.base, jiraError: err)
+        return TaskText.plan(p, base: w.base, jiraError: err, refresh: "worklog_refresh")
     }
 
     public func worklogPlan(day: String) throws -> String { try worklogPlan(day: day, refresh: false, json: false) }
