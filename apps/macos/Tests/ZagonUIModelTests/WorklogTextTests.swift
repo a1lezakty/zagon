@@ -130,6 +130,45 @@ final class WorklogTextTests: XCTestCase {
         XCTAssertFalse(ovm.rows.contains(where: \.editable), "no text editing against an older zagon")
     }
 
+    /// What the core of 0.1.5 answered for a real day (`log plan --json --with-summary`, `log config --json`), every
+    /// name and text replaced: the shape this app reads.
+    static let realPlan = #"{"commit_digest":"74803d36d86c63d","day":"2026-10-31","excluded":[],"jira_sec":32400,"notes":["Note 1.","Note 2."],"rows":[{"day":"2026-10-31","day_summary":true,"end":1793472900,"id":27,"jira_key":"PROJ-1","seconds":10500,"sessions":[{"how":"brief","id":"s1","role":"worker","seconds":19331,"title":"session-1"},{"how":"message","id":"s2","role":"worker","seconds":16903,"title":"session-2"},{"how":"message","id":"s3","role":"worker","seconds":12707,"title":"session-3"}],"start":1793462400,"state":"planned","summary":"What the task was\nLine.\n\nWhat the check found\nLine.\n\nWhat was done\n- Point.\n- Point.\n- Point.\n- Point.\n- Point.","summary_source":"summary","task_id":175,"task_key":"PROJ-1","text":"Text of row 27.","text_source":"summary"},{"day":"2026-10-31","day_summary":true,"end":1793473500,"id":28,"jira_key":"PROJ-2","seconds":600,"sessions":[{"how":"brief","id":"s4","role":"worker","seconds":1278,"title":"session-4"}],"start":1793472900,"state":"planned","summary":"What the task was\nLine.\n\nWhat the check found\nLine.\n\nWhat was done\n- Point.\n- Point.","summary_source":"summary","task_id":140,"task_key":"PROJ-2","text":"Text of row 28.","text_source":"summary"},{"day":"2026-10-31","day_summary":true,"end":1793474100,"id":29,"jira_key":"PROJ-3","seconds":600,"sessions":[{"how":"brief","id":"s4","role":"worker","seconds":1278,"title":"session-4"}],"start":1793473500,"state":"planned","summary":"What the task was\nLine.\n\nWhat was done\n- Point.\n- Point.","summary_source":"summary","task_id":141,"task_key":"PROJ-3","text":"Text of row 29.","text_source":"summary"}],"session_sec":164559.49900078773,"sessions_after_summary":0,"summary_built_at":1793518185.0848668,"tasks":[{"jira_sec":14400,"key":"PROJ-1","session_sec":48939.87299990654,"task_id":175,"title":"Task 1","user_sec":24885.40700006485},{"jira_sec":0,"key":"PROJ-2","session_sec":638.7925000190735,"task_id":140,"title":"Task 2","user_sec":638.7925000190735},{"jira_sec":0,"key":"PROJ-3","session_sec":638.7925000190735,"task_id":141,"title":"Task 3","user_sec":638.7925000190735}],"tz":"Europe/Athens","unassigned":[{"project":"project-5","seconds":13006},{"project":"project-6","seconds":12232},{"project":"project-7","seconds":3063},{"project":"project-8","seconds":1174},{"project":"project-9","seconds":664}],"unassigned_sec":30138.941999912262,"unknown_keys":["PROJ-4"],"unplaced":{},"user_sec":56301.93400001526}"#
+    static let realConfig = #"{"day_summary":true,"exclude":[],"jira_projects":["PA","PB","PC","PD","PE","PF","PG"],"machine_tz":"Asia/Tashkent","projects":[],"rebuild_at_end":true,"tz":"Europe/Athens"}"#
+
+    func testTheCoresRealAnswers() throws {
+        let calls = Calls(), plan = try backend(calls, plan: Self.realPlan).plan(Self.day)
+        // 2026-11-01 10:00 in Europe/Athens (UTC+2), the morning after the summary was rebuilt.
+        let f = Fmt(lang: .en, timeZone: TimeZone(identifier: "Europe/Athens")!, now: Date(timeIntervalSince1970: 1_793_520_000))
+        XCTAssertEqual(plan.zone, "Europe/Athens")
+        XCTAssertTrue(plan.summaries)
+        XCTAssertEqual(plan.digest, "74803d36d86c63d")
+        let w = plan.worklog(f)
+        XCTAssertEqual(w.rows.count, 3)
+        XCTAssertEqual(w.rows.map(\.textSource), [.summary, .summary, .summary])
+        XCTAssertTrue(w.rows.allSatisfy { $0.daySummary && $0.written.contains("\n\nWhat the task was") })
+        XCTAssertEqual(w.excluded, [])
+        XCTAssertEqual(w.unassigned.count, 5)
+        XCTAssertEqual(w.unassigned.reduce(0) { $0 + $1.sec }, plan.plan.unassignedSec, accuracy: 1)
+        let vm = WorklogVM(w, f, machine: TimeZone(identifier: "Asia/Tashkent"), host: "build-box")
+        XCTAssertEqual(vm.textsTitle, "Texts from the day summary")
+        XCTAssertEqual(vm.textsDetail, "rebuilt 09:29 · 4 sessions · no sessions after it")
+        XCTAssertEqual(vm.zoneLine, "Worklog time zone: Europe/Athens · UTC+2 · the day is 00:00–24:00 in it, not in Zagon's zone (Asia/Tashkent · UTC+5)")
+        XCTAssertTrue(vm.rows.allSatisfy(\.editable))
+        XCTAssertEqual(vm.rows[0].sessions.map(\.how), ["build-box · key PROJ-1 in the brief", "build-box · key PROJ-1 in the request",
+                                                       "build-box · key PROJ-1 in the request"])
+        XCTAssertEqual(vm.rows[0].sessions.map(\.role), ["worker", "worker", "worker"])
+        XCTAssertTrue(vm.unassigned.allSatisfy(\.action))
+        XCTAssertFalse(vm.notes.contains { $0.contains("linked to no task") })
+        XCTAssertEqual(vm.commitNotes, ["Day summary of PROJ-1, PROJ-2, PROJ-3: in its worklog, under the row's text."])
+        XCTAssertNotNil(ReconcileVM.confirmation(plan, key: "PROJ-1", f).title)
+        XCTAssertFalse(plan.staleOnOpen(day: Self.day, today: "2026-11-01", yesterday: Self.day, now: f.now), "no session after the summary")
+
+        let config = try TaskBackend.parse(Data(Self.realConfig.utf8), ["log", "config"]) as TaskBackend.WorklogConfig
+        XCTAssertEqual(config, TaskBackend.WorklogConfig(tz: "Europe/Athens", machineTz: "Asia/Tashkent", projects: [],
+                                                         jiraProjects: ["PA", "PB", "PC", "PD", "PE", "PF", "PG"], daySummary: true,
+                                                         rebuildAtEnd: true, exclude: []))
+    }
+
     func testCallsOfTheScreenAndTheSettings() throws {
         let calls = Calls(), b = backend(calls)
         let shown = try b.plan(Self.day, refresh: true, scan: false, comments: ["PROJ-1"])
