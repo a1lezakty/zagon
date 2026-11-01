@@ -58,6 +58,18 @@ public protocol TaskService: AnyObject {
 }
 
 extension TaskService {
+    /// The plan with the day's texts built again first (`refresh`), as JSON (`json`, the fields of `log plan --json`);
+    /// `day` nil: today in the worklog zone.
+    public func worklogPlan(day: String?, refresh: Bool, json: Bool) throws -> String {
+        try worklogPlan(day: day ?? Time.dayString(Time.now()))
+    }
+    /// `summaryComment`: tasks whose day summary goes as one issue comment instead of into the worklog.
+    public func worklogCommit(day: String, ids: [Int]?, summaryComment: [String]) throws -> String {
+        guard summaryComment.isEmpty else { throw ServiceTools.unavailable("worklog_commit summary_comment", "worklog texts") }
+        return try worklogCommit(day: day, ids: ids)
+    }
+    /// `[worklog]` settings and exclusions, JSON (`zagon log config --json`).
+    public func worklogConfig() throws -> String { throw ServiceTools.unavailable("worklog_config", "worklog texts") }
     public func worklogReconcile(from: String, to: String?, format: String) throws -> String {
         throw ServiceTools.unavailable("worklog_reconcile", "reconcile")
     }
@@ -187,10 +199,24 @@ enum ServiceTools {
             },
             MCPTool(name: "worklog_plan", title: "Worklog plan",
                     description: "The plan of Jira worklogs for a day: the user's working time split by task, without "
-                        + "overlap with worklogs already in Jira, rounded to 5 minutes, with text from the day's summary. "
-                        + "Writes nothing.",
-                    inputSchema: MCPSchema.object(["date": MCPSchema.day("The day (default today)")])) { a in
-                try t("worklog_plan").worklogPlan(day: try a.day("date") ?? Time.dayString(Time.now()))
+                        + "overlap with worklogs already in Jira, rounded to 5 minutes, each row with 1-2 sentences about its "
+                        + "stretch and, on each task's longest row, the day's summary. refresh: true builds the texts again "
+                        + "(one AI call) if sessions worked after they were built. Writes nothing to Jira.",
+                    inputSchema: MCPSchema.object([
+                        "date": MCPSchema.day("The day (default today in the worklog zone)"),
+                        "refresh": ["type": "boolean", "description": "Build the day's texts again if they are older than the work (default false)"],
+                        "format": MCPSchema.string("text (default) or json (the fields of zagon log plan --json)", enum: ["text", "json"]),
+                    ])) { a in
+                let format = try a.string("format") ?? "text"
+                guard ["text", "json"].contains(format) else { throw MCPToolError("format must be text or json") }
+                return try t("worklog_plan").worklogPlan(day: try a.day("date"), refresh: try a.bool("refresh") ?? false, json: format == "json")
+            },
+            MCPTool(name: "worklog_config", title: "Worklog settings",
+                    description: "The [worklog] settings: the zone worklog days are cut in, extra Jira projects, whether the "
+                        + "longest row carries the day summary, the 23:55 rebuild, and the excluded projects, tasks and "
+                        + "sessions (their time is never planned). JSON. Reads only.",
+                    inputSchema: MCPSchema.object([:])) { _ in
+                try t("worklog_config").worklogConfig()
             },
             MCPTool(name: "worklog_commit", title: "Write worklogs to Jira",
                     description: "Writes the planned worklogs of a day to Jira. Call it ONLY when the user explicitly asks "
@@ -201,13 +227,15 @@ enum ServiceTools {
                                     "description": "Must be true: the user explicitly asked to write these worklogs"],
                         "ids": ["type": "array", "items": ["type": "integer"],
                                 "description": "Only these plan rows (default: all planned rows of the day)"],
+                        "summary_comment": ["type": "array", "items": ["type": "string"],
+                                            "description": "Task keys whose day summary goes as one comment on the issue instead of into the worklog"],
                     ], required: ["date", "confirm"]), readOnly: false) { a in
                 guard try a.bool("confirm") == true else {
                     throw MCPToolError("worklog_commit needs confirm: true, and only when the user explicitly asked to log "
                                        + "the time. Nothing was written.")
                 }
                 guard let day = try a.day("date") else { throw MCPToolError("date is required") }
-                return try t("worklog_commit").worklogCommit(day: day, ids: try a.ints("ids"))
+                return try t("worklog_commit").worklogCommit(day: day, ids: try a.ints("ids"), summaryComment: try a.strings("summary_comment") ?? [])
             },
             MCPTool(name: "worklog_reconcile", title: "Sessions against Jira worklogs",
                     description: "For a range of days, per task and day: the user's working time in sessions against their "

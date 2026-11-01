@@ -306,10 +306,10 @@ public struct DayWorklog {
             guard claimed else { r.lines.append("\(what) not written: already being written"); r.failed += 1; continue }
             do {
                 let id = try jira.addComment(issue: c.key, body: WorklogTexts.commentHeader(day, w) + "\n\n" + c.text)
-                try? db.run("UPDATE meta SET value = ? WHERE key = ?", [.text("id:" + id), .text(mark)])
+                _ = try? db.run("UPDATE meta SET value = ? WHERE key = ?", [.text("id:" + id), .text(mark)])
                 r.lines.append("commented \(what)"); r.logged += 1
             } catch let e as JiraError where !e.mayHaveArrived {
-                try? db.run("DELETE FROM meta WHERE key = ?", [.text(mark)])
+                _ = try? db.run("DELETE FROM meta WHERE key = ?", [.text(mark)])
                 r.lines.append("\(what) not written: \(e)"); r.failed += 1
             } catch {
                 r.lines.append("not sure \(what) reached Jira (\(error)): the next commit checks Jira first"); r.failed += 1

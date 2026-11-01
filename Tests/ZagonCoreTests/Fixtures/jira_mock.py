@@ -132,8 +132,19 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, {"key": key, "fields": {"summary": i["summary"], "status": {
                     "name": i["status"], "statusCategory": {"key": i["category"]}}}})
             if len(parts) == 6 and parts[5] == "comment" and method == "GET":
-                cs = [{"author": {"accountId": c["author"]}, "body": c["body"]} for c in reversed(i.get("comments", []))]
+                cs = [{"id": c.get("id", ""), "author": {"accountId": c["author"]}, "body": c["body"]} for c in reversed(i.get("comments", []))]
                 return self.send(200, {"startAt": 0, "total": len(cs), "comments": cs})
+            if len(parts) == 6 and parts[5] == "comment" and method == "POST":
+                b = self.body()
+                with lock:
+                    next_id[0] += 1
+                    c = {"id": "c" + str(next_id[0]), "author": me, "body": b["body"]}
+                    i.setdefault("comments", []).append(c)
+                    if state.get("lose_post_replies", 0) > 0:
+                        state["lose_post_replies"] -= 1
+                        self.close_connection = True
+                        return
+                return self.send(201, {"id": c["id"], "body": c["body"]})
             if len(parts) == 6 and parts[5] == "worklog" and method == "GET":
                 after = float(q.get("startedAfter", 0))
                 ws = [w for w in i.get("worklogs", []) if started_ms(w["started"]) >= after]

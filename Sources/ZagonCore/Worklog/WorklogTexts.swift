@@ -228,7 +228,6 @@ public struct WorklogTextBuilder {
     }
 
     nonisolated(unsafe) static let pathPattern = try! Regex(#"(?:~|/root|/home/[^\s/]+|/Users/[^\s/]+)(?:/[^\s/«»"',;:()]+)*/([^\s/«»"',;:()]+)"#)
-    }
 
     static func instruction(_ w: Words, summaries: Bool) -> String {
         w.t("""
@@ -315,7 +314,7 @@ public struct WorklogTextBuilder {
         var out: [String: [Said]] = [:]
         func done(_ s: String, _ ts: Timestamp, _ sid: String) {
             for l in s.split(separator: "\n") {
-                guard let r = l.range(of: "ГОТОВО:") ?? l.range(of: "DONE:") else { continue }
+                guard let r = l.firstRange(of: "ГОТОВО:") ?? l.firstRange(of: "DONE:") else { continue }
                 let t = Redact.clean(String(l[r.lowerBound...]))
                 if !t.isEmpty { out[sid, default: []].append(Said(ts: ts, kind: .done, text: t)) }
             }

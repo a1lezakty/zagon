@@ -27,6 +27,7 @@ struct DaemonCommand: ParsableCommand {
                 if !noArchive {
                     Daemon.startArchiver(dbPath: common.dataDir + "/zagon.db", dir: common.dataDir + "/archive", log: { log.write($0) })
                 }
+                Daemon.startWorklogTexts(dataDir: common.dataDir, claudeDir: common.claudeDir, log: { log.write($0) })
                 guard !noNotify else { return }
                 let notifies = Daemon.startNotifier(dbPath: common.dataDir + "/zagon.db", paths: paths, config: config,
                                                     claudeRoot: common.claudeDir, log: { log.write($0) })

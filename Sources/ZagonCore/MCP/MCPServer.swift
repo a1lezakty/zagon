@@ -217,6 +217,18 @@ public struct MCPArgs {
         }
     }
 
+    public func strings(_ k: String) throws -> [String]? {
+        switch value[k] {
+        case nil, .null?: return nil
+        case .array(let a)?:
+            return try a.map {
+                guard case .string(let s) = $0 else { throw MCPToolError("\(k) must be a list of strings") }
+                return s
+            }
+        default: throw MCPToolError("\(k) must be a list of strings")
+        }
+    }
+
     public func ints(_ k: String) throws -> [Int]? {
         switch value[k] {
         case nil, .null?: return nil
