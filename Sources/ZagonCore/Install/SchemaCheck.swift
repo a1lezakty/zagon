@@ -1,3 +1,4 @@
+import CSys
 #if canImport(Glibc)
 import Glibc
 #elseif canImport(Musl)
@@ -45,15 +46,22 @@ public enum SchemaCheck {
     }
 
     /// Before a migration: a copy of `db` as `<db>.v<version>` (VACUUM INTO: a consistent snapshot of the live database,
-    /// its WAL included), owned and moded like the database. One per schema version: a later update from the same
-    /// version replaces it, copies of other versions are left alone. Not made (`problem` says why) when the disk has
-    /// less than twice the database's size free.
+    /// its WAL included), made with the file identity of the database's owner (root updating for another account
+    /// writes nothing as root in that account's folder) and with the database's mode. One per schema version: a later
+    /// update from the same version replaces it, copies of other versions are left alone. Not made (`problem` says why)
+    /// when the disk has less than twice the database's size free, or the database is a symbolic link.
     public static func snapshot(db: String, version: Int, free: (String) -> UInt64? = freeBytes) -> (path: String?, problem: String?) {
+        var st = stat()
+        guard lstat(db, &st) == 0 else { return (nil, "cannot read \(db)") }
+        guard st.st_mode & S_IFMT == S_IFREG else { return (nil, "\(db) is not a plain file") }
         let size = UInt64((Sys.fileSize(db) ?? 0) + (Sys.fileSize(db + "-wal") ?? 0))
         let avail = free(Sys.dirname(db))
         guard let avail, avail >= 2 * size else {
             return (nil, "\(mb(size)) MB database, " + (avail.map { "\(mb($0)) MB free" } ?? "free space unknown") + "; twice its size is needed")
         }
+        let other = geteuid() == 0 && st.st_uid != 0
+        guard !other || z_as_user(UInt32(st.st_uid), UInt32(st.st_gid)) == 0 else { return (nil, "cannot act as the owner of \(db)") }
+        defer { if other { z_as_root() } }
         let path = db + ".v\(version)", tmp = path + ".tmp"
         Sys.remove(tmp)
         do {
@@ -63,17 +71,20 @@ public enum SchemaCheck {
             Sys.remove(tmp)
             return (nil, "\(error)")
         }
-        var st = stat()
-        if stat(db, &st) == 0 { _ = chown(tmp, st.st_uid, st.st_gid); chmod(tmp, st.st_mode & 0o777) }
+        chmod(tmp, st.st_mode & 0o777)
         guard rename(tmp, path) == 0 else { Sys.remove(tmp); return (nil, "cannot write \(path) (errno \(errno))") }
         return (path, nil)
     }
 
-    /// What `snapshot` gives the user: how to roll back, or a warning that there is no way back.
+    /// What `snapshot` gives the user: how to roll back, or a warning that there is no way back. Every connection must
+    /// be closed first (the service and the `zagon mcp` of open Claude Code / Codex sessions): a WAL left by the new
+    /// version would be applied to the old copy.
     public static func snapshotNote(_ s: (path: String?, problem: String?), db: String, exe: String, old: String) -> String {
         if let p = s.path {
-            return "a copy of the database from before this update: \(p); to roll back to \(old): stop the service, then "
-                + "mv \(exe).prev \(exe) and mv \(p) \(db), and start it again"
+            let q = Sys.shellQuote
+            return "a copy of the database from before this update: \(p); to roll back to \(old): stop the service and quit the "
+                + "Claude Code / Codex sessions (their zagon mcp), then mv \(q(exe + ".prev")) \(q(exe)); rm -f \(q(db + "-wal")) "
+                + "\(q(db + "-shm")); mv \(q(p)) \(q(db)); and start the service"
         }
         return "WARNING: no copy of \(db) was made (\(s.problem ?? "?")): after this update there is no way back to \(old) "
             + "with this database"

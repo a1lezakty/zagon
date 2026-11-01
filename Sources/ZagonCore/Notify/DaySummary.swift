@@ -413,13 +413,14 @@ public struct DaySummary {
         if ["usage limit", "usage_limit", "hit your limit", "reached your", "out of usage"].contains(where: { t.contains($0) }) {
             return "usage limit"
         }
-        return ["credit", "billing", "extra usage", "spend", "overage"].contains(where: { t.contains($0) }) ? "billing" : nil
+        return ["credit", "billing", "extra usage", "spending", "spend limit", "overage"].contains(where: { t.contains($0) }) ? "billing" : nil
     }
 
     static let paused = " (no AI calls until tomorrow)"
     /// `<local day>\n<reason>`: after a billing answer, or a call paid as extra usage, no AI call is made
-    /// for the rest of the day (by any zagon process) with the engine the reason names, so a subscription is never
-    /// charged extra and the log does not repeat the refusal.
+    /// for the rest of the day through `complete` (summaries, task suggestions, worklog texts; by any zagon process)
+    /// with the engine the reason names, so the unattended calls never charge extra and the log does not repeat the
+    /// refusal. A handoff the user asks for (`Handoff.compress`) is not stopped.
     var stopFile: String { paths.dir + "/run/ai-stop" }
 
     func stop(_ reason: String, now: Double = Sys.now()) {

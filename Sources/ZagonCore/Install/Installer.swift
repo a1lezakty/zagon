@@ -74,8 +74,9 @@ public struct Installer {
         /// PATH used to find `claude`, `codex`, `systemctl`.
         public var searchPath: String?
         public var now: Double
-        /// Running as root: with no user manager the service goes to the system unit.
-        public var root = geteuid() == 0
+        /// Root with no systemd user manager running (no /run/user/0/systemd: ssh without linger, containers): the
+        /// service goes to the system unit when `systemctl --user` fails.
+        public var rootWithoutUserManager = geteuid() == 0 && !Sys.isDir("/run/user/0/systemd")
         /// Claude Code's managed settings (an organization's `cleanupPeriodDays` bounds the archive).
         public var managedSettingsDir = Archive.managedSettingsDir
 
@@ -241,14 +242,19 @@ public struct Installer {
             let rc = runner([sc, "enable", "--now", Sys.basename(systemUnit)])
             log(rc == 0 ? "service: \(Sys.basename(systemUnit)) enabled" : "service: enabling the system unit failed (\(rc))")
         }
+        // One daemon per database: an enabled unit of the other kind is not joined by a second one.
+        let userOn = Sys.exists(o.userUnitDir + "/default.target.wants/zagon.service")
         if o.systemService {
             enableSystem()
+            if userOn { log("service: the user unit zagon.service is enabled too: systemctl --user disable --now zagon.service") }
+        } else if Sys.exists(systemUnit) && runner([sc, "is-enabled", "--quiet", Sys.basename(systemUnit)]) == 0 {
+            log("service: \(Sys.basename(systemUnit)) runs zagon for \(userName); the user unit is left off (one daemon per database)")
         } else if forOther {
             log("service: as \(userName): systemctl --user enable --now zagon.service (or here: --system-service)")
             lingerNote().map(log)
         } else {
             let reload = runner([sc, "--user", "daemon-reload"])
-            if reload != 0 && o.root {
+            if reload != 0 && o.rootWithoutUserManager && !userOn {
                 // Root over ssh or in a container has no user manager (no user bus): the system unit runs it instead.
                 log("service: systemd --user is not available here (\(reload)); using the system unit")
                 try writeSystemUnit()
@@ -818,7 +824,7 @@ public struct Installer {
         var out: [Check] = []
         func add(_ ok: Bool, _ t: String) { out.append(Check(ok: ok, text: t)) }
         func note(_ tag: String, _ t: String) { out.append(Check(ok: true, text: t, tag: tag)) }
-        let log = daemonLog()
+        let log = daemonLog(), codexMeta = o.codex ? newestRolloutMeta() : nil
         add(Sys.exists(o.zagon), "binary \(o.zagon)")
         func hookChecks(_ path: String, _ tool: String, _ events: [String]) {
             guard let b = Sys.readFile(path), let doc = try? load(b) else { add(false, "\(tool): \(path) missing or unreadable"); return }
@@ -843,7 +849,7 @@ public struct Installer {
             let cfg = Sys.readFile(codexConfig).map { String(decoding: $0, as: UTF8.self) } ?? ""
             let off = ["hooks", "codex_hooks"].contains { TOMLLite.raw(in: cfg, section: "features", key: $0) == "false" }
             add(!off, "codex: hooks feature " + (off ? "disabled in config.toml [features]" : "enabled (trust them once in /hooks)"))
-            codexHooksCheck(note)
+            codexHooksCheck(codexMeta, note)
         }
         if o.mcp {
             for (tool, on, has) in [("claude", o.claude, claudeHasMCP()), ("codex", o.codex, codexHasMCP())] where on {
@@ -852,8 +858,10 @@ public struct Installer {
             }
         }
         #if os(Linux)
-        serviceCheck(add)
-        healthCheck(log, add)
+        var health: (ok: Bool, text: String)?
+        let alive = healthCheck(log) { health = ($0, $1) }
+        serviceCheck(alive: alive, add)
+        health.map { add($0.ok, $0.text) }
         #else
         add(true, "service: none (Zagon.app collects data on macOS)")
         #endif
@@ -864,7 +872,7 @@ public struct Installer {
             add(Sys.isDir(o.paths.spool), "spool: \(o.paths.spool) " + (Sys.isDir(o.paths.spool) ? "empty (no hook has fired yet)" : "missing"))
         }
         notifyCheck(log, note)
-        versionChecks(note)
+        versionChecks(codexMeta, note)
         archiveCheck(note)
         snapshotsCheck(note)
         return out

@@ -230,7 +230,7 @@ import Testing
         for e in ["You're out of extra usage · resets 5pm", "Your org is out of usage · add funds to continue",
                   "Quota exceeded. Check your plan and billing details."] { #expect(DaySummary.billingKind(e) != nil, "\(e)") }
         for e in ["API Error: 500 Internal server error", "unexpected status 401 Unauthorized", "Not logged in · Please run /login",
-                  "API Error: Rate limit reached"] { #expect(DaySummary.billingKind(e) == nil, "\(e)") }
+                  "API Error: Rate limit reached", "This organization has been suspended"] { #expect(DaySummary.billingKind(e) == nil, "\(e)") }
     }
 
     @Test func hostsOfTheDaysSessions() throws {

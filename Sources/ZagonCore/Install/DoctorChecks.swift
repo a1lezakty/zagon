@@ -13,15 +13,14 @@ extension Installer {
     /// may write what they do not know yet.
     public static let testedClaude = "2.1.316", testedCodex = "0.166.0"
 
-    /// A daemon writes a health line every 10 minutes (and `start:` / `full pass` lines on start).
-    static let healthMaxAge = 900.0
-
     // MARK: service
 
     #if os(Linux)
     /// Each unit file there and whether systemd runs it (`is-active`): ok when at least one runs (a user unit `install`
     /// wrote next to the system unit stays stopped).
-    func serviceCheck(_ add: (Bool, String) -> Void) {
+    /// A fresh health line (`alive`) counts as running too: a daemon outside systemd (tmux, a container), or a user
+    /// manager this shell cannot ask (`--machine` before systemd 248, no user bus).
+    func serviceCheck(alive: Bool, _ add: (Bool, String) -> Void) {
         let sc = Sys.which("systemctl", path: o.searchPath)
         // Another account's user manager (root doctor for a sudo user): --machine, systemd 248+.
         let user = forOther ? ["--user", "--machine=\(userName)@"] : ["--user"]
@@ -42,20 +41,32 @@ extension Installer {
         guard let _ = sc else { add(true, "service: " + parts.joined(separator: "; ") + " (no systemctl: see the daemon line)"); return }
         let start = Sys.exists(systemUnit) ? (geteuid() == 0 ? "" : "sudo ") + "systemctl enable --now \(Sys.basename(systemUnit))"
             : (forOther ? "as \(userName): " : "") + "systemctl --user enable --now zagon.service"
-        add(running, "service: " + parts.joined(separator: "; ") + (running ? "" : "; start it: " + start))
+        add(running || alive, "service: " + parts.joined(separator: "; ")
+            + (running ? "" : alive ? "; but a daemon runs (fresh health line)" : "; start it: " + start))
     }
 
-    /// The daemon's last `health:` / `start:` / `full pass` line is at most 15 minutes old.
-    func healthCheck(_ log: [String], _ add: (Bool, String) -> Void) {
+    /// Seconds a health line may be old: 15 minutes, or 1.5 intervals of a unit's `--health-minutes`.
+    var healthMaxAge: Double {
+        let every = [userUnit, systemUnit].compactMap { Sys.readFile($0).map { String(decoding: $0, as: UTF8.self) } }.compactMap { t -> Double? in
+            guard let r = t.split(separator: "\n").first(where: { $0.hasPrefix("ExecStart=") })?.split(separator: " ")
+                .split(whereSeparator: { $0 == "--health-minutes" }).dropFirst().first?.first else { return nil }
+            return Double(r)
+        }.max()
+        return max(900, (every ?? 0) * 90)
+    }
+
+    /// The daemon's last `health:` / `start:` / `full pass` line is at most `healthMaxAge` old; returns whether it is.
+    func healthCheck(_ log: [String], _ add: (Bool, String) -> Void) -> Bool {
         let path = o.paths.dir + "/logs/daemon.log"
         guard let l = log.last(where: { $0.contains(" health: ") || $0.contains(" start: ") || $0.contains(" full pass (") }),
               let t = Self.logTime(l) else {
             add(false, "daemon: no health line in \(path): it has not run here")
-            return
+            return false
         }
-        let age = o.now - t
-        add(age <= Self.healthMaxAge, "daemon: " + (age <= Self.healthMaxAge ? "last health line \(Self.ago(age))"
+        let age = o.now - t, fresh = age <= healthMaxAge
+        add(fresh, "daemon: " + (fresh ? "last health line \(Self.ago(age))"
             : "no health line for \(Self.ago(age).dropLast(4)) (one every 10 min while it runs): stopped or stuck, see \(path)"))
+        return fresh
     }
     #endif
 
@@ -133,15 +144,15 @@ extension Installer {
         return nil
     }
 
+    /// The first line (`session_meta`) of the newest rollout.
+    func newestRolloutMeta() -> JValue? { newestRollout().flatMap(Self.firstLine).flatMap { JValue.parse($0) } }
+
     /// Codex's hooks fire separately from Claude's: a Codex session started since they were installed and none of them
     /// came means they are not trusted (Codex asks once, in `/hooks`) or not run.
-    func codexHooksCheck(_ add: (String, String) -> Void) {
+    func codexHooksCheck(_ meta: JValue?, _ add: (String, String) -> Void) {
         let hook = lastCodexHook()
         let installed = Sys.mtime(codexHooks) ?? .infinity
-        let started = newestRollout().flatMap { Self.firstLine($0) }.flatMap { l -> Double? in
-            let v = JValue.parse(l)
-            return (v?["timestamp"]?.string ?? v?["payload"]?["timestamp"]?.string).flatMap { Time.parseISO($0) }
-        }
+        let started = (meta?["timestamp"]?.string ?? meta?["payload"]?["timestamp"]?.string).flatMap { Time.parseISO($0) }
         if let s = started, s > installed, (hook ?? 0) < s - 60 {
             add("warn", "codex: a session started \(Self.ago(o.now - s)) but no Codex hook event came since"
                 + " (last: \(hook.map { Self.ago(o.now - $0) } ?? "never")): open /hooks in Codex once and trust Zagon's hooks;"
@@ -162,7 +173,7 @@ extension Installer {
 
     /// The versions of Claude Code and Codex that wrote the newest logs, against the tested ones: a newer major or
     /// minor version is a warning (formats change there), a newer patch version a fact.
-    func versionChecks(_ add: (String, String) -> Void) {
+    func versionChecks(_ codexMeta: JValue?, _ add: (String, String) -> Void) {
         func line(_ tool: String, _ v: String?, _ tested: String, _ from: String) {
             guard let v else { return }
             let newer = Self.newer(v, than: tested, parts: 2)
@@ -171,8 +182,7 @@ extension Installer {
         }
         if o.claude { line("claude code", claudeVersion(), Self.testedClaude, "newest transcript") }
         if o.codex {
-            let v = newestRollout().flatMap { Self.firstLine($0) }.flatMap { JValue.parse($0)?["payload"]?["cli_version"]?.string }
-            line("codex", v, Self.testedCodex, "newest rollout")
+            line("codex", codexMeta?["payload"]?["cli_version"]?.string, Self.testedCodex, "newest rollout")
         }
     }
 
@@ -229,9 +239,12 @@ extension Installer {
 
     // MARK: files
 
-    /// The first line of a file (read whole: a rollout's first line, `session_meta`, can be long).
+    /// The first line of a file, from its first 4 MB (a rollout's `session_meta` holds the instructions: tens of KB).
     static func firstLine(_ path: String) -> [UInt8]? {
-        Sys.readFile(path).map { b in Array(b.prefix { $0 != 0x0A }) }
+        let fd = open(path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        return Array(Sys.readAll(fd: fd, limit: 4 << 20).prefix { $0 != 0x0A })
     }
 
     static func has(_ l: ArraySlice<UInt8>, _ s: StaticString) -> Bool { l.withUnsafeBytes { contains($0, s) } }

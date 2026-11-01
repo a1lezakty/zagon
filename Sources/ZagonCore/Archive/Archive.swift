@@ -123,7 +123,10 @@ public struct Archive {
     func drop(_ f: File, sessionId sid: String) throws -> Bool {
         let key = "archive:file:\(f.id)"
         guard let p = try store.db.one("SELECT value FROM meta WHERE key = ?", [.text(key)], { $0.text(0) }) ?? nil else { return false }
-        let removed = unlink(p) == 0
+        // Not removed (permissions, a read-only disk): the pointers stay, the next pass tries again.
+        let rc = unlink(p)
+        guard rc == 0 || errno == ENOENT else { return false }
+        let removed = rc == 0
         var d = Sys.dirname(p)
         while d.hasPrefix(dir + "/"), rmdir(d) == 0 { d = Sys.dirname(d) }
         try store.db.transaction {

@@ -67,15 +67,17 @@ struct UpdateCommand: ParsableCommand {
         guard probe.status == 0 else { throw InstallError("the downloaded binary does not run here (exit \(probe.status)): nothing replaced") }
         let new = String(decoding: probe.out, as: UTF8.self).split(separator: "\n").first.map(String.init) ?? "?"
         // A new schema makes .prev useless with the database; one the new binary cannot read would stop its service.
-        for d in Self.dataDirs(exe, user: user) {
+        // Every database is asked before anything is printed or copied.
+        let answers = Self.dataDirs(exe, user: user).compactMap { d -> (db: String, answer: String)? in
             let r = Sys.capture([tmp, "update", "--db-schema", d], timeout: 60)
-            guard r.status == 0 else { continue }  // a release without the check
-            let answer = String(decoding: r.out, as: UTF8.self), db = d + "/zagon.db"
-            let n = SchemaCheck.notes(answer: answer, db: db, exe: exe, old: zagonVersion, new: new)
-            if n.stop { throw InstallError(n.lines.joined(separator: "\n")) }
+            return r.status == 0 ? (d + "/zagon.db", String(decoding: r.out, as: UTF8.self)) : nil  // else a release without it
+        }
+        let notes = answers.map { SchemaCheck.notes(answer: $0.answer, db: $0.db, exe: exe, old: zagonVersion, new: new) }
+        if let n = notes.first(where: \.stop) { throw InstallError(n.lines.joined(separator: "\n")) }
+        for (a, n) in zip(answers, notes) {
             n.lines.forEach { print($0) }
-            if let v = SchemaCheck.migrates(answer: answer) {
-                print(SchemaCheck.snapshotNote(SchemaCheck.snapshot(db: db, version: v), db: db, exe: exe, old: zagonVersion))
+            if let v = SchemaCheck.migrates(answer: a.answer) {
+                print(SchemaCheck.snapshotNote(SchemaCheck.snapshot(db: a.db, version: v), db: a.db, exe: exe, old: zagonVersion))
             }
         }
 
@@ -196,7 +198,10 @@ struct UpdateCommand: ParsableCommand {
             var env: [String: String] = [:]
             for line in Sys.readFile(u).map({ String(decoding: $0, as: UTF8.self) })?.split(separator: "\n") ?? []
             where line.hasPrefix("Environment=") {
-                let kv = line.dropFirst("Environment=".count).split(separator: "=", maxSplits: 1)
+                // Environment=K=V or Environment="K=V" (one assignment, as install writes it)
+                var a = line.dropFirst("Environment=".count)
+                if a.hasPrefix("\""), a.hasSuffix("\""), a.count >= 2 { a = a.dropFirst().dropLast() }
+                let kv = a.split(separator: "=", maxSplits: 1)
                 if kv.count == 2 { env[String(kv[0])] = String(kv[1]) }
             }
             if let d = env["ZAGON_DIR"] ?? env["HOME"].map({ $0 + "/.zagon" }) { dirs.append(d) }

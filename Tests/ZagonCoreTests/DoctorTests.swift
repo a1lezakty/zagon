@@ -45,6 +45,15 @@ extension InstallerTests {
         #expect(line(i.doctor(), "daemon:")?.hasPrefix("MISSING daemon: no health line for 20 min (one every 10 min while it runs)") == true)
         Sys.append(log, Array("\(LogFile.iso(o.now - 120)) start: pid 1\n".utf8))
         #expect(line(i.doctor(), "daemon:") == "ok daemon: last health line 2 min ago")
+        // systemd says neither unit runs (or cannot be asked), but the daemon logs: it runs.
+        active.units = []
+        #expect(line(i.doctor(), "service:")?.hasSuffix("present, not running; but a daemon runs (fresh health line)") == true)
+        #expect(line(i.doctor(), "service:")?.hasPrefix("ok ") == true)
+        // A unit with longer health intervals: 1.5 of them.
+        Sys.writeFile(log, Array("\(LogFile.iso(o.now - 40 * 60)) health: rss 13.0 MB\n".utf8))
+        #expect(line(i.doctor(), "daemon:")?.hasPrefix("MISSING") == true)
+        Sys.writeFile(o.userUnitDir + "/zagon.service", Array("[Service]\nExecStart=/z daemon --health-minutes 30\n".utf8))
+        #expect(line(i.doctor(), "daemon:") == "ok daemon: last health line 40 min ago")
     }
 
     /// Root on a server without a user manager: install enables the system unit instead; another account gets the hint.
@@ -53,7 +62,7 @@ extension InstallerTests {
         let fb = home + "/fake-bin"
         o.searchPath = fb; Sys.mkdirs(fb); Sys.writeFile(fb + "/systemctl", [0], mode: 0o755)
         o.systemUnitDir = home + "/system"; Sys.mkdirs(o.systemUnitDir)
-        o.enableService = true; o.root = true
+        o.enableService = true; o.rootWithoutUserManager = true
         let calls = Calls()
         var i = installer(o, calls)
         i.runner = { calls.argv.append($0); return $0.contains("--user") ? 1 : 0 }
@@ -64,7 +73,12 @@ extension InstallerTests {
         #expect(calls.argv.contains([fb + "/systemctl", "enable", "--now", system]))
         #expect(!calls.argv.contains { $0.contains("--user") && $0.contains("enable") })
 
-        o.root = false; o.systemUnitDir = home + "/system2"; Sys.mkdirs(o.systemUnitDir)
+        // An enabled system unit: the user unit is not enabled beside it.
+        calls.argv = []
+        try i.install()
+        #expect(!calls.argv.contains { $0.contains("--user") })
+
+        o.rootWithoutUserManager = false; o.systemUnitDir = home + "/system2"; Sys.mkdirs(o.systemUnitDir)
         calls.argv = []
         var logged: [String] = []
         i = installer(o, calls)

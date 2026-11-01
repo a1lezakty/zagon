@@ -44,8 +44,9 @@ import Testing
         let copy = try SQLite(path: db + ".v7", readOnly: true)
         #expect(try copy.one("SELECT x FROM t") { $0.int(0) } == 42)
         #expect(try copy.one("PRAGMA user_version") { $0.int(0) } == Store.schemaVersion)
-        #expect(SchemaCheck.snapshotNote(s, db: db, exe: "/opt/zagon", old: "0.1.5") == "a copy of the database from before this update: "
-            + "\(db).v7; to roll back to 0.1.5: stop the service, then mv /opt/zagon.prev /opt/zagon and mv \(db).v7 \(db), and start it again")
+        #expect(SchemaCheck.snapshotNote(s, db: db, exe: "/opt/my bin/zagon", old: "0.1.5") == "a copy of the database from before this update: "
+            + "\(db).v7; to roll back to 0.1.5: stop the service and quit the Claude Code / Codex sessions (their zagon mcp), then "
+            + "mv '/opt/my bin/zagon.prev' '/opt/my bin/zagon'; rm -f \(db)-wal \(db)-shm; mv \(db).v7 \(db); and start the service")
 
         // The same version again: the newer copy replaces it; another version's copy stays.
         try store.db.exec("INSERT INTO t VALUES (43)")
@@ -61,5 +62,26 @@ import Testing
         #expect(SchemaCheck.snapshotNote(short, db: db, exe: "/opt/zagon", old: "0.1.5").hasPrefix("WARNING: no copy of \(db) was made ("))
         #expect(short.problem?.hasSuffix("MB database, 0 MB free; twice its size is needed") == true)
         #expect(SchemaCheck.freeBytes(dir).map { $0 > 0 } == true)
+
+        // A database that is a symbolic link is not copied (root would read where it points).
+        let other = makeTempDir()
+        symlink(db, other + "/zagon.db")
+        let linked = SchemaCheck.snapshot(db: other + "/zagon.db", version: 7, free: { _ in 1 << 40 })
+        #expect(linked.path == nil && linked.problem == "\(other)/zagon.db is not a plain file" && Sys.listDir(other) == ["zagon.db"])
     }
+
+    #if os(Linux)
+    /// Root updating for another account copies its database as that account: the copy is the owner's, root writes
+    /// nothing in a folder the account controls.
+    @Test(.enabled(if: geteuid() == 0)) func snapshotAsTheOwner() throws {
+        let dir = makeTempDir(), db = dir + "/zagon.db"
+        do { try Store(path: db).db.exec("CREATE TABLE t(x); INSERT INTO t VALUES (1)") }  // closed: no WAL left
+        chmod(dir, 0o777)
+        for f in Sys.listDir(dir) { chown(dir + "/" + f, 65534, 65534) }
+        let s = SchemaCheck.snapshot(db: db, version: 7, free: { _ in 1 << 40 })
+        #expect(s.path == db + ".v7" && s.problem == nil)
+        var st = stat()
+        #expect(stat(db + ".v7", &st) == 0 && st.st_uid == 65534 && st.st_gid == 65534)
+    }
+    #endif
 }
