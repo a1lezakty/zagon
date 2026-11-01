@@ -219,6 +219,39 @@ func parse(_ lines: [String], agent: String = "", indexPrompts: Bool = true) -> 
         #expect(Array(spaced.utf8).withUnsafeBytes { ClaudeParser.scan($0, wantText: false) }?.message?.usage?.output_tokens == 3)
     }
 
+    @Test func jsonWithSpacesPassesThePrefilter() {
+        /// The line as Python's json.dumps writes it: `", "` and `": "` outside strings.
+        func spacedJSON(_ l: String) -> String {
+            var o = "", inString = false, escaped = false
+            for ch in l {
+                o.append(ch)
+                if inString { if escaped { escaped = false } else if ch == "\\" { escaped = true } else if ch == "\"" { inString = false } }
+                else if ch == "\"" { inString = true }
+                else if ch == ":" || ch == "," { o.append(" ") }
+            }
+            return o
+        }
+        let lines = [
+            typed(T0, "please fix it, now: \"a b\""),
+            assistantLine(T0 + 5, id: "m1", input: 4, output: 5, tools: [("toolu_1", "Bash")], command: "tmux send-keys -t w x"),
+            toolResult(T0 + 6),
+            #"{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"queued one"},"timestamp":"\#(iso(T0 + 7))"}"#,
+            #"{"type":"custom-title","customTitle":"My title","sessionId":"S"}"#,
+            #"{"type":"progress","data":{"x":1},"timestamp":"\#(iso(T0))"}"#,
+            assistantLine(T0 + 8, id: "m2", usage: false),
+        ]
+        for l in lines { #expect(Array(l.utf8).withUnsafeBytes { !ClaudeParser.spaced($0) }) }  // compact lines skip the slow path
+        let compact = parse(lines)
+        #expect(compact.usage.count == 1 && compact.tools.count == 1 && compact.relays.count == 1 && compact.userMessages.count == 2)
+        #expect(compact.noUsage == 1 && compact.badLines == 0)
+        for variant in [lines.map(spacedJSON), lines.map { "{ " + spacedJSON(String($0.dropFirst())) }] {
+            let out = parse(variant)
+            #expect(out.usage == compact.usage && out.tools == compact.tools && out.relays == compact.relays)
+            #expect(out.userMessages == compact.userMessages && out.events == compact.events && out.meta == compact.meta)
+            #expect(out.noUsage == 1 && out.badLines == 0)
+        }
+    }
+
     @Test func garbageLinesAreCountedNotFatal() {
         let out = parse([
             #"{"type":"assistant","message":{"id":"m1","usage":{"output_tokens":5"#,  // cut

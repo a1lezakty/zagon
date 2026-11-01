@@ -269,12 +269,12 @@ struct SettingsScreen: View {
 
     /// Ring colours per AI, 5 hours and the week: a palette swatch or the system colour panel, a live preview, a reset.
     func colors(_ f: Fmt) -> some View {
-        let standard = Tool.allCases.allSatisfy { app.colors($0) == RingColors.standard($0) }
+        let standard = Tool.withLimits.allSatisfy { app.colors($0) == RingColors.standard($0) }
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(f.t("settings.colors")).font(.system(size: 13)).foregroundColor(Z.body).frame(width: 90, alignment: .leading)
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Tool.allCases, id: \.self) { tool in
+                    ForEach(Tool.withLimits, id: \.self) { tool in
                         Text(tool.name).font(.system(size: 12, weight: .semibold)).foregroundColor(Z.secondary)
                             .padding(.top, tool == .claude ? 0 : 6)
                         ForEach(LimitKind.allCases, id: \.self) { swatches(tool, $0, f) }
@@ -289,7 +289,7 @@ struct SettingsScreen: View {
             HStack(spacing: 12) {
                 Color.clear.frame(width: 90, height: 1)
                 PillButton(title: f.t("settings.colors.reset"), height: 28, radius: 8, fontSize: 12) {
-                    for t in Tool.allCases { app.setColors(t, .standard(t)) }
+                    for t in Tool.withLimits { app.setColors(t, .standard(t)) }
                 }
                 .disabled(standard)
             }

@@ -267,7 +267,7 @@ public struct ReconcileVM: Sendable {
             let kind = RecKind(rawValue: x.status) ?? .match
             let sessions = (x.sessions ?? []).map { s in
                 Session(title: s.title ?? s.id,
-                        meta: [s.host, s.tool.map { $0 == "codex" ? "Codex" : "Claude" }, s.branch.map { f.t("rec.d.branch", $0) }]
+                        meta: [s.host, s.tool.map { Tool(rawValue: $0)?.name ?? $0 }, s.branch.map { f.t("rec.d.branch", $0) }]
                             .compactMap { $0 }.joined(separator: " · "),
                         time: Self.long(s.sec, f))
             }

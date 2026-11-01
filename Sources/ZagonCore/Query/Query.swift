@@ -41,6 +41,64 @@ extension Query {
     }
 }
 
+/// Where a current limit reading came from (`Query.limitSources`).
+public struct LimitSource: Sendable, Equatable {
+    public var tool: ToolKind
+    public var window: String
+    /// "" = this store's own readings, else the ssh alias they were imported under (`ExportImport`).
+    public var source: String
+    /// `[limits] account` of that source; nil = not set.
+    public var account: String?
+    /// More than one source read this tool's limits within 8 days: the rings may mix two accounts, so say whose they are.
+    public var several: Bool
+    public init(tool: ToolKind, window: String, source: String, account: String? = nil, several: Bool) {
+        self.tool = tool; self.window = window; self.source = source; self.account = account; self.several = several
+    }
+}
+
+extension Query {
+    /// For each current reading (`Store.latestLimits`) with a known source: the source whose own newest reading of that
+    /// window (`meta` `limit_src:<tool>:<window>:<source>`) is that reading, else is of its window period (`resets_at`
+    /// within 2 minutes: one account's period; two accounts resetting within 2 minutes cannot be told apart), the newest
+    /// of those. `account` from `meta` `limit_account:<alias>`, for this store's own readings `localAccount` (its
+    /// `[limits] account`). `several`: more than one source has a reading of the tool within 8 days (the longest window,
+    /// the week, and a day); a source quiet for longer has no current window left to mix up. A source is a label of its
+    /// own (the alias is part of it), so more than one source = more than one label. Readings from before 0.1.5 carry no
+    /// source and are left out.
+    public func limitSources(now: Timestamp, localAccount: String? = nil) throws -> [LimitSource] {
+        var newest: [(key: String, ts: Timestamp)] = [], accounts: [String: String] = [:]
+        try db.query("SELECT key, value FROM meta WHERE key LIKE 'limit\\_src:%' ESCAPE '\\'") {
+            newest.append(($0.text(0) ?? "", $0.real(1)))
+        }
+        try db.query("SELECT substr(key, 15), value FROM meta WHERE key LIKE 'limit\\_account:%' ESCAPE '\\'") {
+            accounts[$0.text(0) ?? ""] = $0.text(1)
+        }
+        var out: [LimitSource] = [], recent: [ToolKind: Set<String>] = [:]
+        for c in try Store.latestLimits(db) {
+            let prefix = "limit_src:\(c.tool.rawValue):\(c.window):"
+            var best: (source: String, ts: Timestamp, exact: Bool)?
+            for (key, ts) in newest where key.hasPrefix(prefix) {
+                let source = String(key.dropFirst(prefix.count)), exact = ts == c.ts
+                if now - ts <= 8 * 86400 { recent[c.tool, default: []].insert(source) }
+                if let b = best, b.exact || !exact && b.ts >= ts { continue }
+                if !exact {
+                    guard let r = c.resetsAt, let rs = try db.one("""
+                        SELECT resets_at FROM limit_snapshot WHERE tool = ? AND window = ? AND ts = ?
+                        """, [.text(c.tool.rawValue), .text(c.window), .real(ts)], { $0.optReal(0) }) ?? nil,
+                          abs(rs - r) < 120 else { continue }
+                }
+                best = (source, ts, exact)
+            }
+            if let b = best {
+                out.append(LimitSource(tool: c.tool, window: c.window, source: b.source,
+                                       account: b.source.isEmpty ? localAccount : accounts[b.source], several: false))
+            }
+        }
+        for i in out.indices { out[i].several = (recent[out[i].tool]?.count ?? 0) > 1 }
+        return out
+    }
+}
+
 extension Query {
     /// Readings of one window since `since`, oldest first: (ts, used percent).
     public func limitHistory(tool: ToolKind, window: String, since: Timestamp) throws -> [(ts: Timestamp, pct: Double)] {
@@ -60,7 +118,8 @@ extension Store {
     /// within a period, so its highest reading is the latest. A reading without `resets_at` counts as a period of its
     /// own ending at its `ts`: it wins only when newer than the end of every known period.
     /// ponytail: one account assumed. Readings carry no account, so two accounts (e.g. one per machine) mix: the one
-    /// whose window resets last is shown; split by an account id once the status line or Codex reports one.
+    /// whose window resets last is shown (`Query.limitSources` says from where); split by an account id once the status
+    /// line or Codex reports one, or by a source column in `limit_snapshot` (schema v8).
     static func latestLimits(_ db: SQLite) throws -> [LimitSnapshot] {
         var out: [LimitSnapshot] = []
         try db.query("""

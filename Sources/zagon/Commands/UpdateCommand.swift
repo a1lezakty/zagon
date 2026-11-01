@@ -20,8 +20,11 @@ struct UpdateCommand: ParsableCommand {
     @Flag(name: .customLong("restart-services"), help: ArgumentHelp("Only restart the running services of this binary (install.sh).", visibility: .hidden))
     var restartOnly = false
     @Option(help: ArgumentHelp("With --restart-services: the account install.sh installed for.", visibility: .hidden)) var user: String?
+    @Option(name: .customLong("db-schema"), help: ArgumentHelp("Only print the schema of <data-dir>/zagon.db and the one this binary reads (an update asks the new binary).", visibility: .hidden))
+    var dbSchema: String?
 
     func run() throws {
+        if let dbSchema { SchemaCheck.answer(dataDir: dbSchema).map { print($0) }; return }
         #if os(Linux)
         if restartOnly { Self.restartServices(Sys.executablePath(), user: user); return }
         #if arch(x86_64)
@@ -63,6 +66,20 @@ struct UpdateCommand: ParsableCommand {
         let probe = Sys.capture([tmp, "--version"], timeout: 30)
         guard probe.status == 0 else { throw InstallError("the downloaded binary does not run here (exit \(probe.status)): nothing replaced") }
         let new = String(decoding: probe.out, as: UTF8.self).split(separator: "\n").first.map(String.init) ?? "?"
+        // A new schema makes .prev useless with the database; one the new binary cannot read would stop its service.
+        // Every database is asked before anything is printed or copied.
+        let answers = Self.dataDirs(exe, user: user).compactMap { d -> (db: String, answer: String)? in
+            let r = Sys.capture([tmp, "update", "--db-schema", d], timeout: 60)
+            return r.status == 0 ? (d + "/zagon.db", String(decoding: r.out, as: UTF8.self)) : nil  // else a release without it
+        }
+        let notes = answers.map { SchemaCheck.notes(answer: $0.answer, db: $0.db, exe: exe, old: zagonVersion, new: new) }
+        if let n = notes.first(where: \.stop) { throw InstallError(n.lines.joined(separator: "\n")) }
+        for (a, n) in zip(answers, notes) {
+            n.lines.forEach { print($0) }
+            if let v = SchemaCheck.migrates(answer: a.answer) {
+                print(SchemaCheck.snapshotNote(SchemaCheck.snapshot(db: a.db, version: v), db: a.db, exe: exe, old: zagonVersion))
+            }
+        }
 
         guard let prev = Installer.keepPrevious(exe) else {
             throw InstallError("cannot keep the old binary as \(exe).prev: nothing replaced")
@@ -166,6 +183,31 @@ struct UpdateCommand: ParsableCommand {
         case "active", "activating", "reloading", "refreshing": return .running
         default: return ask("is-enabled").hasPrefix("enabled") ? .stopped : .unused
         }
+    }
+
+    /// The databases the update concerns: this account's, the account installed for (`--user`, else the sudo user),
+    /// and those of the units that run `exe` (their `ZAGON_DIR`, else `HOME`).
+    static func dataDirs(_ exe: String, user: String?) -> [String] {
+        let target = (try? Account.target(explicit: user)) ?? nil
+        var dirs = [ZagonPaths().dir] + (target.map { [$0.home + "/.zagon"] } ?? [])
+        let sysDir = Installer.Options().systemUnitDir
+        let units = Sys.listDir(sysDir).filter { $0.hasPrefix("zagon") && $0.hasSuffix(".service") }.map { sysDir + "/" + $0 }
+            + [Installer.Options().userUnitDir + "/zagon.service"]
+            + (target.map { [Installer.Options(user: $0).userUnitDir + "/zagon.service"] } ?? [])
+        for u in units where runs(u, exe) {
+            var env: [String: String] = [:]
+            for line in Sys.readFile(u).map({ String(decoding: $0, as: UTF8.self) })?.split(separator: "\n") ?? []
+            where line.hasPrefix("Environment=") {
+                // Environment=K=V or Environment="K=V" (one assignment, as install writes it)
+                var a = line.dropFirst("Environment=".count)
+                if a.hasPrefix("\""), a.hasSuffix("\""), a.count >= 2 { a = a.dropFirst().dropLast() }
+                let kv = a.split(separator: "=", maxSplits: 1)
+                if kv.count == 2 { env[String(kv[0])] = String(kv[1]) }
+            }
+            if let d = env["ZAGON_DIR"] ?? env["HOME"].map({ $0 + "/.zagon" }) { dirs.append(d) }
+        }
+        var seen = Set<String>()
+        return dirs.filter { seen.insert(Sys.realPath($0) ?? $0).inserted }
     }
 
     /// Whether `unit` starts `exe`: `ExecStart=<path> daemon` (path quoted if it has spaces), as `zagon install` writes it.

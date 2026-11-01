@@ -116,7 +116,8 @@ public enum Remote {
             case "limit": n.limits += 1
             default: break
             }
-            if let h = v?["host"] { hosts.insert(h) }
+            // A `limit` line's `host` (0.1.5) is the store's own name, not a host of its rows: as before, rows only.
+            if v?["type"] != "limit", let h = v?["host"] { hosts.insert(h) }
         }
         // This Mac's own database host (pinned at its first open), or the name it goes by now.
         if hosts.contains(store.host) || hosts.contains(localHost) {
@@ -159,6 +160,11 @@ public enum Remote {
                 for t in ["usage_hour", "tool_use", "activity"] { try db.run("DELETE FROM \(t) WHERE file_id = ?", [.int(file)]) }
             }
             try db.run("DELETE FROM meta WHERE key IN (?, ?)", [.text("remote_seq:" + alias), .text("remote_old:" + alias)])
+            // Its limit source (`Store.addLimitSnapshot`): an alias gone must not keep the rings labelled.
+            try db.run("""
+                DELETE FROM meta WHERE key = 'limit_account:' || ?1
+                  OR key LIKE 'limit\\_src:%' ESCAPE '\\' AND substr(key, -length(?1) - 1) = ':' || ?1
+                """, [.text(alias)])
         }
     }
 

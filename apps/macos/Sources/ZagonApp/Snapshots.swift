@@ -265,7 +265,17 @@ enum Snapshots {
         let next = AppState(provider: week, lang: lang)
         next.cli = stale.cli
         let h = write(MainPanel().environmentObject(next), width: 400, "main-weekonly-both-\(lang.rawValue)", dir)
-        return a && b && c && d && e && g && h
+        // Limits from this Mac and a server (two accounts): whose they are, one AI and both.
+        var src = MockDataProvider(lang: lang)
+        src.twoSources = true
+        let one = AppState(provider: src, lang: lang)
+        one.cli = stale.cli
+        let i = write(MainPanel().environmentObject(one), width: 400, "main-sources-\(lang.rawValue)", dir)
+        src.codexLimits = true
+        let two2 = AppState(provider: src, lang: lang)
+        two2.cli = stale.cli
+        let j = write(MainPanel().environmentObject(two2), width: 400, "main-sources-both-\(lang.rawValue)", dir)
+        return a && b && c && d && e && g && h && i && j
     }
 
     static func write<V: View>(_ view: V, width: CGFloat, scale: CGFloat = 2, _ name: String, _ dir: URL) -> Bool {

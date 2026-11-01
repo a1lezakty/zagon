@@ -30,7 +30,7 @@ struct ArchiveCommand: ParsableCommand {
                     try common.scan(store)
                     let s = try a.tick()
                     print("archive: \(s.written) file(s) written, \(Fmt.bytes(s.rawBytes)) → \(Fmt.bytes(s.packedBytes)), "
-                          + Fmt.secs(Time.monotonic() - t0))
+                          + Fmt.secs(Time.monotonic() - t0) + (s.removed > 0 ? ", \(s.removed) removed (retention)" : ""))
                 } catch { print("archive: \(error)") }
                 if !once { sleep(600) }
             } while !once

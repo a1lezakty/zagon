@@ -11,6 +11,9 @@ public struct ParseOutput: Sendable {
     public var relays: [Relay] = []
     /// Lines that looked relevant but could not be parsed (for `doctor`); never fatal.
     public var badLines = 0
+    /// Records that should carry token usage but have none (Claude `assistant` without `message.usage`): a sign the
+    /// format changed (health line); never fatal.
+    public var noUsage = 0
     public init() {}
     public var isEmpty: Bool {
         meta.isEmpty && usage.isEmpty && tools.isEmpty && events.isEmpty && userMessages.isEmpty && limits.isEmpty && relays.isEmpty
