@@ -26,7 +26,7 @@ public enum CursorHeaders {
         #endif
     }
 
-    /// Rewrites `file(paths)` when the conversations changed; true = changed (ingest it). At most once per `every`
+    /// Updates `file(paths)` when the conversations changed; true = changed (ingest it). At most once per `every`
     /// seconds (`meta` `cursor_headers_at`, shared by the app, the CLI and the service): Cursor writes this database all
     /// the time, and it is history, the hooks count what happens now. Never throws: no Cursor, a database it cannot open
     /// or read now (locked, another format) leaves the file as it was. A conversation gone from Cursor's list (Cursor
@@ -44,7 +44,7 @@ public enum CursorHeaders {
         guard let rows = (try? read(db)) ?? nil, let skip = try? transcripts(store) else { return false }
         let since = CursorSource.hooksSince(paths.cursorHooks)
         var lines: [String] = [], drop = Set<String>(), places: [String: Place] = [:]
-        for r in rows {
+        for r in rows where r.id.count <= 256 {
             guard r.main, !skip.contains(r.id) else { drop.insert(r.id); continue }
             if places[r.ws] == nil { places[r.ws] = place(user: user, workspace: r.ws) }
             switch places[r.ws]! {
@@ -52,7 +52,7 @@ public enum CursorHeaders {
             case .remote: drop.insert(r.id)
             case .local(let cwd):
                 drop.insert(r.id)
-                var m: [JValue.Member] = [.init("id", .string(String(r.id.prefix(256)))),
+                var m: [JValue.Member] = [.init("id", .string(r.id)),
                                           .init("created", .number(HookSpool.fmt(r.created))),
                                           .init("updated", .number(HookSpool.fmt(min(r.updated, (since ?? .infinity) - 1))))]
                 if let cwd { m.append(.init("cwd", .string(cwd))) }
@@ -62,11 +62,13 @@ public enum CursorHeaders {
         }
         let old = Sys.readFile(out)
         let kept = old.map { String(decoding: $0, as: UTF8.self).split(separator: "\n").map(String.init) }?.filter { l in
-            JValue.parse(l)?["id"]?.string.map { !drop.contains($0) } ?? false
+            JValue.parse(l)?["id"]?.string.map { !drop.contains($0) && !skip.contains($0) } ?? false
         } ?? []
         let new = Array((kept + lines).map { $0 + "\n" }.joined().utf8)
         if let old {
             if old == new { return false }
+            // ponytail: two processes past the 5-minute check at once may append the same tail twice; the next sync
+            // rewrites the file (the id is listed again), so it is counted twice for at most that long.
             if !old.isEmpty, new.starts(with: old) { return Sys.append(out, Array(new[old.count...])) }
         } else if new.isEmpty { return false }
         return Sys.mkdirs(dir(paths)) && Sys.writeFile(out, new, mode: 0o600)
@@ -143,7 +145,8 @@ public enum CursorHeaders {
 /// with each turn after that and a conversation also used later keeps its earlier turn). `name` is its title. Time,
 /// rougher than the transcripts': the creation is a typed message, and its turn lasts until the last update by the
 /// transcripts' rule (at most `CursorTranscriptParser.cap`, none when the two are over `gap` apart); only before the
-/// hooks (a minute's margin, as the transcripts). The file is rewritten whole, so Ingest counts it again from the start.
+/// hooks (a minute's margin, as the transcripts). Stateless: a replaced file is counted again from the start, an
+/// appended one only for its new lines.
 struct CursorHeadersParser: LineParser {
     let since: Double?
 

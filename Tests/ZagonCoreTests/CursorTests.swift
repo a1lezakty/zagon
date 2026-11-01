@@ -355,12 +355,15 @@ import Testing
         // A new conversation at the end is appended (the same file: Ingest reads just it).
         func inode() -> UInt64? { (try? FileManager.default.attributesOfItem(atPath: CursorHeaders.file(paths)))?[.systemFileNumber] as? UInt64 }
         let ino = inode()
+        func resets() throws -> Int? { try store.db.one("SELECT resets FROM source_file WHERE path LIKE '%/headers.ndjson'") { $0.int(0) } }
+        let resetsBefore = try resets()
         rows.append(("h-8", "ws-local", since + 300, since + 400, 0, named("Newest")))
         try cursorDatabase(user, rows)
         #expect(CursorHeaders.sync(store: store, paths: paths, user: user, now: 2200))
         #expect(inode() == ino)
         try ingest.update(paths: [CursorHeaders.file(paths)])
         #expect(try row("h-8")?.first == "Newest" && working(store, "cursor:h-1") == [[t1 - d, t1 - d + 500]])
+        #expect(try resets() == resetsBefore)
         // A conversation Cursor dropped from its list, or whose workspace is gone, keeps its time; a table in another
         // format changes nothing.
         rows.removeAll { $0.id == "h-1" }
@@ -370,9 +373,10 @@ import Testing
         try ingest.update(paths: [CursorHeaders.file(paths)])
         #expect(try working(store, "cursor:h-6") == [[t3, t3 + 600]] && working(store, "cursor:h-1") == [[t1 - d, t1 - d + 500]])
         #expect(try row("h-1")?.last == "1")
+        #expect(!CursorHeaders.sync(store: store, paths: paths, user: user, now: 2600 + 300))  // stable: nothing flips
         let kept = Sys.readFile(CursorHeaders.file(paths))
         _ = try SQLite(path: user + "/globalStorage/state.vscdb").run("DROP TABLE composerHeaders")
-        #expect(!CursorHeaders.sync(store: store, paths: paths, user: user, now: 3000))
+        #expect(!CursorHeaders.sync(store: store, paths: paths, user: user, now: 3300))
         #expect(Sys.readFile(CursorHeaders.file(paths)) == kept)
         // No Cursor here: nothing written.
         #expect(!CursorHeaders.sync(store: store, paths: ZagonPaths(home: home, dir: home + "/z2"), user: home + "/none", now: 1800))
