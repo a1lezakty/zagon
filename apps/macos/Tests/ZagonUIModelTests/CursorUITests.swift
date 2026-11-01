@@ -3,7 +3,7 @@ import XCTest
 import ZagonCore
 @testable import ZagonUIModel
 
-/// Cursor's agent in the app: a third AI with sessions and time, no rings.
+/// Cursor's agent in the app: a third AI with sessions, time and tokens without cost, no rings.
 final class CursorUITests: XCTestCase {
     func testSessionsCommandAndDayNote() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("zagon-cursor-\(UUID().uuidString)").path
@@ -13,7 +13,7 @@ final class CursorUITests: XCTestCase {
         // Lines as `zagon hook` writes them for Cursor (HookSpool.cursorLine).
         let lines = [("UserPromptSubmit", t), ("PostToolUse", t + 60), ("Stop", t + 120), ("UserPromptSubmit", t + 200)].map {
             #"{"kind":"hook","tool":"cursor","event":"\#($0.0)","ts":\#($0.1),"session_id":"c-9","cwd":"/w/app","model":"gpt-5"}"#
-        }
+        } + [#"{"kind":"hook","tool":"cursor","event":"Stop","ts":\#(t + 121),"session_id":"c-9","model":"gpt-5","generation_id":"g-1","input_tokens":1000,"output_tokens":200}"#]
         try (lines.joined(separator: "\n") + "\n").write(toFile: paths.spool + "/" + Sys.utcDay(t) + ".cursor.ndjson",
                                                          atomically: false, encoding: .utf8)
         let store = try Store(path: dir + "/z.db")
@@ -40,7 +40,12 @@ final class CursorUITests: XCTestCase {
 
         let day = DayVM(p.day(now), f)
         XCTAssertGreaterThanOrEqual(p.day(now).cursorSec, 120)
-        XCTAssertTrue(day.limitNotes.contains { $0.text.hasPrefix("Cursor ") && $0.text.contains("no tokens") },
+        XCTAssertTrue(day.limitNotes.contains { $0.text.hasPrefix("Cursor ") && $0.text.contains("not in the $") },
                       "\(day.limitNotes.map(\.text))")
+        // Its tokens count, at no price ("gpt-5" alone would be priced).
+        XCTAssertEqual(p.day(now).totals.tokens, 1200)
+        XCTAssertEqual(p.day(now).totals.cost, 0)
+        let row = try XCTUnwrap(day.usage(.model).first { $0.name == "cursor/gpt-5" })
+        XCTAssertEqual(row.cost, "")
     }
 }

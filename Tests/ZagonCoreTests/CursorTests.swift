@@ -177,6 +177,13 @@ import Testing
             [$0.text(0), $0.text(1), $0.text(2), $0.text(3), $0.text(4), "\($0.int(5))"]
         })
         #expect(s == ["cursor", "gpt-5", "/w/app", "app", "waiting_input", "2"])
+        // No `sessionEnd` (Cursor mostly quits before it runs): the wait after `stop` ends with the idle time, not at the
+        // next prompt an hour later.
+        var waits: [[Double]] = []
+        try store.db.query("SELECT start, \"end\" FROM activity WHERE session_id = 'cursor:c-9' AND kind = 'waiting' ORDER BY start") {
+            waits.append([$0.real(0), $0.real(1)])
+        }
+        #expect(waits == [[t - 50, t], [t + 120, t + 120 + Query.idleAfter]])
         #expect(try store.db.one("SELECT count(*) FROM session") { $0.int(0) } == 1)
         // The prompt's task keys link the session to its task; its words are not kept.
         #expect(try store.db.one("SELECT group_concat(key) FROM task_key WHERE session_id = 'cursor:c-9'") { $0.text(0) } == "PROJ-4")
@@ -189,5 +196,211 @@ import Testing
         feed(paths, "Stop", t + 8010)
         try d.apply([paths.spool + "/" + Sys.utcDay(t + 8000) + ".cursor.ndjson"])
         #expect(try working(store, "cursor:c-9").last == [t + 8000, t + 8010])
+    }
+
+    /// `zagon hook <tool> <event>` with `payload` on stdin, as Cursor runs it.
+    func hook(_ paths: ZagonPaths, _ event: String, _ payload: String, tool: String = "claude") {
+        var fds: [Int32] = [0, 0]
+        #expect(pipe(&fds) == 0)
+        let b = Array(payload.utf8)
+        _ = b.withUnsafeBytes { write(fds[1], $0.baseAddress, b.count) }
+        close(fds[1])
+        HookSpool.handleHook(args: [tool, event], stdinFD: fds[0], paths: paths)
+        close(fds[0])
+    }
+
+    /// Cursor 3's envelope (keys from a live Cursor 3.27; values made up), with the fields that must never be kept.
+    func envelope(_ event: String, gen: String, _ extra: String = "") -> String {
+        #"{"hook_event_name":"\#(event)","cursor_version":"3.27.22","workspace_roots":["/w/app"],"user_email":"dev@example.com","conversation_id":"c-5","generation_id":"\#(gen)","model":"claude-opus-4-8","model_id":"m-1","model_params":{"effort":"SECRET-PARAM"}\#(extra)}"#
+    }
+
+    func tokens(_ i: Int, _ o: Int, _ r: Int, _ w: Int) -> String {
+        #","input_tokens":\#(i),"output_tokens":\#(o),"cache_read_tokens":\#(r),"cache_write_tokens":\#(w)"#
+    }
+
+    /// Every text value of every table, to look for what must not be stored.
+    func dump(_ s: Store) throws -> String {
+        var tables: [String] = [], out = ""
+        try s.db.query("SELECT name FROM sqlite_master WHERE type = 'table'") { if let n = $0.text(0) { tables.append(n) } }
+        for t in tables {
+            var n: Int32 = 0
+            try s.db.query("PRAGMA table_info(\"\(t)\")") { _ in n += 1 }
+            try s.db.query("SELECT * FROM \"\(t)\"") { r in for i in 0..<n { out += (r.text(i) ?? "") + "\n" } }
+        }
+        return out
+    }
+
+    /// Tokens of `stop` (from `~/.claude/settings.json`: `zagon hook claude Stop`) and `afterAgentResponse` (only from
+    /// Cursor's own hooks.json): one generation counts its largest report, never the sum; no price; no text, e-mail or
+    /// tool input / output anywhere.
+    @Test func hookTokensWithoutPriceOrText() throws {
+        let home = makeTempDir(), paths = ZagonPaths(home: home, dir: home + "/z")
+        let secrets = #","prompt":"SECRET-PROMPT for PROJ-3","text":"SECRET-TEXT","tool_input":{"command":"SECRET-INPUT"},"tool_output":"SECRET-OUTPUT""#
+        hook(paths, "SessionStart", envelope("sessionStart", gen: "g-0", #","session_id":"s-77","transcript_path":null,"composer_mode":"agent","is_background_agent":false"#))
+        hook(paths, "UserPromptSubmit", envelope("beforeSubmitPrompt", gen: "g-1", secrets))
+        hook(paths, "PostToolUse", envelope("postToolUse", gen: "g-1", #","tool_name":"Shell","duration_ms":12"# + secrets))
+        hook(paths, "afterAgentResponse", envelope("afterAgentResponse", gen: "g-1", tokens(1000, 300, 5000, 700) + secrets), tool: "cursor")
+        // The parser's state carries a generation over to the next pass.
+        let store = try Store(path: ":memory:"), ingest = Ingest(store: store, sources: CursorSource.specs(paths: paths, root: home + "/none"))
+        try ingest.scan()
+        hook(paths, "Stop", envelope("stop", gen: "g-1", #","status":"completed","loop_count":0"# + tokens(1200, 300, 5000, 700)))
+        hook(paths, "Stop", envelope("stop", gen: "g-2", tokens(100, 50, 0, 0)))
+        hook(paths, "afterAgentResponse", envelope("afterAgentResponse", gen: "g-2", tokens(100, 50, 0, 0)), tool: "cursor")
+        hook(paths, "Stop", envelope("stop", gen: "g-3", #","input_tokens":"x""#))  // no number: no tokens
+        // Without a generation id reports add up.
+        hook(paths, "Stop", envelope("stop", gen: "", tokens(10, 0, 0, 0)))
+        hook(paths, "Stop", envelope("stop", gen: "", tokens(10, 0, 0, 0)))
+        let lines = spoolLines(paths.dir)
+        #expect(lines.count == 10)
+        let first = try #require(lines.first.flatMap { JValue.parse($0) })
+        #expect(first["session_id"]?.string == "c-5" && first["composer_mode"] == nil && first["generation_id"]?.string == "g-0")
+        let spool = lines.joined()
+        #expect(!spool.contains("SECRET") && !spool.contains("example.com") && !spool.contains("for PROJ"))
+        #expect(spool.contains(#""keys":"PROJ-3""#) && spool.contains(#""cache_write_tokens":700"#))
+
+        try ingest.scan()
+        try SpoolIngest.run(store: store, spoolDir: paths.spool)
+        let u = try #require(try store.db.one("""
+            SELECT sum(input), sum(output), sum(cache_read), sum(cache_write), group_concat(DISTINCT model), group_concat(DISTINCT session_id)
+            FROM usage_hour
+            """) { [$0.int(0), $0.int(1), $0.int(2), $0.int(3)].map(String.init) + [$0.text(4) ?? "", $0.text(5) ?? ""] })
+        #expect(u == ["1320", "350", "5000", "700", "cursor/claude-opus-4-8", "cursor:c-5"])
+        // Cursor's own prices are unknown: none, also for a model the price table knows.
+        #expect(Pricing.rates("claude-opus-4-8") != nil && Pricing.rates("cursor/claude-opus-4-8") == nil)
+        let line = try #require(try Reports(store: store).sessions(from: 0, to: 4e9).first { $0.id == "cursor:c-5" })
+        #expect(line.cost == 0 && line.unpriced == 1320 + 350 + 5000 + 700)
+        #expect(try store.db.one("SELECT status FROM session WHERE id = 'cursor:c-5'") { $0.text(0) } == "waiting_input")
+        let db = try dump(store)
+        #expect(!db.contains("SECRET") && !db.contains("example.com") && db.contains("PROJ-3"))
+    }
+
+    /// Cursor 3's own database, made up: `composerHeaders` beside tables Zagon never opens.
+    func cursorDatabase(_ user: String, _ rows: [(id: String, ws: String, created: Double, updated: Double, sub: Int, value: String)]) throws {
+        for (ws, json) in [("ws-local", #"{"folder":"file:///Users/dev/My%20App"}"#),
+                           ("ws-remote", #"{"folder":"vscode-remote://ssh-remote%2Bbuild-box/srv/app"}"#),
+                           ("ws-multi", #"{"workspace":"file:///Users/dev/all.code-workspace"}"#)] {
+            try FileManager.default.createDirectory(atPath: user + "/workspaceStorage/" + ws, withIntermediateDirectories: true)
+            try json.write(toFile: user + "/workspaceStorage/\(ws)/workspace.json", atomically: false, encoding: .utf8)
+        }
+        try FileManager.default.createDirectory(atPath: user + "/globalStorage", withIntermediateDirectories: true)
+        let db = try SQLite(path: user + "/globalStorage/state.vscdb")
+        try db.exec("""
+            CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
+            INSERT INTO ItemTable VALUES('cursorAuth/accessToken', 'SECRET-TOKEN');
+            CREATE TABLE IF NOT EXISTS cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
+            INSERT INTO cursorDiskKV VALUES('bubbleId:h-1:b-1', '{"text":"SECRET-BUBBLE"}');
+            DROP TABLE IF EXISTS composerHeaders;
+            CREATE TABLE composerHeaders(composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER,
+              isArchived INTEGER, isSubagent INTEGER, recency REAL, checkpointAt INTEGER, subagentTypeName TEXT, value TEXT);
+            """)
+        for r in rows {
+            _ = try db.run("INSERT INTO composerHeaders VALUES(?, ?, ?, ?, 0, ?, 0, 0, NULL, ?)",
+                           [.text(r.id), .text(r.ws), .int(Int64(r.created * 1000)), .int(Int64(r.updated * 1000)), .int(Int64(r.sub)),
+                            .text(r.value)])
+        }
+    }
+
+    /// Cursor 3 history: rough turns from `composerHeaders` (read-only), local conversations only, before the hooks.
+    @Test func historyFromConversationHeaders() throws {
+        let home = makeTempDir(), paths = ZagonPaths(home: home, dir: home + "/z"), user = home + "/CursorUser"
+        let since = t3 + 5000, d = 86400.0
+        _ = try transcript(home, mtime: t3 + 300)  // c-1: Cursor 2.x left its transcript, counted from it
+        Sys.mkdirs(paths.dir)
+        Sys.append(paths.cursorHooks, Array("\(since)\n".utf8))
+        func named(_ n: String) -> String { #"{"name":"\#(n)","subtitle":"SECRET-SUBTITLE","filesChangedCount":2}"# }
+        var rows: [(id: String, ws: String, created: Double, updated: Double, sub: Int, value: String)] = [
+                    ("h-1", "ws-local", t1 - d, t1 - d + 300, 0, named("Fix login")),
+                    ("h-2", "ws-local", t1 - 2 * d, t1 - 2 * d + 3600, 0, named("Long one")),   // over 30 min: no length
+                    ("h-3", "ws-remote", t1 - d, t1 - d + 60, 0, named("Remote")),              // the server counts it
+                    ("h-4", "ws-gone", t1 - d, t1 - d + 60, 0, named("Unknown")),
+                    ("h-5", "ws-local", t1 - d, t1 - d + 60, 1, named("Sub-agent")),
+                    ("h-6", "ws-multi", t3, t3 + 1200, 0, "not json"),                           // capped at 10 min
+                    ("h-7", "ws-local", since + 100, since + 400, 0, named("After hooks")),      // the hooks count it
+                    ("c-1", "ws-local", t1, t3 + 300, 0, named("Has a transcript"))]
+        try cursorDatabase(user, rows)
+        let store = try Store(path: ":memory:"), ingest = Ingest(store: store, sources: CursorSource.specs(paths: paths))
+        try ingest.scan()
+        let cursorFiles = Sys.listDir(user + "/globalStorage").sorted(), cursorDB = Sys.readFile(user + "/globalStorage/state.vscdb")
+        #expect(CursorHeaders.sync(store: store, paths: paths, user: user, now: 1000))
+        try ingest.update(paths: [CursorHeaders.file(paths)])
+        // Cursor's database is only read: no new file beside it, not a byte changed.
+        #expect(Sys.listDir(user + "/globalStorage").sorted() == cursorFiles && Sys.readFile(user + "/globalStorage/state.vscdb") == cursorDB)
+
+        let file = try #require(Sys.readFile(CursorHeaders.file(paths)).map { String(decoding: $0, as: UTF8.self) })
+        #expect(file.split(separator: "\n").compactMap { JValue.parse(String($0))?["id"]?.string } == ["h-2", "h-1", "h-6", "h-7"])
+        #expect(try !file.contains("SECRET") && !dump(store).contains("SECRET"))
+        func row(_ id: String) throws -> [String?]? {
+            try store.db.one("SELECT title, cwd, project, user_msgs FROM session WHERE id = ?", [.text("cursor:" + id)]) {
+                [$0.text(0), $0.text(1), $0.text(2), "\($0.int(3))"]
+            }
+        }
+        #expect(try row("h-1") == ["Fix login", "/Users/dev/My App", "My App", "1"])
+        #expect(try working(store, "cursor:h-1") == [[t1 - d, t1 - d + 300]])
+        #expect(try row("h-2") == ["Long one", "/Users/dev/My App", "My App", "1"] && working(store, "cursor:h-2").isEmpty)
+        #expect(try row("h-6") == [nil, nil, nil, "1"] && working(store, "cursor:h-6") == [[t3, t3 + 600]])
+        #expect(try row("h-7") == ["After hooks", "/Users/dev/My App", "My App", "0"] && working(store, "cursor:h-7").isEmpty)
+        for gone in ["h-3", "h-4", "h-5"] { #expect(try row(gone) == nil, "\(gone)") }
+        #expect(try row("c-1")?.first == "Fix PROJ-7 login")
+        #expect(try working(store, "cursor:c-1") == [[t1, t2 - 1], [t2, t2 + 600], [t3, t3 + 300]])
+
+        // Read at most every 5 minutes; an unchanged list leaves the file alone; a changed one is counted anew, not added.
+        rows[0].updated = t1 - d + 500
+        try cursorDatabase(user, rows)
+        #expect(!CursorHeaders.sync(store: store, paths: paths, user: user, now: 1100))
+        #expect(CursorHeaders.sync(store: store, paths: paths, user: user, now: 1400))
+        try ingest.update(paths: [CursorHeaders.file(paths)])
+        #expect(try working(store, "cursor:h-1") == [[t1 - d, t1 - d + 500]])
+        #expect(try row("h-1")?.last == "1")
+        #expect(!CursorHeaders.sync(store: store, paths: paths, user: user, now: 1800))
+        // A new conversation at the end is appended (the same file: Ingest reads just it).
+        func inode() -> UInt64? { (try? FileManager.default.attributesOfItem(atPath: CursorHeaders.file(paths)))?[.systemFileNumber] as? UInt64 }
+        let ino = inode()
+        func resets() throws -> Int? { try store.db.one("SELECT resets FROM source_file WHERE path LIKE '%/headers.ndjson'") { $0.int(0) } }
+        let resetsBefore = try resets()
+        rows.append(("h-8", "ws-local", since + 300, since + 400, 0, named("Newest")))
+        try cursorDatabase(user, rows)
+        #expect(CursorHeaders.sync(store: store, paths: paths, user: user, now: 2200))
+        #expect(inode() == ino)
+        try ingest.update(paths: [CursorHeaders.file(paths)])
+        #expect(try row("h-8")?.first == "Newest" && working(store, "cursor:h-1") == [[t1 - d, t1 - d + 500]])
+        #expect(try resets() == resetsBefore)
+        // A conversation Cursor dropped from its list, or whose workspace is gone, keeps its time; a table in another
+        // format changes nothing.
+        rows.removeAll { $0.id == "h-1" }
+        try cursorDatabase(user, rows)
+        Sys.remove(user + "/workspaceStorage/ws-multi/workspace.json")
+        CursorHeaders.sync(store: store, paths: paths, user: user, now: 2600)
+        try ingest.update(paths: [CursorHeaders.file(paths)])
+        #expect(try working(store, "cursor:h-6") == [[t3, t3 + 600]] && working(store, "cursor:h-1") == [[t1 - d, t1 - d + 500]])
+        #expect(try row("h-1")?.last == "1")
+        #expect(!CursorHeaders.sync(store: store, paths: paths, user: user, now: 2600 + 300))  // stable: nothing flips
+        let kept = Sys.readFile(CursorHeaders.file(paths))
+        _ = try SQLite(path: user + "/globalStorage/state.vscdb").run("DROP TABLE composerHeaders")
+        #expect(!CursorHeaders.sync(store: store, paths: paths, user: user, now: 3300))
+        #expect(Sys.readFile(CursorHeaders.file(paths)) == kept)
+        // No Cursor here: nothing written.
+        #expect(!CursorHeaders.sync(store: store, paths: ZagonPaths(home: home, dir: home + "/z2"), user: home + "/none", now: 1800))
+        #expect(!Sys.exists(home + "/z2/cursor"))
+    }
+
+    /// Hooks that begin after a conversation was synced: its turn before them stays, and the file stops following it.
+    @Test func headersBeforeAndAfterTheHooks() throws {
+        let home = makeTempDir(), paths = ZagonPaths(home: home, dir: home + "/z"), user = home + "/CursorUser"
+        try cursorDatabase(user, [("h-9", "ws-local", t1, t1 + 300, 0, #"{"name":"Ongoing"}"#)])
+        let store = try Store(path: ":memory:"), ingest = Ingest(store: store, sources: CursorSource.specs(paths: paths))
+        #expect(CursorHeaders.sync(store: store, paths: paths, user: user, now: 1000))
+        try ingest.update(paths: [CursorHeaders.file(paths)])
+        #expect(try working(store, "cursor:h-9") == [[t1, t1 + 300]])
+        Sys.mkdirs(paths.dir)
+        Sys.append(paths.cursorHooks, Array("\(t1 + 1000)\n".utf8))
+        try cursorDatabase(user, [("h-9", "ws-local", t1, t1 + 5000, 0, #"{"name":"Ongoing"}"#)])
+        #expect(CursorHeaders.sync(store: store, paths: paths, user: user, now: 1400))
+        try ingest.update(paths: [CursorHeaders.file(paths)])
+        let file = Sys.readFile(CursorHeaders.file(paths)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        #expect(JValue.parse(String(file.split(separator: "\n").first ?? ""))?["updated"]?.double == t1 + 999)
+        #expect(try working(store, "cursor:h-9") == [[t1, t1 + 600]])
+        // Later turns change nothing in the file.
+        try cursorDatabase(user, [("h-9", "ws-local", t1, t1 + 9000, 0, #"{"name":"Ongoing"}"#)])
+        #expect(!CursorHeaders.sync(store: store, paths: paths, user: user, now: 1800))
     }
 }

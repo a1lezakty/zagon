@@ -126,7 +126,10 @@ public enum SpoolIngest {
         if let prevAt, at < prevAt { return false }
         if prev == status { return false }  // keep status_at = when this state began
         if let prev, let prevAt, prev.hasPrefix("waiting") {
-            try store.addActivity(sessionId: id, start: prevAt, end: at, kind: "waiting", cwd: cwd)
+            // Cursor's `sessionEnd` mostly never comes (Cursor quits before the hook runs): a wait after its `stop` ends
+            // once the conversation is idle, as the live list has it (`Query.idleAfter`), not when it is next used.
+            let end = tool == .cursor ? min(at, prevAt + Query.idleAfter) : at
+            try store.addActivity(sessionId: id, start: prevAt, end: end, kind: "waiting", cwd: cwd)
         }
         try store.setStatus(sessionId: id, tool: tool, status: status, at: at, detail: detail)
         return true

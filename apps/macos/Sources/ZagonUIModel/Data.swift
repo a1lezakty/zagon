@@ -36,7 +36,7 @@ public enum Tool: String, Sendable, CaseIterable {
     public var name: String {
         switch self { case .claude: "Claude"; case .codex: "Codex"; case .cursor: "Cursor" }
     }
-    /// The AIs with subscription limits (rings, their colors). Cursor has sessions and time only.
+    /// The AIs with subscription limits (rings, their colors). Cursor has sessions, time and tokens without a price.
     public static let withLimits: [Tool] = [.claude, .codex]
 }
 
@@ -352,7 +352,7 @@ public struct DayData: Sendable {
     public var summaryInfo: SummaryInfo?
     /// `projects` by machine (as shown), for the sessions a summary from other machines leaves out.
     public var hostProjects: [String: [DoneProject]]
-    /// Working time of Cursor's sessions that day (part of `totals.sessionSec`): approximate, and without tokens.
+    /// Working time of Cursor's sessions that day (part of `totals.sessionSec`): approximate before the hooks.
     public var cursorSec: Double
     public init(day: Date, totals: Totals, limitHits: [Interval] = [], weekPctStart: Double? = nil,
                 weekPctEnd: Double? = nil, lanes: [Lane] = [], usage: [UsageDimension: [UsageRow]] = [:],

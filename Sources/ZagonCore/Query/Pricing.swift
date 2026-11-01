@@ -43,8 +43,9 @@ public enum Pricing {
         "codex-mini-latest": openai(1.5, 6, 0.375),
     ]
 
-    /// nil = no known price (shown as "$ ?", never as $0).
-    public static func rates(_ model: String) -> Rates? { table[key(model)] }
+    /// nil = no known price (shown as "$ ?", never as $0). Cursor's tokens (`cursor/<model>`, `CursorHookParser`) never
+    /// have one: Cursor bills its own prices, also for models this table knows.
+    public static func rates(_ model: String) -> Rates? { model.hasPrefix("cursor/") ? nil : table[key(model)] }
 
     /// `model` as the table keys it: lower case, no cloud prefix (`us.anthropic.`), suffix (`@…`, `[1m]`, `-v1:0`) or date
     /// (`-20250805`, `-2025-08-07`).

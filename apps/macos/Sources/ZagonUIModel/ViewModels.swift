@@ -375,10 +375,11 @@ public struct DayVM: Sendable {
             rows = Array(rows[..<4]) + [UsageRow("", tokens: rest.reduce(0) { $0 + $1.tokens }, cost: rest.reduce(0) { $0 + $1.cost })]
         }
         let total = Double(max(1, rows.reduce(0) { $0 + $1.tokens }))
-        // Tools carry call counts (tokens are not split by tool) and no price.
+        // Tools carry call counts (tokens are not split by tool) and no price; nor do Cursor's models (`cursor/<model>`).
         return rows.enumerated().map { i, r in
             UsageRowVM(name: name(r.name, dim), tokens: dim == .tool ? f.t.plural("usage.calls", r.tokens) : f.tokens(r.tokens),
-                       cost: dim == .tool ? "" : f.cost(r.cost),
+                       cost: dim == .tool || (dim == .model && (r.name == "cursor" || r.name.hasPrefix("cursor/"))) ? ""
+                           : f.cost(r.cost),
                        share: Double(r.tokens) / total, color: r.name.isEmpty ? Palette.muted : Palette.series(i))
         }
     }
