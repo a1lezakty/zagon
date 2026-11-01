@@ -127,12 +127,15 @@ struct ToastView: View {
                 Image(systemName: t.error ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                     .font(.system(size: 13)).foregroundColor(t.error ? Z.bad : Z.good)
                 // 8 lines: "Connected" ends with what to do (Developer: Reload Window), 5–6 lines in the 400 pt panel.
-                Text(t.text).font(.system(size: 13)).foregroundColor(Z.text).lineLimit(8).fixedSize(horizontal: false, vertical: true)
-                    .help(t.text)
-                Spacer(minLength: 0)
-                if let text = t.copy {
-                    CopyButton(title: t.revealTitle ?? app.f.t("copy"), height: 28) { text }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(t.text).font(.system(size: 13)).foregroundColor(Z.text).lineLimit(8).fixedSize(horizontal: false, vertical: true)
+                        .help(t.text)
+                    // Under the text: a long title ("Copy install command") beside it would squeeze the text.
+                    if let text = t.copy {
+                        CopyButton(title: t.revealTitle ?? app.f.t("copy"), height: 28, radius: 8, fontSize: 12) { text }
+                    }
                 }
+                Spacer(minLength: 0)
                 if let url = t.reveal {
                     PillButton(title: t.revealTitle ?? app.f.t("toast.reveal"), height: 28) {
                         NSWorkspace.shared.activateFileViewerSelecting([url])
