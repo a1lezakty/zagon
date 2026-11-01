@@ -70,7 +70,9 @@ enum Ru {
         return v >= 100 || v == v.rounded() ? "\(Int(v))" : "\(Int(v))\(point)\(Int((v * 10).rounded()) % 10)"
     }
 
-    static func tool(_ t: ToolKind) -> String { t == .claude ? "Claude" : "Codex" }
+    static func tool(_ t: ToolKind) -> String {
+        switch t { case .claude: "Claude"; case .codex: "Codex"; case .cursor: "Cursor" }
+    }
     static func tool(_ t: String) -> String { ToolKind(rawValue: t).map(tool) ?? t }
 
     /// `5 ч` / `неделя` / `N ч` from the window length.

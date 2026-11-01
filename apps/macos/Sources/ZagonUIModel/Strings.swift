@@ -334,6 +334,7 @@ enum Strings {
         "settings.wl.exclude": "Not logged", "settings.wl.excludeNone": "Nothing is excluded. “Don't log” in a plan row's menu adds here.",
         "settings.wl.kind.project": "project {0}", "settings.wl.kind.task": "task {0}", "settings.wl.kind.session": "session {0}",
         "settings.wl.remove": "Remove", "settings.wl.notSaved": "{0}: not saved ({1})",
+        "day.cursor": "Cursor {0}: no tokens or limits (Cursor keeps them to itself); its time before Zagon's hooks is approximate.",
     ]
 
     static let ru: [String: String] = [
@@ -678,5 +679,6 @@ enum Strings {
         "settings.wl.exclude": "Не логировать", "settings.wl.excludeNone": "Ничего не исключено. «Не логировать» в меню строки плана добавляет сюда.",
         "settings.wl.kind.project": "проект {0}", "settings.wl.kind.task": "задача {0}", "settings.wl.kind.session": "сессия {0}",
         "settings.wl.remove": "Убрать", "settings.wl.notSaved": "{0}: не сохранено ({1})",
+        "day.cursor": "Cursor {0}: без токенов и лимитов (Cursor их не отдаёт); время до хуков Загона — приблизительное.",
     ]
 }

@@ -115,7 +115,7 @@ final class ReportTools {
         }
         let t = now()
         return try all.map { s in
-            var line = "\(s.tool == .claude ? "Claude" : "Codex") \(Self.window(s.window, s.windowMinutes)): "
+            var line = "\(Ru.tool(s.tool)) \(Self.window(s.window, s.windowMinutes)): "
             guard let r = s.resetsAt else { return line + "\(Txt.pct(s.usedPct)) used (reading \(Txt.ago(t - s.ts)))" }
             if r <= t {
                 return line + "window reset at \(Txt.when(r, now: t)); last reading before it \(Txt.pct(s.usedPct)), "
@@ -230,7 +230,7 @@ final class ReportTools {
 
     static func resumeCommand(id: String, tool: String, cwd: String?) -> String? {
         let native = String(id.drop { $0 != ":" }.dropFirst())
-        guard !native.isEmpty else { return nil }
+        guard !native.isEmpty, tool != "cursor" else { return nil }  // Cursor's conversations open in Cursor
         let id = Sys.shellQuote(native)
         let cmd = tool == "codex" ? "codex resume \(id)" : "claude --resume \(id)"
         return cwd.map { "cd \(Sys.shellQuote($0)) && \(cmd)" } ?? cmd

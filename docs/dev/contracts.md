@@ -5,7 +5,9 @@ Stable types other packages build on. Changing a field here is a contract change
 ## Records (`Sources/ZagonCore/Model/`)
 
 All timestamps are `Timestamp` = `Double` seconds since the Unix epoch (UTC). Session ids are `<tool>:<native id>`
-(`claude:174a7d2d-…`, `codex:019a…`).
+(`claude:174a7d2d-…`, `codex:019a…`, `cursor:<conversation id>`). `ToolKind` (0.1.5 added `cursor`) is also the `tool`
+value of sessions, `day_agg` rows and exports; a reader that knows only `claude` / `codex` must skip or show the
+others, not fail.
 
 | Type | Meaning | Notes |
 |---|---|---|
@@ -53,6 +55,28 @@ another root when the old file is gone in both forms. A zagon without this (0.1.
 unpacked one as replaced, so it recounts rather than double counts. Our archive keeps copies of plain files only (a
 `.zst` is one already: if it is deleted later, its counts stay but handoff and search lose it); `Archive.readLog` and
 `transcript(id)` unpack it for handoff and search.
+
+Cursor's agent (`Cursor/CursorSource.swift`, tool `cursor`): sessions and time only, never tokens or limits (Cursor
+keeps them on its servers; Zagon reads no credentials). Two sources, both `CursorSource.specs`:
+
+- hooks: `spool/<UTC day>.cursor.ndjson` (see Live status from hooks). `UserPromptSubmit` is a typed message whose
+  text is only the prompt's task keys (found by the hook as Ingest finds them, no brief keys), `PostToolUse` /
+  `SubagentStop` / `PreCompact` / `Stop` are agent events, so turns are exact; each line also gives `SessionMeta`
+  (cwd = the first workspace root, model). The daemon passes these files to `Ingest.update` too. Each file is its own
+  TurnBuilder: a turn across UTC midnight loses the stretch between its last event before and its first after.
+  These files are kept 40 days (SpoolIngest; other spool files 7): they are the only record of this time.
+- transcripts: `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl` (sub-agent logs and old `.txt` are
+  left out). Lines hold no times; a typed message (`<user_query>`, its text for keys and search) is placed only when
+  a `<timestamp>` tag (minutes, `UTC±h[:mm]`) precedes it, and its turn ends a second before the next placed one, the
+  last at the file's mtime (also when only answer lines came since), each at most 10 minutes, and none when that end
+  is over 30 minutes away: approximate time. User time too: a capped turn's end counts as the moment the user read
+  the answer (TurnBuilder), so a reply within `idle_gap` of it joins the two stretches. The stamp is the last `<timestamp>` before the last `<user_query>`. Title
+  = the first line of the first typed message (rank 0). The folder is found by matching the slug (`/` and other
+  non-alphanumerics as `-`) against folder entries, never inside folders macOS guards nor, on macOS, through a link;
+  unknown = no cwd, project = the part of the slug no folder matched. Archive copies
+  neither source (Claude Code and Codex only).
+  Only messages more than a minute before `<data-dir>/cursor-hooks` (the first Cursor hook's time, written once by
+  `zagon hook`) count: after that the hooks do, and the two never overlap.
 
 ## Store (`Sources/ZagonCore/Store/`)
 
@@ -276,7 +300,7 @@ the pending batch and stop. Log: `<data-dir>/logs/daemon.log` (+ `.1`, `.2`, at 
 ## Live status from hooks (`Hooks/`)
 
 `zagon hook <claude|codex> <Event>` appends one line per call to `~/.zagon/spool/<UTC day>.ndjson` (ids, paths,
-event names; never prompt text or tool input). A hook line also carries `pid` (`Sys.clientPid()`: the Claude Code /
+event names; Cursor's prompts only as their task keys; never prompt text or tool input). A hook line also carries `pid` (`Sys.clientPid()`: the Claude Code /
 Codex process, skipping the `sh -c` around hook commands; Linux only). Only handoff reads it, to match `zagon mcp` to
 its conversation; it is never stored in the database. `SpoolIngest.run` applies new lines to `session.status` /
 `status_at` and records a `waiting` activity interval when a `waiting_*` status ends. Older events never overwrite
@@ -297,6 +321,14 @@ wins: `busy` → `working`; `waiting` for a permission prompt, sandbox / worker 
 no change); an exited background session `done` → `waiting_input`, `blocked` → `waiting_permission`, `failed` /
 `stopped` → `ended` (never reopens an `ended` one). Only sessions already in the database; one missing from the list is
 left alone. A Claude Code without the command (non-zero exit, not a JSON array) is asked again an hour later.
+
+Cursor's agent runs the hooks of `~/.claude/settings.json` too (Third-Party Imports, on by default; Cursor maps
+`UserPromptSubmit`, `PostToolUse`, `Stop`, `SessionStart`, `SessionEnd`, … to its own events and has no
+`Notification` / `PermissionRequest`). Its input is told by `cursor_version` and goes to
+`spool/<UTC day>.cursor.ndjson` with `tool` = `cursor`, `session_id` = `conversation_id` (else `session_id`), `cwd` =
+the first of `workspace_roots` (else `cwd`), `model`, `tool_name`, `transcript_path` and the Claude event name the hook
+was installed for; never `prompt`, `user_email`, tool input or output. The other editors' agents (Devin, Trae, VS
+Code) are still dropped (`HookSpool.fromOtherAgent`). The field names are from Cursor's docs, not yet seen live.
 
 The status line wrapper adds `limits` lines (`five_hour` / `seven_day`) only when the reading changed or a minute
 passed for that session (the last one is kept in `spool/.limits-<session>`, removed with spool days); Claude Code

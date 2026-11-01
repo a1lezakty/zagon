@@ -41,8 +41,11 @@ public enum SpoolIngest {
         for name in names where name.hasPrefix(".limits-") {
             if let m = Sys.mtime(spoolDir + "/" + name), m < now - Double(retainDays) * 86400 { Sys.remove(spoolDir + "/" + name) }
         }
+        // Cursor's lines are its only record of time (CursorSource): kept 40 days, beyond Claude Code's 30-day cleanup,
+        // so a rebuilt database counts them again.
+        let oldestCursor = Sys.utcDay(now - Double(max(retainDays, 40)) * 86400)
         for name in files {
-            if String(name.prefix(10)) < oldest {
+            if String(name.prefix(10)) < (name.hasSuffix(".cursor.ndjson") ? oldestCursor : oldest) {
                 Sys.remove(spoolDir + "/" + name)
                 try store.db.run("DELETE FROM meta WHERE key = ?", [.text("spool:" + name)])
                 res.expired += 1

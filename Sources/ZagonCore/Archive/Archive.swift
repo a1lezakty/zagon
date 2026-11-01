@@ -13,7 +13,7 @@ public struct ArchiveError: Error, CustomStringConvertible {
     init(_ d: String) { description = d }
 }
 
-/// zstd copies of transcripts, kept after Claude Code (`cleanupPeriodDays`) or Codex drop the originals:
+/// zstd copies of transcripts (Claude Code and Codex; not Cursor's), kept after Claude Code (`cleanupPeriodDays`) or Codex drop the originals:
 /// `<dir>/<tool>/<yyyy-mm>/<native id>.jsonl.zst` for the session file and `<native id>/<path under the session
 /// dir>.zst` for Claude sub-agents. The copy of each tracked file (`source_file.id`, stable across moves) is fixed
 /// once in `meta` (`archive:file:<id>`); a second file that would get a taken name (a session continued in another
@@ -53,7 +53,8 @@ public struct Archive {
         var sessions: [String: (tool: String, started: Double?, lastAt: Double?, archivePath: String?, files: [File])] = [:]
         try store.db.query("""
             SELECT f.session_id, f.tool, f.path, f.agent, s.started_at, s.last_at, s.archive_path, f.id
-            FROM source_file f LEFT JOIN session s ON s.id = f.session_id WHERE f.session_id IS NOT NULL ORDER BY f.id
+            FROM source_file f LEFT JOIN session s ON s.id = f.session_id
+            WHERE f.session_id IS NOT NULL AND f.tool IN ('claude', 'codex') ORDER BY f.id
             """) { r in
             guard let sid = r.text(0), let path = r.text(2) else { return }
             var st = stat()

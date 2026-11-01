@@ -83,6 +83,12 @@ private struct HandoffRPC {
         let text = try #require(try h.resume("latest"))
         #expect(text.hasPrefix("handoff: v1 | from: claude | session: \(h.a) |") && text.contains(Handoff.framing))
         #expect(try h.call("handoff_create", #"{"session":"current"}"#).0.hasPrefix("Handoff claude-\(h.b) saved"))
+        // A Cursor chat opened later in the same folder (its lines carry no pid) is not this conversation.
+        let cur = #"{"conversation_id":"c-1","cursor_version":"3.1.0","workspace_roots":["/work/p1"],"hook_event_name":"sessionStart"}"#
+        let ts = h.startedAt + 300
+        HookSpool.append(try #require(HookSpool.cursorLine(event: "SessionStart", payload: Array(cur.utf8), ts: ts)),
+                         paths: h.paths, ts: ts, name: ".cursor")
+        #expect(try h.call("handoff_create", #"{"session":"current"}"#).0.hasPrefix("Handoff claude-\(h.b) saved"))
     }
 
     @Test func afterClearTheEarlierConversationIsBack() throws {
