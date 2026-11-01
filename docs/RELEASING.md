@@ -40,11 +40,15 @@ git tag -a v0.2.0 -m "What changed, in a few lines"   # becomes the release note
 git push origin v0.2.0
 ```
 
-Start the annotation (after its first line, the title) with this paragraph, every release:
+The notes of every release start with this paragraph. Put it first in a file, then what changed, and tag with
+`git tag -a v0.2.0 -F notes.md` (the first paragraph of an annotation is its subject, and the release notes are the
+subject, an empty line and the rest):
 
 ```text
 **Mac, first launch:** Zagon.app is ad-hoc signed, not notarized, so macOS blocks it the first time. Open Zagon.dmg and drag Zagon to Applications; open it from there and click Done when macOS says it cannot verify the developer; then System Settings → Privacy & Security → Open Anyway next to the Zagon message, and confirm. Only once: after that the app updates itself.
 ```
+
+Sparkle shows the notes in the update alert too, so installed apps see the paragraph as well.
 
 Without `-a` (a lightweight tag) the notes are the commit subjects since the previous tag. Versions are `x.y.z`
 only, and each must be higher than the last (the workflow refuses one that is not above every `v*` tag): Sparkle
