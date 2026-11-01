@@ -18,6 +18,29 @@ enum SettingsTools {
                 Settings.applyTimezone(paths)  // this server answers on one thread: later reports use the new zone
             }
             return Settings.timezoneStatus(paths)
+        },
+        MCPTool(name: "worklog_exclude", title: "Never log a project, task or session",
+                description: "Excludes the work of a project (folder or repository name), a task (key) or a session (id) "
+                    + "from the worklogs: its time is in no plan row, not in \"no task\" and not in worklog_reconcile "
+                    + "([worklog] exclude in config.toml; worklog_config lists them). undo: true counts it again. Only when "
+                    + "the user asked; requires confirm: true. Writes nothing to Jira.",
+                inputSchema: MCPSchema.object([
+                    "kind": MCPSchema.string("What to exclude", enum: WorklogExclusion.kinds),
+                    "name": MCPSchema.string("Its name, key or id"),
+                    "undo": MCPSchema.boolean("Count it again instead"),
+                    "confirm": ["type": "boolean", "const": true, "description": "Must be true: the user asked for this"],
+                ], required: ["kind", "name", "confirm"]), readOnly: false) { a in
+            guard try a.bool("confirm") == true else {
+                throw MCPToolError("worklog_exclude needs confirm: true, and only when the user asked. Nothing was changed.")
+            }
+            let kind = try a.required("kind"), name = try a.required("name"), on = try a.bool("undo") != true
+            guard WorklogExclusion.kinds.contains(kind) else { throw MCPToolError("kind must be project, task or session") }
+            let x = WorklogExclusion(kind: kind, name: kind == "task" ? name.uppercased() : name)
+            let changed: Bool
+            do { changed = try WorklogConfig.setExcluded(paths, x, on) } catch { throw MCPToolError("\(error)") }
+            guard changed else { return "Nothing to change: \(kind) \(x.name) is \(on ? "already" : "not") excluded." }
+            return (on ? "Excluded \(kind) \(x.name): its time is in no plan row." : "\(kind) \(x.name) counts again.")
+                + " The plans change: show worklog_plan again before worklog_commit. Nothing was written to Jira."
         }]
     }
 }

@@ -349,7 +349,8 @@ public enum ReconcileText {
             + "\(r.toleranceMin) min on a day · zagon_only: task with no Jira key · no_task: work linked to no task"
     }
 
-    public static func text(_ r: Reconcile) -> String {
+    /// `days` false: the totals and the tasks only.
+    public static func text(_ r: Reconcile, days: Bool = true) -> String {
         var out = [head(r)] + notes(r).map { "note: " + $0 }
         func line(_ x: Reconcile.Row) -> String {
             "\(TaskText.pad(name(x), 10)) \(TaskText.pad(x.status.rawValue, 13)) sessions \(TaskText.pad(hm(x.sessionSec), 7)) "
@@ -358,6 +359,7 @@ public enum ReconcileText {
         guard !r.tasks.isEmpty else { return (out + ["no work and no worklogs"]).joined(separator: "\n") }
         out.append("tasks (\(legend(r))):")
         for x in r.tasks { out.append("  " + line(x)) }
+        guard days else { return out.joined(separator: "\n") }
         out.append("days:")
         for d in r.days where !d.beforeCoverage { for x in d.rows { out.append("  \(d.day)  " + line(x)) } }
         return out.joined(separator: "\n")

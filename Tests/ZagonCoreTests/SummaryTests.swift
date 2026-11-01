@@ -189,6 +189,31 @@ import Testing
         #expect(!logged.joined().contains("secret"))
     }
 
+    /// A day made without AI though one is set up keeps why: MCP `day`, the evening message and the bot's /day say it.
+    @Test func madeWithoutAISaysWhy() throws {
+        let store = try Store(path: ":memory:"), d = "2026-10-26", (start, _) = Time.dayBounds(d)!
+        try store.mergeSession(SessionMeta(id: "claude:s1", tool: .claude, project: "alpha"))
+        try store.addActivity(sessionId: "claude:s1", start: start + 9 * 3600, end: start + 10 * 3600, kind: "working")
+        var s = summary(store, engine: "claude")
+        #expect(try s.make(d, now: 1).engine == "none" && DaySummary.whyNoAI(store, d) == "claude CLI not found")
+        let bin = makeTempDir()
+        Sys.writeFile(bin + "/claude", [0], mode: 0o755)
+        s.searchPath = bin + ":/usr/bin:/bin"
+        s.runner = { _, _, _, _ in (1, Array(#"{"is_error":true,"result":"Credit balance is too low"}"#.utf8), []) }
+        let m = try s.message(d, now: 2)
+        #expect(try DaySummary.whyNoAI(store, d) == "claude: Credit balance is too low")
+        #expect(m.text.contains("\nSummary without AI: claude: Credit balance is too low\n"), "\(m.text)")
+        // An AI summary later: no mark.
+        s.runner = { _, _, _, _ in
+            let answer = #"{\"overview\": \"Parser day.\", \"items\": [{\"project\": \"alpha\", \"title\": \"Parser\", \"refs\": [1], \"done\": [\"fixed\"]}]}"#
+            return (0, Array(#"{"is_error":false,"result":"\#(answer)"}"#.utf8), [])
+        }
+        #expect(try s.make(d, now: 3).engine == "claude" && DaySummary.whyNoAI(store, d) == nil)
+        // The engine turned off: nothing to explain.
+        s.config.summaryEngine = "none"
+        #expect(try s.make(d, now: 4).engine == "none" && DaySummary.whyNoAI(store, d) == nil)
+    }
+
     @Test func hostsOfTheDaysSessions() throws {
         let store = try Store(path: ":memory:"), (start, _) = Time.dayBounds("2026-10-30")!
         try store.mergeSession(SessionMeta(id: "claude:a", tool: .claude, project: "alpha"))

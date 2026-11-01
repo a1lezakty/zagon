@@ -93,7 +93,7 @@ extension DaySummary {
         }
         let hosts = Set(docs.flatMap { $0.hosts ?? [] })
         doc.hosts = hosts.isEmpty ? nil : hosts.sorted()
-        try save(doc, engine: engine, now: now)
+        try save(doc, engine: engine, why: engine == "none" ? noAIReason(asked: !docs.isEmpty) : nil, now: now)
         return (doc, engine)
     }
 

@@ -49,6 +49,14 @@ public protocol TaskService: AnyObject {
     /// Reads Jira only.
     /// `to` nil: today.
     func worklogReconcile(from: String, to: String?, format: String) throws -> String
+    // Since 0.1.5 (z15).
+    /// What is left to log today, in a few lines, for `status`; shows no rows, so worklog_commit still needs worklog_plan.
+    func worklogBrief() throws -> String
+    /// A planned row's text (`summary`: its task's day summary) set by hand; nil goes back to the built one. Reached only
+    /// with `confirm: true`.
+    func worklogText(row: Int, text: String?, summary: Bool) throws -> String
+    /// Planned rows left out of the worklogs for good. Reached only with `confirm: true`.
+    func worklogSkip(rows: [Int]) throws -> String
     /// Tasks suggested by meaning for the day's work no key linked (made once per day, `again` asks anew); they count
     /// nowhere until accepted. Writes nothing to Jira.
     func suggestions(day: String, again: Bool) throws -> String
@@ -78,6 +86,11 @@ extension TaskService {
     public func worklogReconcile(from: String, to: String?, format: String) throws -> String {
         throw ServiceTools.unavailable("worklog_reconcile", "reconcile")
     }
+    public func worklogBrief() throws -> String { throw ServiceTools.unavailable("the worklog part of status", "worklog texts") }
+    public func worklogText(row: Int, text: String?, summary: Bool) throws -> String {
+        throw ServiceTools.unavailable("worklog_text", "worklog texts")
+    }
+    public func worklogSkip(rows: [Int]) throws -> String { throw ServiceTools.unavailable("worklog_skip", "worklog texts") }
     public func suggestions(day: String, again: Bool) throws -> String { throw ServiceTools.unavailable("task_suggestions", "suggestions") }
     public func answerSuggestions(accept: [String], reject: [String]) throws -> String {
         throw ServiceTools.unavailable("task_suggestions_answer", "suggestions")
@@ -214,7 +227,7 @@ enum ServiceTools {
                     ])) { a in
                 let format = try a.string("format") ?? "text"
                 guard ["text", "json"].contains(format) else { throw MCPToolError("format must be text or json") }
-                return try t("worklog_plan").worklogPlan(day: try a.day("date"), refresh: try a.bool("refresh") ?? false, json: format == "json")
+                return try t("worklog_plan").worklogPlan(day: try a.day("date", old: "day"), refresh: try a.bool("refresh") ?? false, json: format == "json")
             },
             MCPTool(name: "worklog_config", title: "Worklog settings",
                     description: "The [worklog] settings: the zone worklog days are cut in, extra Jira projects, whether the "
@@ -241,22 +254,55 @@ enum ServiceTools {
                     throw MCPToolError("worklog_commit needs confirm: true, and only when the user explicitly asked to log "
                                        + "the time. Nothing was written.")
                 }
-                guard let day = try a.day("date") else { throw MCPToolError("date is required") }
+                guard let day = try a.day("date", old: "day") else { throw MCPToolError("date is required") }
                 return try t("worklog_commit").worklogCommit(day: day, ids: try a.ints("ids"), withSummary: try a.bool("with_summary") ?? false,
                                                              summaryComment: try a.strings("summary_comment") ?? [])
+            },
+            MCPTool(name: "worklog_text", title: "Set a worklog text",
+                    description: "Sets the text of a planned row of worklog_plan by hand (a rebuild of the day keeps it); \"\" "
+                        + "goes back to the built text. summary: true sets the task's day summary that row carries instead. "
+                        + "Only with the text the user asked for; requires confirm: true. Writes nothing to Jira.",
+                    inputSchema: MCPSchema.object([
+                        "id": MCPSchema.integer("Row id (#N in worklog_plan)", min: 1),
+                        "text": MCPSchema.string("The new text; \"\" = the built one again"),
+                        "summary": MCPSchema.boolean("Set the day summary on this row instead of its text"),
+                        "confirm": ["type": "boolean", "const": true, "description": "Must be true: the user asked for this text"],
+                    ], required: ["id", "text", "confirm"]), readOnly: false) { a in
+                guard try a.bool("confirm") == true else {
+                    throw MCPToolError("worklog_text needs confirm: true, and only with the text the user asked for. Nothing was changed.")
+                }
+                guard let id = try a.int("id") else { throw MCPToolError("id is required") }
+                guard case .string(let text)? = a.value["text"] else { throw MCPToolError("text is required (\"\" goes back to the built one)") }
+                return try t("worklog_text").worklogText(row: id, text: text, summary: try a.bool("summary") ?? false)
+            },
+            MCPTool(name: "worklog_skip", title: "Do not log plan rows",
+                    description: "Leaves rows of worklog_plan out of the worklogs: they stay out of later plans of that day, "
+                        + "and Zagon has no undo for it. To never log a project, task or session, use worklog_exclude. Only "
+                        + "when the user asked; requires confirm: true. Writes nothing to Jira.",
+                    inputSchema: MCPSchema.object([
+                        "ids": ["type": "array", "items": ["type": "integer"], "description": "Row ids (#N in worklog_plan)"],
+                        "confirm": ["type": "boolean", "const": true, "description": "Must be true: the user asked not to log these rows"],
+                    ], required: ["ids", "confirm"]), readOnly: false, destructive: true) { a in
+                guard try a.bool("confirm") == true else {
+                    throw MCPToolError("worklog_skip needs confirm: true, and only when the user asked. Nothing was changed.")
+                }
+                guard let ids = try a.ints("ids"), !ids.isEmpty else { throw MCPToolError("ids are required") }
+                return try t("worklog_skip").worklogSkip(rows: ids)
             },
             MCPTool(name: "worklog_reconcile", title: "Sessions against Jira worklogs",
                     description: "For a range of days, per task and day: the user's working time in sessions against their "
                         + "Jira worklogs. Status only_sessions = work with no worklog, only_jira = a worklog with no work in "
                         + "Zagon, mismatch = apart by more than the tolerance, match; with totals and, per day, the sessions "
-                        + "and worklogs. Reads Jira only, writes nothing to it.",
+                        + "and worklogs. Reads Jira only, writes nothing to it. An answer too long to show here goes to a file "
+                        + "under ~/.zagon/exports: then the answer has its path and the totals per task.",
                     inputSchema: MCPSchema.object([
                         "from": MCPSchema.day("First day"),
                         "to": MCPSchema.day("Last day (default today)"),
-                        "format": MCPSchema.string("md (default): totals, tasks, days; text: short; csv; json", enum: ["md", "text", "csv", "json"]),
+                        "format": MCPSchema.string("text (default): short; md: totals, tasks, days with sessions and worklogs; csv; json",
+                                                   enum: ["text", "md", "csv", "json"]),
                     ], required: ["from"])) { a in
                 guard let from = try a.day("from") else { throw MCPToolError("from is required") }
-                let format = try a.string("format") ?? "md"
+                let format = try a.string("format") ?? "text"
                 guard ["md", "text", "csv", "json"].contains(format) else { throw MCPToolError("format must be md, text, csv or json") }
                 return try t("worklog_reconcile").worklogReconcile(from: from, to: try a.day("to"), format: format)
             },
@@ -267,7 +313,7 @@ enum ServiceTools {
                     inputSchema: MCPSchema.object(["date": MCPSchema.day("The day (default today)"),
                                                    "again": ["type": "boolean", "description": "Ask anew (default false)"]]),
                     readOnly: false) { a in
-                try t("task_suggestions").suggestions(day: try a.day("date") ?? Time.dayString(Time.now()),
+                try t("task_suggestions").suggestions(day: try a.day("date", old: "day") ?? Time.dayString(Time.now()),
                                                       again: try a.bool("again") ?? false)
             },
             MCPTool(name: "task_suggestions_answer", title: "Accept or reject suggested tasks",

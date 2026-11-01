@@ -100,6 +100,9 @@ public final class Daemon {
         pthread_sigmask(SIG_UNBLOCK, &stops, nil)  // a parent may have started us with them blocked
         log("start: pid \(getpid()), schema v\(store.userVersion), host \(ingest.host), "
             + "roots \(ingest.sources.map(\.root).joined(separator: ", "))")
+        if let p = ingest.options.keyPattern, ingest.keys == nil {
+            log("tasks: key_pattern \"\(p)\" in config.toml is not a valid regular expression: no task keys are read from typed messages")
+        }
         if let d = options.spoolDir { Sys.mkdirs(d) }  // hooks write here; watch it from the start
         try fullPass(reason: "start")
         try? store.db.exec("PRAGMA cache_size=-512")  // the first pass had the default 2 MB; batches are small

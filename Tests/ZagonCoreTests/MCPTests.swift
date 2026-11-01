@@ -38,6 +38,11 @@ final class FakeTasks: TaskService {
     func worklogCommit(day: String, ids: [Int]?) throws -> String {
         calls.append("commit \(day) \(ids.map { "\($0)" } ?? "all")"); return "written"
     }
+    func worklogBrief() throws -> String { calls.append("brief"); return "2026-10-29: worked 1h 00m" }
+    func worklogText(row: Int, text: String?, summary: Bool) throws -> String {
+        calls.append("text \(row) \(text ?? "nil") \(summary)"); return "set"
+    }
+    func worklogSkip(rows: [Int]) throws -> String { calls.append("skip \(rows)"); return "skipped" }
 }
 
 struct MCPFixture {
@@ -104,9 +109,10 @@ struct MCPFixture {
         let f = try MCPFixture()
         let tools = try #require(try f.request("tools/list")["result"]?["tools"]?.array)
         #expect(tools.compactMap { $0["name"]?.string } == [
-            "limits", "sessions", "day", "week", "range", "search", "export_day",
+            "status", "limits", "sessions", "day", "week", "range", "summary", "search", "export_day",
             "handoff_create", "handoff_get", "handoff_list", "task_list", "task_get", "task_create", "task_update",
-            "worklog_plan", "worklog_config", "worklog_commit", "worklog_reconcile", "task_suggestions", "task_suggestions_answer", "task_create_in_jira"])
+            "worklog_plan", "worklog_config", "worklog_commit", "worklog_text", "worklog_skip", "worklog_reconcile",
+            "task_suggestions", "task_suggestions_answer", "task_create_in_jira"])
         for t in tools {
             #expect(t["inputSchema"]?["type"]?.string == "object")
             #expect((t["description"]?.string?.count ?? 0) > 30)
@@ -115,6 +121,12 @@ struct MCPFixture {
         #expect(commit["inputSchema"]?["required"] == ["date", "confirm"])
         #expect(commit["annotations"] == ["readOnlyHint": false, "destructiveHint": false])
         #expect(tools[0]["annotations"] == ["readOnlyHint": true])
+        // Of the new tools only the plan's edits write; skipping a row has no undo.
+        for t in tools where ["status", "summary", "worklog_reconcile"].contains(t["name"]?.string ?? "") {
+            #expect(t["annotations"] == ["readOnlyHint": true])
+        }
+        #expect(tools.first { $0["name"]?.string == "worklog_text" }?["annotations"] == ["readOnlyHint": false, "destructiveHint": false])
+        #expect(tools.first { $0["name"]?.string == "worklog_skip" }?["annotations"] == ["readOnlyHint": false, "destructiveHint": true])
         #expect(commit["description"]?.string?.contains("ONLY when the user explicitly asks") == true)
     }
 
@@ -136,15 +148,95 @@ struct MCPFixture {
 
         let (d, _) = try f.call("day", #"{"date":"\#(day)"}"#)
         #expect(d.hasPrefix("\(day) (Thu): 1.8k tokens"))   // 1460 + 330
-        #expect(d.contains("2 sessions") && d.contains("claude-opus-5-5 1.5k (82%)") && d.contains("Edit 1"))
+        #expect(d.contains("2 sessions") && d.contains("claude-opus-5-5 1.5k (82%, <$1)") && d.contains("Edit 1"))
+        #expect(d.contains("\ncost: <$1 at API list prices (for comparison; a subscription is billed differently)\n"), "\(d)")
+        #expect(d.contains("p1 (claude) 1.5k, <$1, "))
         #expect(d.contains("\"Parser refactor\""))
         #expect(try f.call("day", #"{"date":"2020-01-01"}"#).0 == "2020-01-01: no activity recorded.")
 
-        let (w, _) = try f.call("week", #"{"start":"\#(Time.addDays(day, -2)!)"}"#)
-        #expect(w.contains("1.8k tokens") && w.contains("(new vs the 7 days before: 0)") && w.contains("- \(day) Thu: 1.8k"))
+        let (w, _) = try f.call("week", #"{"from":"\#(Time.addDays(day, -2)!)"}"#)
+        #expect(w.contains("1.8k tokens") && w.contains("(new vs the 7 days before: 0)") && w.contains("- \(day) Thu: 1.8k tokens, <$1, "))
+        #expect(w.contains("\ncost: <$1 (the 7 days before: $0) at API list prices"), "\(w)")
+        // The names of 0.1.4 still work; `to` ends the seven days.
+        #expect(try f.call("week", #"{"start":"\#(Time.addDays(day, -2)!)"}"#).0 == w)
+        #expect(try f.call("week", #"{"to":"\#(Time.addDays(day, 4)!)"}"#).0 == w)
+        #expect(try f.call("sessions", #"{"day":"\#(day)"}"#).0 == f.call("sessions", #"{"date":"\#(day)"}"#).0)
+        #expect(try f.call("day", #"{"day":"\#(day)"}"#).0 == d)
 
         let (r, _) = try f.call("range", #"{"from":"\#(Time.addDays(day, -9)!)","to":"\#(day)"}"#)
         #expect(r.contains("(10 days, 1 active): 1.8k tokens") && r.contains("days: \(day) 1.8k"))
+        #expect(r.contains("\ncost: <$1 at API list prices") && r.contains("claude-sonnet-5-5 330 (18%, <$1)"), "\(r)")
+    }
+
+    @Test func statusInOneCall() throws {
+        let f = try MCPFixture()
+        let s = try f.call("status").0
+        #expect(s.hasPrefix("limits:\n- Claude 5h: 50% used") && s.contains("\n- Codex week: 100% used"), "\(s)")
+        #expect(s.contains("\nsessions: 1 waiting for the user, 0 working:\n- claude bbbbbbbb") && s.contains("waiting for input 10m"))
+        #expect(!s.contains("aaaaaaaa") && !s.contains("to log"))   // no task registry: no plan part
+        let t = FakeTasks()
+        #expect(try MCPFixture(tasks: t).call("status").0.hasSuffix("\nto log today: 2026-10-29: worked 1h 00m"))
+        #expect(t.calls == ["brief"])
+    }
+
+    /// The day's summary in full, marked when made without AI; a week or a month from the kept summaries.
+    @Test func summaries() throws {
+        let f = try MCPFixture()
+        let long = String(repeating: "word ", count: 200)   // 1000 characters: was cut at 600
+        try f.store.db.run("INSERT INTO summary(day, engine, text, created) VALUES(?, 'none', ?, ?)",
+                           [.text(day), .text("First line\n" + long), .real(f.now)])
+        try f.store.db.run("INSERT INTO meta(key, value) VALUES(?, ?)", [.text("summary_why:" + day), .text("claude: no answer in 120 s")])
+        let d = try f.call("day", #"{"date":"\#(day)"}"#).0
+        #expect(d.hasSuffix("\nsummary (made without AI: claude: no answer in 120 s):\nFirst line\n" + long), "\(d)")
+
+        let (from, to) = try #require(DaySummary.week(of: day))
+        #expect(try f.call("summary", #"{"date":"\#(Time.addDays(day, 30)!)"}"#).0.hasSuffix(": no summaries kept. The service "
+            + "writes a day's summary each evening ([summary] time); zagon summary --week writes this one (AI calls)."))
+        // A day with a stored doc: merged without AI (the free text above is no doc).
+        let item = SummaryDoc.Item(project: "p1", key: "PROJ-1", title: "Parser", done: ["split the parser"], sec: 600, cost: 0)
+        try f.store.db.run("UPDATE summary SET text = ? WHERE day = ?",
+                           [.text(SummaryDoc(lang: "en", from: day, to: day, overview: "One day.", items: [item]).json), .text(day)])
+        let w = try f.call("summary", #"{"date":"\#(day)"}"#).0
+        #expect(w.hasPrefix("week \(from) … \(to): no summary of the period kept; the 1 day summary of it merged without AI "
+                            + "(made without AI: \(day)):\nDays with work: 1") && w.contains("split the parser"), "\(w)")
+        // A kept period summary wins.
+        try f.store.db.run("INSERT INTO summary(day, engine, text, created) VALUES(?, 'claude', ?, ?)",
+                           [.text(SummaryDoc.key(from, to)), .text(SummaryDoc(lang: "en", from: from, to: to, overview: "The week.", items: [item]).json),
+                            .real(f.now)])
+        let k = try f.call("summary", #"{"period":"week","date":"\#(day)"}"#).0
+        #expect(k.hasPrefix("week \(from) … \(to), summary written ") && k.contains(":\nThe week."), "\(k)")
+        let m = try f.call("summary", #"{"period":"month","date":"\#(String(day.prefix(7)))"}"#).0
+        #expect(m.hasPrefix("month \(String(day.prefix(7)))-01 … ") && m.contains("merged without AI"), "\(m)")
+        #expect(try f.call("summary", #"{"period":"year"}"#).1)
+        #expect(try f.call("summary", #"{"period":"month","date":"2026-13"}"#).1)
+    }
+
+    @Test func planEditsNeedConfirm() throws {
+        let t = FakeTasks()
+        let f = try MCPFixture(tasks: t)
+        #expect(try f.call("worklog_text", #"{"id":3,"text":"x"}"#).0.contains("needs confirm: true"))
+        #expect(try f.call("worklog_skip", #"{"ids":[3],"confirm":false}"#).0.contains("needs confirm: true"))
+        #expect(try f.call("worklog_text", #"{"id":3,"confirm":true}"#).1)
+        #expect(try f.call("worklog_skip", #"{"ids":[],"confirm":true}"#).1)
+        #expect(try f.call("worklog_text", #"{"id":3,"text":"New text","confirm":true}"#) == ("set", false))
+        #expect(try f.call("worklog_text", #"{"id":3,"text":"","summary":true,"confirm":true}"#) == ("set", false))
+        #expect(try f.call("worklog_skip", #"{"ids":[3,4],"confirm":true}"#) == ("skipped", false))
+        #expect(t.calls == ["text 3 New text false", "text 3  true", "skip [3, 4]"])
+
+        let paths = ZagonPaths(dir: f.dir)
+        let s = ZagonMCP.server(store: f.store, exportDir: f.dir + "/exports", paths: paths)
+        func call(_ args: String) throws -> String {
+            let out = s.handle(#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"worklog_exclude","arguments":\#(args)}}"#)
+            return JValue.parse(out ?? "")?["result"]?["content"]?.array?.first?["text"]?.string ?? ""
+        }
+        #expect(try call(#"{"kind":"task","name":"proj-1"}"#).contains("needs confirm: true"))
+        #expect(WorklogConfig.load(paths).exclude.isEmpty)
+        #expect(try call(#"{"kind":"task","name":"proj-1","confirm":true}"#).hasPrefix("Excluded task PROJ-1"))
+        #expect(WorklogConfig.load(paths).exclude == [WorklogExclusion(kind: "task", name: "PROJ-1")])
+        #expect(try call(#"{"kind":"task","name":"PROJ-1","confirm":true}"#).hasPrefix("Nothing to change"))
+        #expect(try call(#"{"kind":"folder","name":"x","confirm":true}"#).contains("kind must be"))
+        #expect(try call(#"{"kind":"task","name":"PROJ-1","undo":true,"confirm":true}"#).hasPrefix("task PROJ-1 counts again"))
+        #expect(WorklogConfig.load(paths).exclude.isEmpty)
     }
 
     @Test func search() throws {

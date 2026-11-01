@@ -437,11 +437,26 @@ public struct DaySummary {
         return out
     }
 
-    /// Keeps a summary under its key with a new change number (`meta` `summary_seq:<key>`), so `export` sends it.
-    func save(_ doc: SummaryDoc, engine: String, now: Double) throws {
+    /// Why the kept summary of `key` made without AI has none though an AI is set up (`meta` `summary_why:<key>`);
+    /// nil when it was not asked (engine off, no sessions) or an AI wrote one later.
+    public static func whyNoAI(_ store: Store, _ key: String) throws -> String? {
+        try store.db.one("SELECT value FROM meta WHERE key = ?", [.text("summary_why:" + key)]) { $0.text(0) } ?? nil
+    }
+
+    /// Why a summary just made has no AI: the engine's CLI is missing or its call failed. nil when no AI was asked.
+    func noAIReason(asked: Bool) -> String? {
+        guard asked, ["claude", "codex"].contains(config.summaryEngine) else { return nil }
+        return missingCLI.map { "\($0) CLI not found" } ?? failure.reason ?? "the AI gave nothing usable"
+    }
+
+    /// Keeps a summary under its key with a new change number (`meta` `summary_seq:<key>`), so `export` sends it;
+    /// `why`: why it has no AI (`whyNoAI`).
+    func save(_ doc: SummaryDoc, engine: String, why: String? = nil, now: Double) throws {
         try store.db.transaction {
             try store.db.run("INSERT OR REPLACE INTO summary(day, engine, text, created) VALUES(?, ?, ?, ?)",
                              [.text(doc.key), .text(engine), .text(doc.json), .real(now)])
+            if let why { try store.db.run("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", [.text("summary_why:" + doc.key), .text(why)]) }
+            else { try store.db.run("DELETE FROM meta WHERE key = ?", [.text("summary_why:" + doc.key)]) }
             let seq = try store.nextSeq()
             try store.db.run("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", [.text("summary_seq:" + doc.key), .int(Int64(seq))])
         }
@@ -455,7 +470,7 @@ public struct DaySummary {
         var doc = DaySummary.plain(f, words), engine = "none"
         if let r = ai(f) { (doc, engine) = r }
         doc.hosts = f.hosts.isEmpty ? nil : f.hosts
-        try save(doc, engine: engine, now: now)
+        try save(doc, engine: engine, why: engine == "none" ? noAIReason(asked: !f.sessions.isEmpty) : nil, now: now)
         if engine != "none" {
             let tasks = Tasks(store: store)
             for (key, text) in DaySummary.taskTexts(doc) {
@@ -465,6 +480,9 @@ public struct DaySummary {
         }
         return (f, doc, engine)
     }
+
+    /// The line that says a summary was made without AI, and why.
+    public static func noAIMark(_ why: String, _ w: Words) -> String { w.t("Сводка без ИИ: ", "Summary without AI: ") + why }
 
     /// One text per task and day: the points of its cards. It is also the task's worklog text in Jira (unless one was
     /// set by hand), so it is kept short; cards without points add nothing.
@@ -484,11 +502,12 @@ public struct DaySummary {
 
     /// The evening message: numbers, what was done, who waited longest, and the ribbon.
     public func message(_ day: String, now: Double = Sys.now()) throws -> Message {
-        let (f, doc, _) = try make(day, now: now)
+        let (f, doc, engine) = try make(day, now: now)
         let w = words
         // Who waited goes before the cards: a long text is cut at the channel's limit.
         var body = DaySummary.headline(f, w)
         if let l = DaySummary.longestWait(f, w) { body += "\n" + l }
+        if engine == "none", let why = try DaySummary.whyNoAI(store, day) { body += "\n" + DaySummary.noAIMark(why, w) }
         body += "\n\n" + doc.text()
         return Message(title: w.t("Сводка дня", "Day summary"), text: body, photo: try ribbon(f),
                        buttons: [[.init(w.t("Подробнее", "Details"), "day:\(day)")]])

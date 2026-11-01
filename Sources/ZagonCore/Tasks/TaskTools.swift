@@ -13,7 +13,12 @@ public final class TaskTools: TaskService {
     let log: (String) -> Void
     let now: () -> Timestamp
     let store: Store
+    /// Where an answer too long to show goes (`maxInline`); nil: always inline.
+    let exportDir: String?
     var tasks: Tasks { Tasks(store: store) }
+    /// Characters an answer may have before it goes to a file: Claude Code warns from 10K tokens; Cyrillic takes more
+    /// tokens per character than English.
+    var maxInline = 24_000
 
     /// What a planned Jira row looked like when this server showed it; worklog_commit writes only rows that are
     /// still exactly like this (row ids can be reused by SQLite, a key or a text can change meanwhile).
@@ -23,8 +28,10 @@ public final class TaskTools: TaskService {
 
     /// `refresh` (an incremental scan) runs before each answer; its failure is logged and the answer uses the database.
     public init(store: Store, worklog: @escaping () throws -> DayWorklog, suggester: (() throws -> TaskSuggester)? = nil,
-                refresh: (() throws -> Void)? = nil, now: @escaping () -> Timestamp = Time.now, log: @escaping (String) -> Void = { _ in }) {
-        self.store = store; makeWorklog = worklog; makeSuggester = suggester; self.refresh = refresh; self.now = now; self.log = log
+                refresh: (() throws -> Void)? = nil, exportDir: String? = nil, now: @escaping () -> Timestamp = Time.now,
+                log: @escaping (String) -> Void = { _ in }) {
+        self.store = store; makeWorklog = worklog; makeSuggester = suggester; self.refresh = refresh; self.exportDir = exportDir
+        self.now = now; self.log = log
     }
 
     func suggester() throws -> TaskSuggester {
@@ -175,11 +182,14 @@ public final class TaskTools: TaskService {
     /// The plan's rows to write to Jira (with their texts and summaries) as shown.
     func jiraRows(_ p: DayPlan) -> [Int: Shown] {
         var out: [Int: Shown] = [:]
-        for r in p.rows where r.state == "planned" && r.jiraKey != nil {
-            out[r.id] = Shown(id: r.id, task: r.taskId, start: r.start, end: r.end, jiraKey: r.jiraKey, text: r.text,
-                              summary: r.daySummary == true ? r.summary : nil)
-        }
+        for r in p.rows { if let s = Self.shown(r) { out[r.id] = s } }
         return out
+    }
+
+    static func shown(_ r: WorklogRow) -> Shown? {
+        guard r.state == "planned", r.jiraKey != nil else { return nil }
+        return Shown(id: r.id, task: r.taskId, start: r.start, end: r.end, jiraKey: r.jiraKey, text: r.text,
+                     summary: r.daySummary == true ? r.summary : nil)
     }
 
     func planText(_ p: DayPlan, _ w: DayWorklog, _ err: String? = nil) throws -> String {
@@ -206,6 +216,51 @@ public final class TaskTools: TaskService {
         }
     }
 
+    /// Today's plan in the worklog zone, after the caller's scan: its head line and what has no task. Leaves `shown`
+    /// alone: worklog_commit still needs the rows shown by worklog_plan.
+    public func worklogBrief() throws -> String {
+        let w = try makeWorklog()
+        return try Settings.inZone(w.config.tz) {
+            let (p, err) = try w.plan(Time.dayString(now()), refresh: false)
+            let rows = p.rows.filter { $0.state == "planned" && $0.jiraKey != nil }.count
+            var out = [String(TaskText.plan(p, base: w.base).prefix { $0 != "\n" }) + " (\(Txt.count(rows, "row")); worklog_plan shows them)"]
+            if p.unassignedSec > 0 { out.append("no task: \(Txt.dur(p.unassignedSec)) (task_suggestions suggests tasks for it)") }
+            if let err { out.append("Jira failed, planned without it: \(err)") }
+            return out.joined(separator: "\n")
+        }
+    }
+
+    /// The day of a plan row.
+    func rowDay(_ id: Int) throws -> String {
+        guard let d = try store.db.one("SELECT day FROM worklog_plan WHERE id = ?", [.int(Int64(id))], { $0.text(0) }) ?? nil else {
+            throw MCPToolError("No plan row #\(id); worklog_plan shows the rows. Nothing was changed.")
+        }
+        return d
+    }
+
+    /// The new text counts as shown: worklog_commit writes the row with it (other rows as before).
+    public func worklogText(row: Int, text: String?, summary: Bool) throws -> String {
+        let w = try makeWorklog(), day = try rowDay(row)
+        return try mapErrors {
+            try Settings.inZone(w.config.tz) {
+                let r = try w.setText(row: row, day: day, summary: summary, text: Self.given(text))
+                if shown[day]?[row] != nil { shown[day]?[row] = Self.shown(r) }
+                return TaskText.rows([r]) + "\nSet in Zagon; nothing was written to Jira."
+            }
+        }
+    }
+
+    public func worklogSkip(rows: [Int]) throws -> String {
+        let wl = Worklog(store: store)
+        var out: [String] = []
+        for id in rows {
+            guard let r = try wl.skip(id) else { out.append("#\(id): no planned row"); continue }
+            shown[r.day]?[id] = nil
+            out.append("skipped #\(id) \(r.day) \(r.taskKey ?? "-") \(Txt.clock(r.start))–\(Txt.clock(r.end)) \(Txt.dur(Double(r.seconds)))")
+        }
+        return out.joined(separator: "\n") + "\nNothing was written to Jira."
+    }
+
     public func worklogConfig() throws -> String {
         let w = try makeWorklog()
         let e = JSONEncoder()
@@ -220,12 +275,18 @@ public final class TaskTools: TaskService {
         return try Settings.inZone(w.config.tz) {
             let today = Time.dayString(now())
             let r = try mapErrors { try w.reconcile(from: from, to: to ?? today, today: today) }
+            let out: String
             switch format {
-            case "json": return try ReconcileText.json(r)
-            case "csv": return ReconcileText.csv(r)
-            case "text": return ReconcileText.text(r)
-            default: return ReconcileText.markdown(r)
+            case "json": out = try ReconcileText.json(r)
+            case "csv": out = ReconcileText.csv(r)
+            case "md": out = ReconcileText.markdown(r)
+            default: out = ReconcileText.text(r)
             }
+            guard let exportDir, out.count > maxInline else { return out }
+            let path = exportDir + "/reconcile-\(r.from)-\(r.to)." + (format == "text" ? "txt" : format)
+            guard Sys.mkdirs(exportDir), Sys.writeFile(path, Array(out.utf8), mode: 0o600) else { throw MCPToolError("could not write \(path)") }
+            return "Wrote \(path) (\(out.utf8.count) bytes, \(format)): too long to show here, read the file for the days. Per task:\n"
+                + ReconcileText.text(r, days: false)
         }
     }
 

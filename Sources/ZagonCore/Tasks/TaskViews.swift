@@ -124,9 +124,10 @@ public enum TaskText {
     public static func list(_ lines: [TaskListLine], base: TaskTime.Base = .sessions, all: Bool = false, limit: Int = .max,
                             more: String = "task list --all", drafts: (count: Int, how: String) = (0, "task drafts")) -> String {
         func line(_ l: TaskListLine) -> String {
-            "\(pad(l.task.key, 10)) \(pad(l.task.status.rawValue, 11)) \(label(base)) 7d \(pad(Txt.dur(l.weekSec), 7)) "
-                + "\(l.sessions) sessions  \(Txt.oneLine(l.task.title, 70))" + (l.jiraStatus.map { "  · Jira \"\($0)\"" } ?? "")
-                + (l.task.id == 0 ? "  (not a task here yet)" : "")
+            let worked = label(base) + " " + Txt.dur(l.weekSec) + " in 7d", sessions = Txt.count(l.sessions, "session")
+            let jira = l.jiraStatus.map { "  · Jira \"\($0)\"" } ?? "", adopt = l.task.id == 0 ? "  (not a task here yet)" : ""
+            return "\(pad(l.task.key, 10)) \(pad(l.task.status.rawValue, 11)) \(pad(worked, 21)) \(pad(sessions, 12)) "
+                + "\(Txt.oneLine(l.task.title, 70))\(jira)\(adopt)"
         }
         let worked = lines.filter { $0.worked != false }, rest = lines.filter { $0.worked == false }
         let open = rest.filter { $0.task.status != .done }.count
