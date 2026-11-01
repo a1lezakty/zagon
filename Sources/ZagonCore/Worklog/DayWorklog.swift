@@ -198,7 +198,11 @@ public struct DayWorklog {
 
     public struct WriteResult: Sendable {
         public var lines: [String] = []
+        /// Worklogs.
         public var logged = 0, failed = 0
+        /// Day summaries as issue comments, and their lines (apart: `log commit` prints them after its 0.1.4 line).
+        public var commented = 0, commentsFailed = 0
+        public var commentLines: [String] = []
     }
 
     /// Writes planned rows that have a Jira key — call it only on an explicit command. Rows left `writing` are
@@ -208,9 +212,11 @@ public struct DayWorklog {
     /// lost reply, 5xx) or a failed local update leaves it `writing` for the next settle. One failed row does not stop
     /// the others.
     /// `now` is for settling only; a claim records the moment it is made.
-    /// A row's worklog gets `Worklog.comment`: its text, on its task's summary row also the day summary, unless the
-    /// task is in `commentKeys`: then the summary goes as one comment on the issue (`writeComments`).
-    public func write(_ rows: [WorklogRow], day: String, commentKeys: Set<String> = [], now: Timestamp = Time.now()) throws -> WriteResult {
+    /// A row's worklog gets `Worklog.comment`: its text; with `withSummary` on its task's summary row also the day
+    /// summary (marked `wlsummary:<day>:<key>` from the claim on, dropped if the POST surely failed), unless the task
+    /// is in `commentKeys`: then the summary goes as one comment on the issue (`writeComments`).
+    public func write(_ rows: [WorklogRow], day: String, withSummary: Bool = false, commentKeys: Set<String> = [],
+                      now: Timestamp = Time.now()) throws -> WriteResult {
         guard let jira else { throw TaskError("Jira is not connected" + (jiraSetupError.map { ": \($0)" } ?? " ([jira] in config.toml)")) }
         guard let (from, to) = Time.dayBounds(day) else { throw TaskError("bad day \(day)") }
         var r = WriteResult()
@@ -240,11 +246,16 @@ public struct DayWorklog {
                 continue
             }
             // Claim the row first: a second writer (CLI, MCP, bot at once) finds it taken; a re-plan meanwhile keeps it.
+            let text = Worklog.comment(row, withSummary: withSummary, commentKeys: commentKeys)
+            let summaryMark = text != row.text ? "wlsummary:\(day):\(key)" : nil
             let claimed = try store.db.transaction { () throws -> Bool in
                 guard try store.db.run("UPDATE worklog_plan SET state = 'writing' WHERE id = ? AND state = 'planned'", [.int(Int64(row.id))]) == 1
                 else { return false }
                 try store.db.run("INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
                                  [.text("worklog:claim:\(row.id)"), .real(Time.now())])
+                if let summaryMark {
+                    try store.db.run("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", [.text(summaryMark), .text("worklog:\(row.id)")])
+                }
                 return true
             }
             guard claimed else {
@@ -252,9 +263,10 @@ public struct DayWorklog {
                 continue
             }
             let id: String
-            do { id = try jira.addWorklog(issue: key, started: row.start, seconds: row.seconds, comment: Worklog.comment(row, commentKeys: commentKeys)) }
+            do { id = try jira.addWorklog(issue: key, started: row.start, seconds: row.seconds, comment: text) }
             catch let e as JiraError where !e.mayHaveArrived {
                 try? wl.mark(row.id, state: "planned"); try? dropClaim(row.id)
+                if let summaryMark { _ = try? store.db.run("DELETE FROM meta WHERE key = ?", [.text(summaryMark)]) }
                 r.lines.append("not logged \(span): \(e)"); r.failed += 1
                 continue
             } catch {
@@ -273,7 +285,7 @@ public struct DayWorklog {
             }
         }
         let c = try writeComments(Worklog.issueComments(rows, commentKeys: commentKeys), day: day)
-        r.lines += c.lines; r.logged += c.logged; r.failed += c.failed
+        r.commentLines = c.lines; r.commented = c.commented; r.commentsFailed = c.commentsFailed
         return r
     }
 
@@ -293,9 +305,9 @@ public struct DayWorklog {
                 }
                 if let had = try jira.myComments(issue: c.key).first(where: { WorklogTexts.isCommentOf($0.body, day: day) }) {
                     try db.run("INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2", [.text(mark), .text("id:" + had.id)])
-                    r.lines.append("\(what) is in Jira: marked"); r.logged += 1; continue
+                    r.lines.append("\(what) is in Jira: marked"); r.commented += 1; continue
                 }
-            } catch { r.lines.append("\(what) not written: \(error)"); r.failed += 1; continue }
+            } catch { r.lines.append("\(what) not written: \(error)"); r.commentsFailed += 1; continue }
             let claimed = try db.transaction { () throws -> Bool in
                 if let v = try db.one("SELECT value FROM meta WHERE key = ?", [.text(mark)], { $0.text(0) }) ?? nil {
                     guard v.hasPrefix("writing:"), let at = Double(v.dropFirst(8)), Time.now() - at > Self.claimTimeout else { return false }
@@ -303,16 +315,16 @@ public struct DayWorklog {
                 try db.run("INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2", [.text(mark), .text("writing:\(Time.now())")])
                 return true
             }
-            guard claimed else { r.lines.append("\(what) not written: already being written"); r.failed += 1; continue }
+            guard claimed else { r.lines.append("\(what) not written: already being written"); r.commentsFailed += 1; continue }
             do {
                 let id = try jira.addComment(issue: c.key, body: WorklogTexts.commentHeader(day, w) + "\n\n" + c.text)
                 _ = try? db.run("UPDATE meta SET value = ? WHERE key = ?", [.text("id:" + id), .text(mark)])
-                r.lines.append("commented \(what)"); r.logged += 1
+                r.lines.append("commented \(what)"); r.commented += 1
             } catch let e as JiraError where !e.mayHaveArrived {
                 _ = try? db.run("DELETE FROM meta WHERE key = ?", [.text(mark)])
-                r.lines.append("\(what) not written: \(e)"); r.failed += 1
+                r.lines.append("\(what) not written: \(e)"); r.commentsFailed += 1
             } catch {
-                r.lines.append("not sure \(what) reached Jira (\(error)): the next commit checks Jira first"); r.failed += 1
+                r.lines.append("not sure \(what) reached Jira (\(error)): the next commit checks Jira first"); r.commentsFailed += 1
             }
         }
         return r

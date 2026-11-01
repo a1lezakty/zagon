@@ -3,9 +3,11 @@ enum Schema {
     static let migrations: [String] = [v1, v2, v3, v4, v5, v6, v7]
 
     /// v7: where a task key came from (`how`): NULL = typed in the message, 'brief' = the title of a brief the
-    /// message points to.
+    /// message points to. The Claude transcripts of the last 14 days are recounted once (`recount`, as in v5) so their
+    /// keys follow the new rules (worklog lists and reminders give none, briefs do); older days keep theirs.
     static let v7 = """
     ALTER TABLE task_key ADD COLUMN how TEXT;
+    UPDATE source_file SET recount = 1 WHERE tool = 'claude' AND coalesce(mtime, 0) >= strftime('%s', 'now') - 14 * 86400;
     """
 
     /// v6: the session that typed a session's last typed message (`driver`, NULL = the human): a worker driven over

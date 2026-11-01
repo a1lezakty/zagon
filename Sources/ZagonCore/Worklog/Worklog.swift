@@ -97,9 +97,11 @@ public struct DayPlan: Codable, Sendable {
     /// FNV-1a 64 (hex) of `jira_key|start|end|seconds|text` lines (start, end: whole epoch seconds; text: what the
     /// worklog gets, `Worklog.comment`) of the planned rows with a Jira key in order of start, then a
     /// `comment|jira_key|summary` line per day summary that goes as an issue comment (`commentKeys`).
-    public static func commitDigest(_ rows: [WorklogRow], commentKeys: Set<String> = []) -> String {
+    public static func commitDigest(_ rows: [WorklogRow], withSummary: Bool = false, commentKeys: Set<String> = []) -> String {
         let planned = rows.filter { $0.state == "planned" && $0.jiraKey != nil }.sorted { ($0.start, $0.id) < ($1.start, $1.id) }
-        let lines = planned.map { "\($0.jiraKey!)|\(Int64($0.start))|\(Int64($0.end))|\($0.seconds)|\(Worklog.comment($0, commentKeys: commentKeys))" }
+        let lines = planned.map {
+            "\($0.jiraKey!)|\(Int64($0.start))|\(Int64($0.end))|\($0.seconds)|\(Worklog.comment($0, withSummary: withSummary, commentKeys: commentKeys))"
+        }
             + Worklog.issueComments(planned, commentKeys: commentKeys).map { "comment|\($0.key)|\($0.text)" }
         return String(UInt64(bitPattern: fnv1a64(lines.joined(separator: "\n"))), radix: 16)
     }
@@ -265,11 +267,16 @@ public struct Worklog {
         return out.subtracting(exclude.items.flatMap(\.sessions))
     }
 
-    /// What the row's worklog gets: its text and, on its task's summary row, the day summary unless the summary goes
-    /// as an issue comment (`commentKeys`: Jira or task keys).
-    public static func comment(_ r: WorklogRow, commentKeys: Set<String> = []) -> String {
-        guard r.daySummary == true, let s = r.summary, !s.isEmpty, !asComment(r, commentKeys) else { return r.text }
+    /// What the row's worklog gets: its text and, only `withSummary`, on its task's summary row the day summary
+    /// unless that goes as an issue comment (`commentKeys`: Jira or task keys). Nothing goes to Jira unasked.
+    public static func comment(_ r: WorklogRow, withSummary: Bool = false, commentKeys: Set<String> = []) -> String {
+        guard withSummary, r.daySummary == true, let s = r.summary, !s.isEmpty, !asComment(r, commentKeys) else { return r.text }
         return r.text.isEmpty ? s : r.text + "\n\n" + s
+    }
+
+    /// Meta marks of a day summary in Jira: `wlsummary:<day>:<key>` (in a worklog) or `wlcomment:<day>:<key>` (comment).
+    static func summaryWritten(_ db: SQLite, day: String, key: String) throws -> Bool {
+        try db.one("SELECT 1 FROM meta WHERE key IN (?1, ?2)", [.text("wlsummary:\(day):\(key)"), .text("wlcomment:\(day):\(key)")]) { _ in true } ?? false
     }
 
     static func asComment(_ r: WorklogRow, _ keys: Set<String>) -> Bool {
@@ -295,8 +302,9 @@ public struct Worklog {
             longest[t] = i
         }
         let sessions = try rowSessions(rs, longest: Set(longest.values), from: from, to: to, exclude: exclude)
-        for i in rs.indices where rs[i].state == "planned" {
+        for i in rs.indices {
             guard let t = rs[i].taskId else { continue }
+            guard rs[i].state == "planned" else { rs[i].daySummary = false; continue }
             let (text, source) = try texts.rowText(day: day, task: t, start: rs[i].start, end: rs[i].end) {
                 try titles(task: t, from: from, to: to, fallback: try Tasks(store: store).get(t)?.title ?? "")
             }
@@ -306,7 +314,9 @@ public struct Worklog {
             }
             rs[i].textSource = source
             rs[i].sessions = sessions[rs[i].id] ?? []
-            rs[i].daySummary = config.daySummary && longest[t] == i
+            // Once a day summary of the task is in Jira (a worklog or a comment), it is not offered again.
+            let written = try Worklog.summaryWritten(db, day: day, key: rs[i].jiraKey ?? rs[i].taskKey ?? "#\(t)")
+            rs[i].daySummary = config.daySummary && longest[t] == i && !written
             if rs[i].daySummary == true, let s = try texts.summary(day: day, task: t) { (rs[i].summary, rs[i].summarySource) = (s.text, s.source) }
         }
         return rs

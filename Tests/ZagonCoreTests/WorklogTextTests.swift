@@ -72,10 +72,14 @@ final class FakeEngine: @unchecked Sendable {
         _ = try w.plan(day, refresh: true, now: D0 + 20.5 * H)
         #expect(ai.prompts.count == 1)
 
-        // The summary goes into the longest row's worklog, or as an issue comment; the digest tells them apart.
-        #expect(Worklog.comment(p1.rows[0]) == p1.rows[0].text + "\n\n" + p1.rows[0].summary!)
-        #expect(Worklog.comment(p1.rows[0], commentKeys: ["PROJ-1"]) == p1.rows[0].text && Worklog.comment(p1.rows[1]) == p1.rows[1].text)
-        #expect(DayPlan.commitDigest(p1.rows) != DayPlan.commitDigest(p1.rows, commentKeys: ["PROJ-1"]))
+        // The summary goes to Jira only when asked: into the longest row's worklog, or as an issue comment.
+        #expect(Worklog.comment(p1.rows[0]) == p1.rows[0].text)
+        #expect(Worklog.comment(p1.rows[0], withSummary: true) == p1.rows[0].text + "\n\n" + p1.rows[0].summary!)
+        #expect(Worklog.comment(p1.rows[0], withSummary: true, commentKeys: ["PROJ-1"]) == p1.rows[0].text)
+        #expect(Worklog.comment(p1.rows[1], withSummary: true) == p1.rows[1].text)
+        let digests = Set([DayPlan.commitDigest(p1.rows), DayPlan.commitDigest(p1.rows, withSummary: true),
+                           DayPlan.commitDigest(p1.rows, commentKeys: ["PROJ-1"])])
+        #expect(digests.count == 3 && DayPlan.commitDigest(p1.rows) == p1.commitDigest)
 
         // A text by hand; then a session works after the build: the rebuild keeps the hand-made text.
         #expect(try w.setText(row: b.id, day: day, summary: false, text: "By hand").textSource == "manual")
@@ -228,8 +232,8 @@ struct WorklogCommentTests {
         try WorklogTexts(store: f.store).setManualSummary(day: "2026-10-29", task: p0.rows[0].taskId!, text: "What was done\n- fixed")
         let rows = try w.plan("2026-10-29").plan.rows
         #expect(rows.count == 1 && rows[0].summary == "What was done\n- fixed")
-        let r = try w.write(rows, day: "2026-10-29", commentKeys: ["PROJ-1"])
-        #expect(r.logged == 2 && r.failed == 0)
+        let r = try w.write(rows, day: "2026-10-29", withSummary: true, commentKeys: ["PROJ-1"])
+        #expect(r.logged == 1 && r.failed == 0 && r.commented == 1 && r.commentsFailed == 0 && r.commentLines == ["commented day summary on PROJ-1"])
         let issue = (try m.state()["issues"] as! [String: [String: Any]])["PROJ-1"]!
         #expect((issue["worklogs"] as! [[String: Any]]).first?["comment"] as? String == "Parser work")
         #expect(try comments(m).map { $0["body"] as? String } == ["Day summary — 2026-10-29\n\nWhat was done\n- fixed"])
@@ -239,6 +243,29 @@ struct WorklogCommentTests {
         try f.store.db.run("DELETE FROM meta WHERE key LIKE 'wlcomment:%'")
         #expect(try w.writeComments(again, day: "2026-10-29").lines == ["day summary on PROJ-1 is in Jira: marked"])
         #expect(try comments(m).count == 1)
+        // Once in Jira, the task's rows of the day carry no summary any more, also a row for later work.
+        try f.interval("claude:a", D0 + 14 * H, D0 + 15 * H)
+        let later = try w.plan("2026-10-29").plan.rows
+        #expect(later.first?.state == "logged" && later.contains { $0.state == "planned" } && later.allSatisfy { $0.daySummary == false })
+    }
+
+    /// With `withSummary` the summary rides on the longest worklog; then it is not offered again that day.
+    @Test func theSummaryInAWorklogIsWrittenOnce() throws {
+        let m = try JiraMock(state: Self.state)
+        let f = try Fixture()
+        _ = try Tasks(store: f.store).add(title: "Parser", key: "PROJ-1")
+        try f.session("claude:a", branch: "PROJ-1", title: "Parser work", working: [(D0 + 9 * H, D0 + 11 * H)], actions: [D0 + 9 * H])
+        try TaskLinker().linkSessions(f.store)
+        let w = DayWorklog(store: f.store, linker: try TaskLinker(), jira: try JiraClient(m.config))
+        let p0 = try w.plan("2026-10-29").plan
+        try WorklogTexts(store: f.store).setManualSummary(day: "2026-10-29", task: p0.rows[0].taskId!, text: "What was done\n- fixed")
+        let rows = try w.plan("2026-10-29").plan.rows
+        #expect(try w.write(rows, day: "2026-10-29", withSummary: true).logged == 1)
+        let issue = (try m.state()["issues"] as! [String: [String: Any]])["PROJ-1"]!
+        #expect((issue["worklogs"] as! [[String: Any]]).first?["comment"] as? String == "Parser work\n\nWhat was done\n- fixed")
+        try f.interval("claude:a", D0 + 14 * H, D0 + 15 * H)
+        let later = try w.plan("2026-10-29").plan.rows
+        #expect(try later.contains { $0.state == "planned" } && later.allSatisfy { $0.daySummary == false } && comments(m).isEmpty)
     }
 
     @Test func aLostReplyIsFoundInJiraNextTime() throws {
@@ -247,7 +274,7 @@ struct WorklogCommentTests {
         let w = DayWorklog(store: f.store, linker: try TaskLinker(), jira: try JiraClient(m.config))
         let c = [(key: "PROJ-1", task: Int?.none, text: "What was done\n- fixed")]
         let first = try w.writeComments(c, day: "2026-10-29")
-        #expect(first.failed == 1 && first.lines[0].hasPrefix("not sure"))
+        #expect(first.commentsFailed == 1 && first.lines[0].hasPrefix("not sure"))
         #expect(try w.writeComments(c, day: "2026-10-29").lines == ["day summary on PROJ-1 is in Jira: marked"])
         #expect(try comments(m).count == 1)
     }

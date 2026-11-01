@@ -63,9 +63,10 @@ extension TaskService {
     public func worklogPlan(day: String?, refresh: Bool, json: Bool) throws -> String {
         try worklogPlan(day: day ?? Time.dayString(Time.now()))
     }
-    /// `summaryComment`: tasks whose day summary goes as one issue comment instead of into the worklog.
-    public func worklogCommit(day: String, ids: [Int]?, summaryComment: [String]) throws -> String {
-        guard summaryComment.isEmpty else { throw ServiceTools.unavailable("worklog_commit summary_comment", "worklog texts") }
+    /// `withSummary`: the day summaries go into their worklogs; `summaryComment`: tasks whose day summary goes as one
+    /// issue comment. Neither: the worklogs get the rows' texts only.
+    public func worklogCommit(day: String, ids: [Int]?, withSummary: Bool, summaryComment: [String]) throws -> String {
+        guard !withSummary, summaryComment.isEmpty else { throw ServiceTools.unavailable("worklog_commit day summaries", "worklog texts") }
         return try worklogCommit(day: day, ids: ids)
     }
     /// `[worklog]` settings and exclusions, JSON (`zagon log config --json`).
@@ -227,15 +228,18 @@ enum ServiceTools {
                                     "description": "Must be true: the user explicitly asked to write these worklogs"],
                         "ids": ["type": "array", "items": ["type": "integer"],
                                 "description": "Only these plan rows (default: all planned rows of the day)"],
+                        "with_summary": ["type": "boolean",
+                                         "description": "Also write each task's day summary into its longest worklog (only if the user saw and wants it)"],
                         "summary_comment": ["type": "array", "items": ["type": "string"],
-                                            "description": "Task keys whose day summary goes as one comment on the issue instead of into the worklog"],
+                                            "description": "Task keys whose day summary goes as one comment on the issue (only if the user asked)"],
                     ], required: ["date", "confirm"]), readOnly: false) { a in
                 guard try a.bool("confirm") == true else {
                     throw MCPToolError("worklog_commit needs confirm: true, and only when the user explicitly asked to log "
                                        + "the time. Nothing was written.")
                 }
                 guard let day = try a.day("date") else { throw MCPToolError("date is required") }
-                return try t("worklog_commit").worklogCommit(day: day, ids: try a.ints("ids"), summaryComment: try a.strings("summary_comment") ?? [])
+                return try t("worklog_commit").worklogCommit(day: day, ids: try a.ints("ids"), withSummary: try a.bool("with_summary") ?? false,
+                                                             summaryComment: try a.strings("summary_comment") ?? [])
             },
             MCPTool(name: "worklog_reconcile", title: "Sessions against Jira worklogs",
                     description: "For a range of days, per task and day: the user's working time in sessions against their "

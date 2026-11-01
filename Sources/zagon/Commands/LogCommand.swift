@@ -18,7 +18,9 @@ struct LogCommand: ParsableCommand {
         @Argument(help: "YYYY-MM-DD, default today.") var date: String?
         @Option(help: "user: your time | sessions: wall-clock time any session worked (default).") var time: TaskTime.Base?
         @Flag(help: "Build the day's texts again (one AI call) if a session worked after they were built.") var refresh = false
-        @Option(name: .customLong("summary-comment"), help: "A task whose day summary goes as an issue comment (repeat): its commit_digest is for that.")
+        @Flag(name: .customLong("with-summary"), help: "commit_digest for a commit that writes the day summaries into their worklogs.")
+        var withSummary = false
+        @Option(name: .customLong("summary-comment"), help: "commit_digest for a commit that writes this task's day summary as an issue comment (repeat).")
         var summaryComment: [String] = []
         @OptionGroup var common: Common
         @OptionGroup var report: ReportOptions
@@ -27,7 +29,9 @@ struct LogCommand: ParsableCommand {
             try Settings.inZone(w.config.tz) {
                 let (made, err) = try w.plan(try LogCommand.day(date), refresh: refresh)
                 var p = made
-                if !summaryComment.isEmpty { p.commitDigest = DayPlan.commitDigest(p.rows, commentKeys: LogCommand.keys(summaryComment)) }
+                if withSummary || !summaryComment.isEmpty {
+                    p.commitDigest = DayPlan.commitDigest(p.rows, withSummary: withSummary, commentKeys: LogCommand.keys(summaryComment))
+                }
                 if report.json { try emit(p); if let err { warn("jira: \(err)") }; return }
                 print(TaskText.plan(p, base: w.base, jiraError: err))
             }
@@ -43,7 +47,9 @@ struct LogCommand: ParsableCommand {
         @Option(help: "Write only if the rows are still those shown: commit_digest of `log plan --json`; else nothing is written, exit 3.")
         var expect: String?
         @Option(help: "user: your time | sessions: wall-clock time any session worked (default).") var time: TaskTime.Base?
-        @Option(name: .customLong("summary-comment"), help: "A task whose day summary goes as one issue comment instead of into its worklog (repeat).")
+        @Flag(name: .customLong("with-summary"), help: "Write each task's day summary into its longest worklog (else only the rows' texts).")
+        var withSummary = false
+        @Option(name: .customLong("summary-comment"), help: "Write this task's day summary as one comment on the issue (repeat).")
         var summaryComment: [String] = []
         @OptionGroup var common: Common
         @OptionGroup var report: ReportOptions
@@ -56,7 +62,7 @@ struct LogCommand: ParsableCommand {
                 let day = try LogCommand.day(date), comments = LogCommand.keys(summaryComment)
                 // Always re-plan against fresh transcripts and fresh Jira: a plan from earlier may be stale.
                 let rows = try w.plan(day, strict: true).plan.rows.filter { $0.state == "planned" && $0.jiraKey != nil }
-                if let expect, DayPlan.commitDigest(rows, commentKeys: comments) != expect {
+                if let expect, DayPlan.commitDigest(rows, withSummary: withSummary, commentKeys: comments) != expect {
                     print("plan changed: nothing logged; show `zagon log plan \(day)` again")
                     throw ExitCode(3)
                 }
@@ -64,16 +70,22 @@ struct LogCommand: ParsableCommand {
                 print(TaskText.rows(rows))
                 let issue = Worklog.issueComments(rows, commentKeys: comments)
                 for c in issue { print("comment on \(c.key): day summary (\(c.text.count) characters)") }
+                if withSummary {
+                    for r in rows where Worklog.comment(r, withSummary: true, commentKeys: comments) != r.text { print("#\(r.id) \(r.jiraKey!): with the day summary") }
+                }
                 if !yes {
                     let total = rows.reduce(0) { $0 + $1.seconds }
                     print("Log \(rows.count) worklogs (\(Fmt.dur(Double(total))))" + (issue.isEmpty ? "" : " and \(issue.count) comments")
                           + " to Jira? [y/N] ", terminator: "")
                     guard let a = readLine(), ["y", "yes"].contains(a.lowercased()) else { print("nothing logged"); return }
                 }
-                let r = try w.write(rows, day: day, commentKeys: comments)
+                let r = try w.write(rows, day: day, withSummary: withSummary, commentKeys: comments)
                 for l in r.lines { print("  " + l) }
-                print("\(r.logged) written" + (r.failed > 0 ? ", \(r.failed) not written" : ""))
-                if r.failed > 0 { throw ExitCode(1) }
+                // The line of 0.1.4 as it was (a Mac on 0.1.4 reads it); comments below it.
+                print("\(r.logged) worklogs logged" + (r.failed > 0 ? ", \(r.failed) not logged" : ""))
+                for l in r.commentLines { print("  " + l) }
+                if !r.commentLines.isEmpty { print("\(r.commented) comments written" + (r.commentsFailed > 0 ? ", \(r.commentsFailed) not written" : "")) }
+                if r.failed + r.commentsFailed > 0 { throw ExitCode(1) }
             }
         }
     }

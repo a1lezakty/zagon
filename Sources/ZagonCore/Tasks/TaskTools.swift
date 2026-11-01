@@ -232,9 +232,9 @@ public final class TaskTools: TaskService {
     /// Writes only what this server's last worklog_plan of the day showed: the day is planned again against fresh
     /// data, and if the rows to write differ in anything (task, time, Jira issue, text) nothing is written and the new
     /// plan comes back instead.
-    public func worklogCommit(day: String, ids: [Int]?) throws -> String { try worklogCommit(day: day, ids: ids, summaryComment: []) }
+    public func worklogCommit(day: String, ids: [Int]?) throws -> String { try worklogCommit(day: day, ids: ids, withSummary: false, summaryComment: []) }
 
-    public func worklogCommit(day: String, ids: [Int]?, summaryComment: [String]) throws -> String {
+    public func worklogCommit(day: String, ids: [Int]?, withSummary: Bool, summaryComment: [String]) throws -> String {
         let w = try makeWorklog()
         guard w.jira != nil else {
             throw MCPToolError("Jira is not connected" + (w.jiraSetupError.map { " (\($0))" } ?? " ([jira] in config.toml)")
@@ -244,10 +244,12 @@ public final class TaskTools: TaskService {
             throw MCPToolError("Call worklog_plan for \(day) first and show it to the user; nothing was written.")
         }
         scan()
-        return try Settings.inZone(w.config.tz) { try commit(w, day: day, ids: ids, before: before, comments: Set(summaryComment.map { $0.uppercased() })) }
+        return try Settings.inZone(w.config.tz) {
+            try commit(w, day: day, ids: ids, before: before, withSummary: withSummary, comments: Set(summaryComment.map { $0.uppercased() }))
+        }
     }
 
-    func commit(_ w: DayWorklog, day: String, ids: [Int]?, before: [Int: Shown], comments: Set<String>) throws -> String {
+    func commit(_ w: DayWorklog, day: String, ids: [Int]?, before: [Int: Shown], withSummary: Bool, comments: Set<String>) throws -> String {
         let p: DayPlan
         do { p = try w.plan(day, strict: true).plan }
         catch let e as JiraError { throw MCPToolError("Jira failed, nothing was written: \(e)") }
@@ -264,9 +266,10 @@ public final class TaskTools: TaskService {
         }
         let pick = p.rows.filter { wanted.contains($0.id) && current[$0.id] != nil }
         guard !pick.isEmpty else { return "Nothing to write to Jira for \(day)." }
-        let r = try w.write(pick, day: day, commentKeys: comments)
+        let r = try w.write(pick, day: day, withSummary: withSummary, commentKeys: comments)
         for row in pick { shown[day]?[row.id] = nil }
-        return (r.lines + ["\(r.logged) worklogs written to Jira" + (r.failed > 0 ? ", \(r.failed) not written" : "")])
+        return (r.lines + ["\(r.logged) worklogs written to Jira" + (r.failed > 0 ? ", \(r.failed) not written" : "")] + r.commentLines
+                + (r.commentLines.isEmpty ? [] : ["\(r.commented) day summaries written as comments" + (r.commentsFailed > 0 ? ", \(r.commentsFailed) not written" : "")]))
             .joined(separator: "\n")
     }
 }
