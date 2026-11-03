@@ -32,12 +32,14 @@ public enum Accounts {
         return d
     }
 
-    /// The account of a Claude Code config folder; nil or empty = the default one.
+    /// The account of a Claude Code config folder; nil or empty = the default one. A link is named as the folder it
+    /// points to.
     public static func name(configDir: String?, home: String, map: [String: String]) -> String {
         guard let raw = configDir, !raw.isEmpty else { return defaultName }
-        let dir = normalize(raw, home: home)
-        if let n = map[dir] { return n }
-        if dir == normalize(home, home: home) + "/.claude" { return defaultName }
+        let given = normalize(raw, home: home), main = normalize(home, home: home) + "/.claude"
+        let dir = Sys.realPath(given) ?? given
+        if given == main || dir == main || dir == Sys.realPath(main) { return defaultName }  // named by `[limits] account`
+        if let n = map[given] ?? map[dir] ?? map.first(where: { Sys.realPath($0.key) == dir })?.value { return n }
         var base = Substring(Sys.basename(dir))
         while base.hasPrefix(".") { base = base.dropFirst() }
         for p in ["claude-", "claude_"] where base.count > p.count && base.lowercased().hasPrefix(p) {
@@ -55,11 +57,14 @@ public enum Accounts {
         return dir.isEmpty ? nil : dir
     }
 
-    /// Remembers a config folder a hook or the status line reported; true when it is new.
+    /// Remembers a config folder a hook or the status line reported, once it holds a `projects` folder (a one-off
+    /// `CLAUDE_CONFIG_DIR` without transcripts never becomes a root); true when it is new.
     @discardableResult
+    /// The folder is kept as its real path (one folder under two spellings or through a link is one root).
     public static func learn(_ dir: String, store: Store, home: String) throws -> Bool {
-        let d = normalize(dir, home: home)
-        guard d.hasPrefix("/"), d != normalize(home, home: home) + "/.claude" else { return false }
+        let n = normalize(dir, home: home), main = normalize(home, home: home) + "/.claude"
+        guard n.hasPrefix("/"), n != main, Sys.isDir(n + "/projects"), let d = Sys.realPath(n),
+              d != main, d != Sys.realPath(main) else { return false }
         return try store.db.run("INSERT OR IGNORE INTO meta(key, value) VALUES(?, 1)", [.text("claude_dir:" + d)]) > 0
     }
 
@@ -68,8 +73,9 @@ public enum Accounts {
     public static func claudeRoots(defaultRoot: String, paths: ZagonPaths, db: SQLite?) -> [(root: String, account: String)] {
         let m = map(paths)
         var dirs = Set(m.keys)
+        // A learned folder whose `projects` is gone (a one-off `CLAUDE_CONFIG_DIR` removed) is no root any more.
         try? db?.query("SELECT substr(key, 12) FROM meta WHERE key LIKE 'claude\\_dir:%' ESCAPE '\\'") { r in
-            if let d = r.text(0) { dirs.insert(d) }
+            if let d = r.text(0), Sys.isDir(d + "/projects") { dirs.insert(d) }
         }
         let root = normalize(defaultRoot, home: paths.home)
         var out = [(root: root, account: defaultName)]

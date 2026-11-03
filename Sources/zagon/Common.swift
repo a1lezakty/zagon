@@ -33,11 +33,11 @@ struct Common: ParsableArguments {
         return try Store(path: dataDir + "/zagon.db")
     }
 
-    func ingest(_ store: Store) -> Ingest {
+    func ingest(_ store: Store, roots: [(root: String, account: String)]? = nil) -> Ingest {
         var o = IngestOptions()
         o.idleGap = idleGap * 60; o.sessionGap = sessionGap * 60; o.indexPrompts = !noIndexPrompts
         o.keyPattern = Settings.keyPattern(ZagonPaths(dir: dataDir))
-        return Ingest(store: store, sources: claudeRoots(store).map {
+        return Ingest(store: store, sources: (roots ?? claudeRoots(store)).map {
             ClaudeSource.spec(root: $0.root, indexPrompts: !noIndexPrompts, account: $0.account)
         } + CodexSource.specs(codexHome: codexDir) + CursorSource.specs(paths: ZagonPaths(dir: dataDir)), options: o)
     }

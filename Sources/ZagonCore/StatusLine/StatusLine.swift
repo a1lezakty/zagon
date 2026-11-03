@@ -14,14 +14,15 @@ public enum StatusLine {
     static let loopMark = "ZAGON_STATUSLINE"
 
     /// Spool line with the limit readings, nil if the input has none. `configDir`: `CLAUDE_CONFIG_DIR` of the Claude
-    /// Code that runs the status line (its account, `Accounts`); nil = not set (the default account).
+    /// Code that runs the status line (its account, `Accounts`); nil = not set: written as `""` (the default account), so
+    /// only a line of a zagon before accounts has no `config_dir`.
     public static func limitsLine(_ input: [UInt8], ts: Double,
                                   configDir: String? = HookSpool.claudeConfigDir) -> (line: String, text: String)? {
         guard let v = JValue.parse(input), let rl = v["rate_limits"] else { return nil }
         var m: [JValue.Member] = [.init("kind", .string("limits")), .init("tool", .string("claude")),
                                   .init("ts", .number(HookSpool.fmt(ts)))]
         if let sid = v["session_id"]?.string { m.append(.init("session_id", .string(sid))) }
-        if let d = configDir { m.append(.init("config_dir", .string(String(d.prefix(HookSpool.maxField))))) }
+        m.append(.init("config_dir", .string(String((configDir ?? "").prefix(HookSpool.maxField)))))
         var parts: [String] = []
         for (w, label) in [("five_hour", "5h"), ("seven_day", "wk")] {
             guard case .number(let pct)? = rl[w]?["used_percentage"], let p = Double(pct), p.isFinite, abs(p) < 1e9 else { continue }

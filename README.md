@@ -226,7 +226,8 @@ opened, the menu bar, then the Day, Week and Calendar windows.
   session is running. The current reading is the highest one of the newest window, from any session or connected
   server: a session left open keeps re-sending its older, lower reading.
 - **Two Claude Code accounts on one machine** (`CLAUDE_CONFIG_DIR=~/.claude-work claude …` next to the usual
-  `~/.claude`) are kept apart with no setting: the first hook of the other account adds its transcripts
+  `~/.claude`) are kept apart. The other account must run zagon's hooks and status line too (its own `settings.json`,
+  or a link to `~/.claude/settings.json`); then its first hook adds its transcripts
   (`<dir>/projects`), its sessions are marked with the account (`(work)` next to the title in the CLI, MCP, the bot
   and the Mac), and its limits are read, shown and notified separately ("Claude (work): weekly limit — 95%"). The
   account's name is its folder's (`.claude-work` → `work`) unless `[accounts]` in `~/.zagon/config.toml` names it;

@@ -8,8 +8,8 @@ import Testing
 
     @Test func eventBecomesAStatusLineReading() throws {
         let input = try #require(ClaudeWrap.statusInput(Array(Self.event.utf8)))
-        let l = try #require(StatusLine.limitsLine(input, ts: 2))
-        #expect(l.line == #"{"kind":"limits","tool":"claude","ts":2.000,"session_id":"s-1","five_hour_pct":42.4,"five_hour_resets_at":1793000000,"seven_day_pct":12.0,"seven_day_resets_at":1793500000}"#)
+        let l = try #require(StatusLine.limitsLine(input, ts: 2, configDir: nil))
+        #expect(l.line == #"{"kind":"limits","tool":"claude","ts":2.000,"session_id":"s-1","config_dir":"","five_hour_pct":42.4,"five_hour_resets_at":1793000000,"seven_day_pct":12.0,"seven_day_resets_at":1793500000}"#)
         #expect(l.text == "5h 42% · wk 12%")
         let over = #"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":1.7}}}}"#
         let capped = try #require(ClaudeWrap.statusInput(Array(over.utf8)))

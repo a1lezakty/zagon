@@ -22,6 +22,7 @@ import Testing
         #expect(Accounts.name(configDir: nil, home: "/home/u", map: m) == "default")
         #expect(Accounts.name(configDir: "", home: "/home/u", map: m) == "default")
         #expect(Accounts.name(configDir: "/home/u/.claude/", home: "/home/u", map: m) == "default")
+        #expect(Accounts.name(configDir: "/home/u/.claude", home: "/home/u", map: ["/home/u/.claude": "mine"]) == "default")
         #expect(Accounts.name(configDir: "/home/u/.work-claude", home: "/home/u", map: m) == "corp")
         #expect(Accounts.name(configDir: "/root/.claude-corp", home: "/home/u", map: [:]) == "corp")
         #expect(Accounts.name(configDir: "/x/.claude_team", home: "/home/u", map: [:]) == "team")
@@ -45,9 +46,12 @@ import Testing
         let paths = ZagonPaths(home: dir + "/home", dir: dir + "/data")
         // No setting: the corp folder is learned from a hook (its transcript path) and becomes a root.
         try spoolLine(s, #"{"kind":"hook","tool":"claude","event":"Stop","ts":\#(T0 + 2 * minute),"session_id":"c1","cwd":"/w/beta","transcript_path":"\#(dir)/home/.claude-corp/projects/-w-beta/c1.jsonl"}"#)
+        // The same folder through a link is one root (its real path).
+        try FileManager.default.createSymbolicLink(atPath: dir + "/home/corp-link", withDestinationPath: dir + "/home/.claude-corp")
+        try spoolLine(s, #"{"kind":"hook","tool":"claude","event":"Stop","ts":\#(T0 + 3 * minute),"session_id":"c1","config_dir":"\#(dir)/home/corp-link"}"#)
         let roots = Accounts.claudeRoots(defaultRoot: dir + "/home/.claude/projects", paths: paths, db: s.db)
         #expect(roots.map(\.account) == ["default", "corp"])
-        #expect(roots.last?.root == dir + "/home/.claude-corp/projects")
+        #expect(roots.last?.root == (Sys.realPath(dir + "/home/.claude-corp") ?? "") + "/projects")
         let ingest = Ingest(store: s, sources: roots.map { ClaudeSource.spec(root: $0.root, account: $0.account) })
         try ingest.scan()
         let rows = try queryRows(s, "SELECT id, account, title, model, host FROM session ORDER BY id")
@@ -61,6 +65,21 @@ import Testing
         #expect(Handoff.find("c1", claudeDir: roots[0].root, codexHome: dir + "/none") == nil)
     }
 
+    @Test func oneSessionCopiedIntoAnotherAccountCountsOnce() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let history = [typed(T0, session: "d1"), assistantLine(T0 + minute, id: "m1", input: 5, output: 1, session: "d1")]
+        write(dir + "/a/projects/-w-alpha/d1.jsonl", history)
+        // The copy goes on under the other account.
+        write(dir + "/b/projects/-w-alpha/d1.jsonl",
+              history + [typed(T0 + 10 * minute, session: "d1"), assistantLine(T0 + 11 * minute, id: "m2", input: 7, output: 1, session: "d1")])
+        let s = try Store(path: ":memory:")
+        try Ingest(store: s, sources: [ClaudeSource.spec(root: dir + "/a/projects", account: "default"),
+                                       ClaudeSource.spec(root: dir + "/b/projects", account: "corp")]).scan()
+        #expect(try queryRows(s, "SELECT user_msgs, account FROM session WHERE id = 'claude:d1'") == [["2", "corp"]])
+        #expect(try queryRows(s, "SELECT sum(input) FROM usage_hour") == [["12"]])
+    }
+
     @Test func aSessionKnownOnlyFromHooksIsThisMachinesWithItsAccount() throws {
         let s = try Store(path: ":memory:")
         try spoolLine(s, #"{"kind":"hook","tool":"claude","event":"UserPromptSubmit","ts":\#(T0),"session_id":"h1","config_dir":"/home/u/.claude-x"}"#)
@@ -69,8 +88,11 @@ import Testing
         let rows = try queryRows(s, "SELECT id, coalesce(host, 'NULL'), coalesce(account, 'NULL'), status FROM session ORDER BY id")
         #expect(rows == [["claude:h1", s.host, "corp", "working"], ["claude:h2", s.host, "default", "waiting_input"],
                          ["codex:x1", s.host, "NULL", "waiting_input"]])
-        // The default folder is never learned as another root; the other one is.
-        #expect(try queryRows(s, "SELECT key FROM meta WHERE key LIKE 'claude_dir:%'") == [["claude_dir:/home/u/.claude-x"]])
+        // A folder without `projects` (here: none on disk) is not learned as a root; the default one never is.
+        #expect(try queryRows(s, "SELECT key FROM meta WHERE key LIKE 'claude_dir:%'").isEmpty)
+        // A later hook of the session under another account moves it there (a session resumed under that account).
+        try spoolLine(s, #"{"kind":"hook","tool":"claude","event":"UserPromptSubmit","ts":\#(T0 + 5),"session_id":"h2","config_dir":"/home/u/.claude-x"}"#)
+        #expect(try queryRows(s, "SELECT account FROM session WHERE id = 'claude:h2'") == [["corp"]])
         // The export carries the host and the account.
         var lines: [JValue] = []
         try Export.run(store: s, since: 0) { if let v = JValue.parse($0), v["type"] == "session" { lines.append(v) } }
@@ -93,21 +115,28 @@ import Testing
         try spoolLine(s, #"{"kind":"limits","tool":"claude","ts":\#(T0 + 2 * minute),"session_id":"c2","seven_day_pct":1,"seven_day_resets_at":\#(T0 + 100 * hour)}"#)
         #expect(try s.latestLimits().first { $0.account == "corp" && $0.window == "seven_day" }?.usedPct == 1)
         #expect(try s.latestLimits().first { $0.account == "default" && $0.window == "seven_day" }?.usedPct == 86)
+        // A status line of this zagon says its folder, "" for the default account: never the session's account.
+        try spoolLine(s, #"{"kind":"limits","tool":"claude","ts":\#(T0 + 3 * minute),"session_id":"c2","config_dir":"","five_hour_pct":25,"five_hour_resets_at":\#(T0 + 3 * hour)}"#)
+        #expect(try s.latestLimits().first { $0.account == "default" && $0.window == "five_hour" }?.usedPct == 25)
+        #expect(try s.latestLimits().first { $0.account == "corp" && $0.window == "five_hour" }?.usedPct == 0)
         #expect(try Query(store: s).limits(now: now).map(\.account) == ["default", "default", "corp", "corp"])
         // Labels: once another account has readings, every reading of the tool says whose it is.
         let labeled = Accounts.labeled(try s.latestLimits(), now: now, localAccount: "personal")
         #expect(labeled.map { $0.1 } == ["personal", "personal", "corp", "corp"])
         #expect(Accounts.labeled(try s.latestLimits(), now: T0 + 9 * 86400, localAccount: nil).map { $0.1 } == [nil, nil])
-        let text = try ZagonMCP.limitsText(store: s, now: now, localAccount: "personal")
+        let text = try ZagonMCP.limitsText(store: s, now: T0 + 10 * minute, localAccount: "personal")
         #expect(text.contains("Claude (personal) week: 86% used") && text.contains("Claude (corp) week: 1% used"))
         // Exported with the account; imported readings keep it apart.
         var lines: [String] = []
         try Export.run(store: s, since: 0, account: "personal") { lines.append($0) }
-        let corp = lines.compactMap { JValue.parse($0) }.filter { $0["type"] == "limit" && $0["account_id"] != nil }
-        #expect(corp.count == 2 && corp.allSatisfy { $0["account"]?.string == "corp" })
+        // Another account's readings are a line type a client before v8 skips (it would mix them into the default's).
+        let all = lines.compactMap { JValue.parse($0) }
+        let corp = all.filter { $0["type"] == "account_limit" }
+        #expect(corp.count == 2 && corp.allSatisfy { $0["account_id"]?.string == "corp" && $0["host"] == nil && $0["account"] == nil })
+        #expect(all.filter { $0["type"] == "limit" }.allSatisfy { $0["account_id"] == nil && $0["account"]?.string == "personal" })
         let mac = try Store(path: ":memory:")
         try ExportImport(store: mac, source: "build-box").apply(lines)
-        #expect(try mac.latestLimits().map { "\($0.account) \(Int($0.usedPct))" } == ["default 20", "default 86", "corp 0", "corp 1"])
+        #expect(try mac.latestLimits().map { "\($0.account) \(Int($0.usedPct))" } == ["default 25", "default 86", "corp 0", "corp 1"])
         #expect(try mac.db.one("SELECT value FROM meta WHERE key = 'limit_account:build-box'") { $0.text(0) } == "personal")
     }
 
@@ -168,7 +197,7 @@ import Testing
         let input = Array(#"{"session_id":"s1","rate_limits":{"five_hour":{"used_percentage":12,"resets_at":1}}}"#.utf8)
         let line = try #require(StatusLine.limitsLine(input, ts: 5, configDir: "/root/.claude-corp")?.line)
         #expect(JValue.parse(Array(line.utf8))?["config_dir"]?.string == "/root/.claude-corp")
-        #expect(JValue.parse(Array(try #require(StatusLine.limitsLine(input, ts: 5, configDir: nil)?.line).utf8))?["config_dir"] == nil)
+        #expect(JValue.parse(Array(try #require(StatusLine.limitsLine(input, ts: 5, configDir: nil)?.line).utf8))?["config_dir"]?.string == "")
         let payload = Array(#"{"session_id":"s1","cwd":"/w","transcript_path":"/t.jsonl","hook_event_name":"Stop"}"#.utf8)
         let hook = try #require(HookSpool.hookLine(tool: "claude", event: "Stop", payload: payload, ts: 1, configDir: "/root/.claude-corp"))
         #expect(JValue.parse(Array(hook.utf8))?["config_dir"]?.string == "/root/.claude-corp")

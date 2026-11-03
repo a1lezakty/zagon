@@ -111,7 +111,7 @@ public enum SpoolIngest {
                 res.statuses += 1
             }
         case "limits":
-            // A status line of a zagon before accounts sent no folder: the account of its session, when known.
+            // A status line of a zagon before accounts sent no `config_dir`: the account of its session, when known.
             let account = try names.name(configDir) ?? v["session_id"]?.string.flatMap { sid in
                 try store.db.one("SELECT account FROM session WHERE id = ?", [.text("\(tool.rawValue):\(sid)")]) { $0.text(0) } ?? nil
             } ?? Accounts.defaultName
@@ -133,13 +133,14 @@ public enum SpoolIngest {
 
     /// Sets the status unless an equal or newer one is stored. Leaving a `waiting_*` status records the
     /// `waiting` interval from when it started. Returns whether anything changed. A session first seen here is this
-    /// machine's (`Store.host`); `account` fills a session that has none yet.
+    /// machine's (`Store.host`); `account` (the account the hook ran for) replaces another one: a session copied to
+    /// another account's folder and resumed there runs on that account now.
     static func setStatus(store: Store, id: String, tool: ToolKind, status: String, at: Timestamp, cwd: String?,
                           detail: String? = nil, account: String? = nil) throws -> Bool {
         let row = try store.db.one("SELECT status, status_at, status_detail, account FROM session WHERE id = ?", [.text(id)]) {
             ($0.text(0), $0.optReal(1), $0.text(2), $0.text(3))
         }
-        if row == nil || (account != nil && row?.3 == nil) {
+        if row == nil || (account != nil && row?.3 != account) {
             try store.mergeSession(SessionMeta(id: id, tool: tool, cwd: row == nil ? cwd : nil, account: account), host: store.host)
         }
         let (prev, prevAt, prevDetail) = row.map { ($0.0, $0.1, $0.2) } ?? (nil, nil, nil)
