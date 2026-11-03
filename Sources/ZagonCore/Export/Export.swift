@@ -17,8 +17,9 @@ import Foundation
 /// - `{"type":"summary","day","engine","text","created","seq"}` per summary kept after `since` (`SummaryDoc` JSON in
 ///   `text`, `day` = its day or `from..to`);
 /// - `{"type":"limit",…}` the latest reading per (tool, account, window), every time (a handful of rows), with the
-///   exporting store's `host`, the reading's account (`account_id`, left out for the default one) and its label
-///   (`account`: the account's name, for the default one `[limits] account`; left out when not set).
+///   exporting store's `host` and `account` (`[limits] account`; left out when not set); a reading of another Claude
+///   Code account (v8) is an `account_limit` line instead, with `account_id` and without `host`: a client before v8
+///   skips it rather than mixing it into the default account's.
 public enum Export {
     struct Header: Encodable { var type = "export"; var schema: Int; var since: Int; var seq: Int; var version: String? }
     struct SessionLine: Encodable {
@@ -62,11 +63,10 @@ public enum Export {
     }
     struct SummaryLine: Encodable { var type = "summary"; var day: String, engine: String, text: String, created: Double, seq: Int }
     struct LimitLine: Encodable {
-        var type = "limit"
+        var type: String
         var tool: String, window: String, usedPct: Double, resetsAt: Double?, windowMinutes: Int?, ts: Double
-        /// The exporting store's host and the reading's label: its account's name, for the default account
-        /// `[limits] account` (0.1.5; nil is left out).
-        var host: String, account: String?
+        /// The exporting store's host and `[limits] account` (0.1.5; nil is left out).
+        var host: String?, account: String?
         /// The reading's account when it is not the default one (v8, `LimitSnapshot.account`).
         var accountId: String?
     }
@@ -180,9 +180,9 @@ public enum Export {
 
         for l in try store.latestLimits() {
             let other = l.account != Accounts.defaultName
-            try out(LimitLine(tool: l.tool.rawValue, window: l.window, usedPct: l.usedPct, resetsAt: l.resetsAt,
-                              windowMinutes: l.windowMinutes, ts: l.ts, host: store.host, account: other ? l.account : account,
-                              accountId: other ? l.account : nil))
+            try out(LimitLine(type: other ? "account_limit" : "limit", tool: l.tool.rawValue, window: l.window,
+                              usedPct: l.usedPct, resetsAt: l.resetsAt, windowMinutes: l.windowMinutes, ts: l.ts,
+                              host: other ? nil : store.host, account: other ? nil : account, accountId: other ? l.account : nil))
         }
     }
 }

@@ -24,6 +24,8 @@ public struct DaySummary {
         public var lastPrompts: [String] = []
         /// Files written by Edit / Write / MultiEdit / NotebookEdit during the day, most edited first.
         public var files: [String] = []
+        /// The Claude Code account (`Accounts.tag` after the title).
+        public var account: String?
     }
     public struct Facts: Sendable {
         public var day: String
@@ -83,7 +85,7 @@ public struct DaySummary {
             f.sessions.append(SessionFacts(id: l.id, tool: l.tool, project: l.project, title: l.title, cwd: cwd,
                                            branch: l.gitBranch.flatMap { $0.isEmpty || $0 == "HEAD" ? nil : $0 },
                                            workingSec: l.workingSec, waitingSec: waiting[l.id] ?? 0, tokens: l.tokens.total,
-                                           cost: l.cost))
+                                           cost: l.cost, account: l.account))
         }
         f.sessions.sort { ($0.workingSec, $0.tokens) > ($1.workingSec, $1.tokens) }
         f.hosts.sort()
@@ -215,7 +217,7 @@ public struct DaySummary {
         let items = (groups + extra).map { g -> SummaryDoc.Item in
             var done = g.sessions.prefix(3).map { s in
                 w.t("«\(s.title ?? s.prompts.first ?? "без названия")»", "“\(s.title ?? s.prompts.first ?? "untitled")”")
-                    + " — \(w.dur(s.workingSec))" + (s.branch.map { w.t(", ветка ", ", branch ") + $0 } ?? "")
+                    + Accounts.tag(s.account) + " — \(w.dur(s.workingSec))" + (s.branch.map { w.t(", ветка ", ", branch ") + $0 } ?? "")
             }
             if g.sessions.count > 3 { done.append(w.t("и ещё сессий: \(g.sessions.count - 3)", "\(g.sessions.count - 3) more sessions")) }
             if !g.commits.isEmpty { done.append(w.t("Коммиты", "Commits") + " (\(g.commits.count)): " + list(g.commits, 3)) }

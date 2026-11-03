@@ -106,7 +106,7 @@ public final class ExportImport {
                 """, [.text(day), .text(engine), .text(text), .real(created)])
             // This store's reason for a summary without AI is not the other host's.
             if engine == "none", n > 0 { try db.run("DELETE FROM meta WHERE key = ?", [.text("summary_why:" + day)]) }
-        case "limit":
+        case "limit", "account_limit":
             guard let tool = v["tool"]?.string.flatMap(ToolKind.init), let w = v["window"]?.string,
                   let pct = v["used_pct"]?.double, let ts = v["ts"]?.double else { return }
             let id = v["account_id"]?.string.flatMap { $0.isEmpty ? nil : $0 }
@@ -115,8 +115,8 @@ public final class ExportImport {
                                                      account: id ?? Accounts.defaultName),
                                        source: source)
             // The server's `[limits] account` (0.1.5; a line without it, also from an older server, = none), from the
-            // lines of its default account: another account's label is its own name (`account_id`).
-            guard id == nil else { return }
+            // default account's lines; another account's label is its own name (`account_id`).
+            guard v["type"]?.string == "limit" else { return }
             if let a = v["account"]?.string, !a.isEmpty {
                 try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", [.text("limit_account:" + source), .text(a)])
             } else {

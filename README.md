@@ -205,7 +205,8 @@ opened, the menu bar, then the Day, Week and Calendar windows.
   (Telegram Bot API or ntfy, through `curl`), Jira if you connect it, and updates: `zagon update` goes to GitHub only
   when you run it (the service never checks), and the macOS app checks its update feed on GitHub once a day (turn
   that off in Settings → General → Updates).
-- It reads only local files: Claude Code transcripts (`~/.claude/projects`), Codex session files and its thread index
+- It reads only local files: Claude Code transcripts (`~/.claude/projects`, and `<dir>/projects` of another account's
+  `CLAUDE_CONFIG_DIR`), Codex session files and its thread index
   (`~/.codex/sessions`, `~/.codex/archived_sessions`, `~/.codex/state_*.sqlite`), plus what its own hooks and status
   line wrapper record. To name the project of a working directory it also looks for a `.git` above it (and a
   worktree's `commondir`) and reads the `origin` URL from its git config; it stores the directory paths and project
@@ -223,10 +224,17 @@ opened, the menu bar, then the Day, Week and Calendar windows.
   Max) and from Codex's own session files. Zagon never reads or stores OAuth tokens, cookies or credential files,
   and it does not call any usage API. So it shows the 5-hour and weekly windows, and the last reading when no
   session is running. The current reading is the highest one of the newest window, from any session or connected
-  server: a session left open keeps re-sending its older, lower reading. Two accounts (say, a personal one on the Mac
-  and a work one on a server) still mix: the one whose window resets last is shown. When readings come from more than
-  one machine, the Mac names where the shown one came from next to the rings ("build-box · work"); the account name
-  is `[limits] account = "work"` in that machine's `~/.zagon/config.toml`.
+  server: a session left open keeps re-sending its older, lower reading.
+- **Two Claude Code accounts on one machine** (`CLAUDE_CONFIG_DIR=~/.claude-work claude …` next to the usual
+  `~/.claude`) are kept apart. The other account must run zagon's hooks and status line too (its own `settings.json`,
+  or a link to `~/.claude/settings.json`); then its first hook adds its transcripts
+  (`<dir>/projects`), its sessions are marked with the account (`(work)` next to the title in the CLI, MCP, the bot
+  and the Mac), and its limits are read, shown and notified separately ("Claude (work): weekly limit — 95%"). The
+  account's name is its folder's (`.claude-work` → `work`) unless `[accounts]` in `~/.zagon/config.toml` names it;
+  the usual account is `default`, or `[limits] account`. The rings of the Mac app show the usual account, the others
+  are listed below them. The same account on two machines (say, a personal one on the Mac and on a server) still
+  mixes, as before: the reading whose window resets last is shown, and the Mac names where it came from next to the
+  rings ("build-box · work"); the name is `[limits] account = "work"` in that machine's `~/.zagon/config.toml`.
 - The database does not hold the text of your conversations. It holds numbers, times, project names, git branches
   and session titles: the ones Claude Code generates or you set, Codex thread names (never your first prompt), and
   Cursor's conversation names (a chat read from an old Cursor transcript: the first line of its first request).
@@ -600,7 +608,8 @@ a file in `~/.zagon/exports` and the answer gives its path. Days are `date`, ran
 ## Notifications
 
 The service sends alerts through your own Telegram bot or an [ntfy](https://ntfy.sh) topic:
-- a limit at 80 % and 95 % (5-hour and weekly, Claude and Codex), and a limit reset;
+- a limit at 80 % and 95 % (5-hour and weekly, Claude and Codex; each Claude Code account on its own), and a limit
+  reset;
 - a session waiting for you longer than 10 minutes (unless "finished" was already sent for that stop); a worker that
   another session drives over `tmux send-keys` waits for that session, not for you, so it is shown as "waits for
   session …" and sends no such alert; a leader killed without `SessionEnd` releases its workers after 12 hours;
@@ -632,6 +641,9 @@ claude.week = [80, 95]
 codex.five_hour = [80, 95]
 codex.week = [80, 95]
 
+[notify.limits.work]        # optional: other thresholds for one Claude Code account; missing keys come from above
+claude.week = [90]
+
 [telegram]
 token_file = "~/.config/zagon/tg-bot-token"   # your bot's token from @BotFather, in a file only you can read
                                               # (notify setup keeps it in ~/.zagon/telegram-token)
@@ -649,8 +661,11 @@ timeout = 120               # seconds; on failure the summary is built without A
 time = "20:00"              # when the service writes the day summary ("" = off); also `zagon summary --at`
 
 [limits]
-account = "work"            # optional: names this machine's subscription; shown next to the rings when limits come
-                            # from more than one machine
+account = "personal"        # optional: names this machine's subscription (its usual Claude Code account); shown
+                            # next to the rings when limits come from more than one machine or account
+
+[accounts]                  # optional: names of other Claude Code accounts (CLAUDE_CONFIG_DIR folders); without an
+"~/.claude-work" = "work"   # entry the folder's name is used, and a folder hooks reported is read anyway
 ```
 
 Check with `zagon notify test`. The service reads the file when it starts, so restart it after a change

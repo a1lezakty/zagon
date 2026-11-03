@@ -138,14 +138,19 @@ Claude Code runs under several accounts on one machine: each `CLAUDE_CONFIG_DIR`
   default account where several are shown (`Accounts.label`).
 - Roots (`Accounts.claudeRoots`): `--claude-dir` (default account), then `<dir>/projects` of every folder in
   `[accounts]` and every folder a hook or the status line reported, remembered as `meta` `claude_dir:<folder>`
-  (`Accounts.learn`; never `~/.claude`). No setting is needed for a second account: its first hook adds it. The daemon
+  (`Accounts.learn`: an absolute path without `..` that holds a `projects` folder, never `~/.claude`). No setting is
+  needed for a second account whose `settings.json` runs zagon's hooks: its first hook after its first transcript adds
+  it (`[accounts]` names it at once). `~/.claude` is always `default` (an `[accounts]` entry for it is ignored). The daemon
   checks the roots every 10 s while idle and restarts in place (`execve`) when they changed; CLI commands, MCP and
   `zagon handoff` read them at start (handoff looks for a session in every root).
-- A Claude hook line and a status-line `limits` line carry `config_dir` (`CLAUDE_CONFIG_DIR`, when set). SpoolIngest
-  takes the folder from `config_dir`, else from `transcript_path` (`<dir>/projects/<project>/<id>.jsonl`, lines of a
-  zagon before v8); a `limits` line without either gets its session's `account`, else `default`. Sessions created by
-  a hook get the account (and a session without one gets it from its next hook); Ingest sets it on every Claude
-  session from the root of its transcript.
+- A Claude hook line carries `config_dir` (`CLAUDE_CONFIG_DIR`) when it is set; a status-line `limits` line always
+  does (`""` = not set). SpoolIngest takes the folder from `config_dir`, else from `transcript_path`
+  (`<dir>/projects/<project>/<id>.jsonl`); a `limits` line without `config_dir` (a zagon before v8) gets its session's
+  `account`, else `default`. A hook sets its session's account (a session copied into another account's folder and
+  resumed there moves to it); Ingest sets it on every Claude session from the root of its transcript. One session id
+  in two roots (such a copy) is read from both: tokens count once (request ids), typed messages too (`humanActions`
+  takes distinct `(session, ts, kind)`), search may list it twice.
+- Day, week and task views of limit growth (`LimitUsage`: `QueryDay`, `TaskTime`) follow the default account.
 - Shown: next to a session of another account `(corp)` (`Accounts.tag`: CLI, MCP, bot, notifications); limits per
   account (`Accounts.labeled`): a tool's readings of the default account alone are shown as before, without a label;
   once another account has readings within 8 days every reading of that tool is labeled (`Claude (corp)`, the
@@ -320,9 +325,11 @@ NDJSON on stdout, keys in snake_case, one consistent read snapshot; the Mac app 
   `SummaryDoc` JSON (`Notify/SummaryDoc.swift`); the client stores it as its `summary` row of that day and engine;
 - `{"type":"limit", tool, window, used_pct, resets_at, window_minutes, ts, host, account, account_id}` — the current
   reading per (tool, account, window) (`Store.latestLimits`), in every export; `host` (0.1.5) = the exporting store's
-  `meta.host`; `account_id` (v8) = the reading's account when it is not `default` (missing = `default`; `ExportImport`
-  stores the reading under it); `account` (0.1.5) = the reading's label: `account_id` when set, else the store's
-  `[limits] account`, left out when not set; a line without them (0.1.4) = no account (the Mac's
+  `meta.host`; `account` (0.1.5) = its `[limits] account`, left out when not set; a line without them (0.1.4) = no
+  account. Only the default account's readings: another Claude Code account's are
+  `{"type":"account_limit", tool, window, used_pct, resets_at, window_minutes, ts, account_id}` (v8; no `host`, no
+  `account`; `ExportImport` stores them under `account_id`, labeled by that name), which a client before v8 skips
+  instead of mixing them into the default account's (the Mac's
   `Remote.apply` takes host names of a server from its `session` / `day` lines only, not from this `host`);
 - unknown line types and keys must be ignored (the format only grows).
 
