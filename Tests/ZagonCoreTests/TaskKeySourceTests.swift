@@ -105,7 +105,7 @@ import Testing
             try db.run("INSERT INTO task_key(file_id, session_id, key, at) VALUES(1, 'claude:a', 'PROJ-1', 100)")
         }
         let s = try Store(path: dir + "/z.db")
-        #expect(s.userVersion == Schema.migrations.count && Schema.migrations.count == 7)
+        #expect(s.userVersion == Schema.migrations.count && Schema.migrations.count >= 7)
         #expect(try s.db.one("SELECT session_id || ' ' || key || ' ' || at || ' ' || coalesce(how, 'NULL') FROM task_key") { $0.text(0) }
                 == "claude:a PROJ-1 100.0 NULL")
     }

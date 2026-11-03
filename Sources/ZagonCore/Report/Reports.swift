@@ -69,6 +69,8 @@ public struct SessionLine: Codable, Sendable {
     public var tokens: TokenTotals
     public var workingSec: Double
     public var cost = 0.0, unpriced = 0
+    /// The Claude Code account (`Accounts`; `default` = `~/.claude`); nil = not known or not Claude.
+    public var account: String?
 }
 
 public struct DayReport: Codable, Sendable {
@@ -186,14 +188,15 @@ public struct Reports {
         for id in ids {
             try db.query("""
                 SELECT id, tool, title, \(Projects.sessionSQL("session")), git_branch, model, status, started_at, last_at,
-                       user_msgs, archived, status_detail, \(UserTime.driverSQL("session", now: now)) FROM session WHERE id=?
+                       user_msgs, archived, status_detail, \(UserTime.driverSQL("session", now: now)), account
+                FROM session WHERE id=?
                 """, [.text(id)]) { r in
                 out.append(SessionLine(id: id, tool: r.text(1) ?? "", title: r.text(2), project: r.text(3), gitBranch: r.text(4),
                                        model: r.text(5), status: r.text(6), statusDetail: r.text(11), drivenBy: r.text(12),
                                        startedAt: r.optReal(7), lastAt: r.optReal(8),
                                        userMsgs: r.int(9), archived: r.optInt(10).map { $0 != 0 },
                                        tokens: tokens[id] ?? TokenTotals(), workingSec: working[id] ?? 0,
-                                       cost: cost[id] ?? 0, unpriced: unpriced[id] ?? 0))
+                                       cost: cost[id] ?? 0, unpriced: unpriced[id] ?? 0, account: r.text(13)))
             }
         }
         if from == nil { out.sort { ($0.lastAt ?? 0) > ($1.lastAt ?? 0) } }

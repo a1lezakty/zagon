@@ -41,14 +41,14 @@ public final class ExportImport {
             let archived: SQLValue = v["archived"].map { $0 == .bool(true) ? .int(1) : $0 == .bool(false) ? .int(0) : .null } ?? .null
             try db.run("""
                 INSERT INTO session(id, tool, host, project, cwd, git_branch, title, model, started_at, last_at, status, status_at,
-                                    status_detail, user_msgs, archived, seq, driver)
-                VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                                    status_detail, user_msgs, archived, seq, driver, account)
+                VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
                 ON CONFLICT(id) DO UPDATE SET tool = ?2, host = ?3, project = ?4, cwd = ?5, git_branch = ?6, title = ?7,
                   model = ?8, started_at = ?9, last_at = ?10, status = ?11, status_at = ?12, status_detail = ?13,
-                  user_msgs = ?14, archived = ?15, seq = ?16, driver = ?17
+                  user_msgs = ?14, archived = ?15, seq = ?16, driver = ?17, account = ?18
                 """, [.text(id), s("tool"), s("host"), s("project"), s("cwd"), s("git_branch"), s("title"), s("model"),
                       d("started_at"), d("last_at"), s("status"), d("status_at"), s("status_detail"), .int(i("user_msgs")),
-                      archived, .int(i("seq")), s("driver")])
+                      archived, .int(i("seq")), s("driver"), s("account")])
             // Its activity lines follow: they are the complete set.
             try db.run("DELETE FROM activity WHERE file_id = ? AND session_id = ?", [.int(file), .text(id)])
         case "activity":
@@ -109,10 +109,14 @@ public final class ExportImport {
         case "limit":
             guard let tool = v["tool"]?.string.flatMap(ToolKind.init), let w = v["window"]?.string,
                   let pct = v["used_pct"]?.double, let ts = v["ts"]?.double else { return }
+            let id = v["account_id"]?.string.flatMap { $0.isEmpty ? nil : $0 }
             try store.addLimitSnapshot(LimitSnapshot(tool: tool, window: w, usedPct: pct, resetsAt: v["resets_at"]?.double,
-                                                     windowMinutes: v["window_minutes"]?.double.map { Int($0) }, ts: ts),
+                                                     windowMinutes: v["window_minutes"]?.double.map { Int($0) }, ts: ts,
+                                                     account: id ?? Accounts.defaultName),
                                        source: source)
-            // The server's `[limits] account` (0.1.5; a line without it, also from an older server, = none).
+            // The server's `[limits] account` (0.1.5; a line without it, also from an older server, = none), from the
+            // lines of its default account: another account's label is its own name (`account_id`).
+            guard id == nil else { return }
             if let a = v["account"]?.string, !a.isEmpty {
                 try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", [.text("limit_account:" + source), .text(a)])
             } else {

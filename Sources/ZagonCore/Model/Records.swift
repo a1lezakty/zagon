@@ -25,11 +25,14 @@ public struct SessionMeta: Sendable, Equatable {
     /// The source archived the session (Codex `archived_sessions/`, `threads.archived`): kept in history,
     /// hidden from the list of live sessions.
     public var archived: Bool?
+    /// The Claude Code account the session runs on (`Accounts.name`: `default` = `~/.claude`, else the name of its
+    /// `CLAUDE_CONFIG_DIR`); nil = not known here.
+    public var account: String?
 
     public init(id: String, tool: ToolKind, project: String? = nil, cwd: String? = nil, gitBranch: String? = nil,
-                title: String? = nil, titleRank: Int = 0, model: String? = nil, archived: Bool? = nil) {
+                title: String? = nil, titleRank: Int = 0, model: String? = nil, archived: Bool? = nil, account: String? = nil) {
         self.id = id; self.tool = tool; self.project = project; self.cwd = cwd; self.gitBranch = gitBranch
-        self.title = title; self.titleRank = titleRank; self.model = model; self.archived = archived
+        self.title = title; self.titleRank = titleRank; self.model = model; self.archived = archived; self.account = account
     }
 }
 
@@ -128,9 +131,11 @@ public struct LimitSnapshot: Sendable, Equatable {
     public var resetsAt: Timestamp?
     public var windowMinutes: Int?
     public var ts: Timestamp
+    /// Whose subscription: `Accounts.defaultName` (no `CLAUDE_CONFIG_DIR`, Codex) or the account's name.
+    public var account: String
     public init(tool: ToolKind, window: String, usedPct: Double, resetsAt: Timestamp? = nil, windowMinutes: Int? = nil,
-                ts: Timestamp) {
+                ts: Timestamp, account: String = Accounts.defaultName) {
         self.tool = tool; self.window = window; self.usedPct = usedPct; self.resetsAt = resetsAt
-        self.windowMinutes = windowMinutes; self.ts = ts
+        self.windowMinutes = windowMinutes; self.ts = ts; self.account = account
     }
 }

@@ -11,13 +11,13 @@ others, not fail.
 
 | Type | Meaning | Notes |
 |---|---|---|
-| `SessionMeta` | partial session description | `nil` = unknown here, never "clear". Title replaces the stored one only if `titleRank` >= stored (`TitleRank`: ai-title 1, agent-name 2, custom-title / external 3). `archived` (Codex `archived_sessions/`, `threads.archived`): archived sessions stay in history (days, weeks, ranges) but are left out of the live session list; `nil` keeps the stored value. |
+| `SessionMeta` | partial session description | `nil` = unknown here, never "clear". Title replaces the stored one only if `titleRank` >= stored (`TitleRank`: ai-title 1, agent-name 2, custom-title / external 3). `archived` (Codex `archived_sessions/`, `threads.archived`): archived sessions stay in history (days, weeks, ranges) but are left out of the live session list; `nil` keeps the stored value. `account` (v8): the Claude Code account (see Accounts); `nil` keeps the stored value. |
 | `UsageRecord` | tokens of one API request | `messageId` set → dedup ledger: the **last** record with that id wins, a later copy of the id in another file is ignored. `messageId` nil → added as is (source emits per-request deltas, e.g. Codex `last_token_usage`). `agent` = sub-agent label, `""` for the main thread. `cacheWrite1h` = the part of `cacheWrite` kept for an hour (Claude `cache_creation.ephemeral_1h_input_tokens`; priced 2× input, the rest 1.25×). `cwd` = the directory of the request (Claude: the record's `cwd`; Codex: the turn's), the project its tokens count for. |
 | `ToolCall` | one tool invocation | `callId` (`toolu_…`) drops duplicates of rewritten records; counted per hour and name. |
 | `ActivityEvent` | the agent did something at `ts` | feeds `working` intervals; `cwd` = the record's working directory (Claude: every transcript line, so sub-agents get their own; Codex: `session_meta.cwd`, then `turn_context.cwd`) |
 | `UserMessage` | the human typed a message at `ts` | starts a turn, counts as a user action (unless a `Relay` says another session typed it, see Time rules); `cwd` as for events; parsers always pass `text`: Ingest puts it into the contentless FTS index (only with `index_prompts`) and extracts task keys from it; it is never stored. Claude: `user` records typed by the human, messages through a channel plugin (`origin.kind = channel`, Telegram…; `channel = true`: always the human's) and messages sent while the agent was working (`attachment` `queued_command`, `commandMode = prompt`, origin `human` / `channel`, or no origin and not a generated prefix such as `<task-notification`; they never become `user` records) |
 | `Relay` | the agent typed into a terminal at `ts` | Claude `Bash` tool calls that run `tmux send-keys` / `send` / `paste-buffer`; `targets` = the session names of their `-t` (lower case, `=`, `:window`, `.pane` cut off), `""` = no `-t` or not a plain name (`$s`, `%3`). Only the targets are kept, never the command |
-| `LimitSnapshot` | subscription limit reading | Claude windows `five_hour` / `seven_day`. Codex: the main limit (`rate_limits.limit_id` absent or `codex`) as `primary` (300 min ≈ 5 h) / `secondary` (10 080 min = week); any other `limit_id` (e.g. `premium`) as `<limit_id>:primary` / `<limit_id>:secondary`. Ingest stores them as readings (`limit_snapshot`, key tool + window + ts), not as file contributions. |
+| `LimitSnapshot` | subscription limit reading | Claude windows `five_hour` / `seven_day`. Codex: the main limit (`rate_limits.limit_id` absent or `codex`) as `primary` (300 min ≈ 5 h) / `secondary` (10 080 min = week); any other `limit_id` (e.g. `premium`) as `<limit_id>:primary` / `<limit_id>:secondary`. Ingest stores them as readings (`limit_snapshot`, key tool + account + window + ts), not as file contributions. `account` (v8): whose subscription, `default` unless a Claude status line ran under another `CLAUDE_CONFIG_DIR` (Codex: always `default`). |
 
 ## Parsers (`Model/Parsing.swift`)
 
@@ -117,15 +117,41 @@ hooks, status line and importers:
 - `mergeSession(SessionMeta, host:)` — create or fill a session (e.g. Codex `threads` titles);
 - `setStatus(sessionId:tool:status:at:detail:)` — live status from hooks (`working`, `waiting_permission`,
   `waiting_input`, `ended`); older events never overwrite newer ones; `detail` (`session.status_detail`, v3) = the
-  tool waiting for approval in `waiting_permission` (hook `tool_name`), NULL otherwise;
-- `addLimitSnapshot(LimitSnapshot)`, `latestLimits()`;
+  tool waiting for approval in `waiting_permission` (hook `tool_name`), NULL otherwise; a session it creates gets
+  `Store.host` (hooks run where the session runs; before v8 such sessions had no host, and a Mac took them for its own);
+- `addLimitSnapshot(LimitSnapshot)`, `latestLimits()` (the current reading per tool, account and window; ordered by tool,
+  the default account first), `Store.limitKey` (`<tool>:<window>`, another account `<tool>:<account>/<window>`: the
+  key of `meta` `limit_src:` and of limit notifications);
 - `addActivity(sessionId:start:end:kind:)` — an interval known from hooks (`file_id` NULL);
 - `nextSeq()` — global change counter used by `export --since <seq>`;
 - `db` — the raw connection for anything else (prefer adding a method).
 
 Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIATE).
 
-## Tables (schema v7, `Store/Schema.swift`; migrations are append-only)
+## Accounts (`Util/Accounts.swift`, v8)
+
+Claude Code runs under several accounts on one machine: each `CLAUDE_CONFIG_DIR` has its own login, transcripts
+(`<dir>/projects`) and subscription limits; `~/.claude` (no `CLAUDE_CONFIG_DIR`) is the account `default`.
+
+- Name: `[accounts]` in config.toml (`"/root/.claude-corp" = "corp"`, `~/` expanded), else the folder's basename
+  without leading dots and a `claude-` / `claude_` prefix (`.claude-corp` → `corp`). `[limits] account` labels the
+  default account where several are shown (`Accounts.label`).
+- Roots (`Accounts.claudeRoots`): `--claude-dir` (default account), then `<dir>/projects` of every folder in
+  `[accounts]` and every folder a hook or the status line reported, remembered as `meta` `claude_dir:<folder>`
+  (`Accounts.learn`; never `~/.claude`). No setting is needed for a second account: its first hook adds it. The daemon
+  checks the roots every 10 s while idle and restarts in place (`execve`) when they changed; CLI commands, MCP and
+  `zagon handoff` read them at start (handoff looks for a session in every root).
+- A Claude hook line and a status-line `limits` line carry `config_dir` (`CLAUDE_CONFIG_DIR`, when set). SpoolIngest
+  takes the folder from `config_dir`, else from `transcript_path` (`<dir>/projects/<project>/<id>.jsonl`, lines of a
+  zagon before v8); a `limits` line without either gets its session's `account`, else `default`. Sessions created by
+  a hook get the account (and a session without one gets it from its next hook); Ingest sets it on every Claude
+  session from the root of its transcript.
+- Shown: next to a session of another account `(corp)` (`Accounts.tag`: CLI, MCP, bot, notifications); limits per
+  account (`Accounts.labeled`): a tool's readings of the default account alone are shown as before, without a label;
+  once another account has readings within 8 days every reading of that tool is labeled (`Claude (corp)`, the
+  default one by `[limits] account`, else `default`); another account's readings older than 8 days are left out.
+
+## Tables (schema v8, `Store/Schema.swift`; migrations are append-only)
 
 - `source_file` — per-file tail state; `usage_hour`, `tool_use`, `activity`, `user_action`, `fts_doc`, `msg`,
   `relay` carry `file_id`, so one file's contribution can be retracted. `recount` (v5) = 1: count the file again from
@@ -142,7 +168,8 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   that could not be recounted, imports); `cache_write_1h` is part of `cache_write`.
 - `msg` — dedup ledger (64-bit FNV-1a hash of `messageId` → owner file, hour, model, cwd, counted tokens with
   `cache_write_1h`, tool call ids); pruned after `dedup_days` (default 40, longer than Claude Code's 30-day cleanup).
-- `session` — rolled up from files; `status`/`status_at` belong to hooks and are never touched by ingest;
+- `session` — rolled up from files; `status`/`status_at` belong to hooks and are never touched by ingest; `account`
+  (v8) = the Claude Code account (Accounts), NULL = unknown (sessions from before v8 not read again, Codex, Cursor);
   `archived` (v2) NULL = unknown, 0/1 from `SessionMeta.archived`. `cwd`/`project` = the directory the session
   started in (its earliest `activity.cwd`; a later `cd` does not move it), else the last one a parser reported.
   `project` stays the parser's name (the folder's last component); reports, the live list and MCP show the project
@@ -204,14 +231,19 @@ Writes that belong together go in `store.db.transaction { … }` (BEGIN IMMEDIAT
   inside that folder (`cd src`); any other directory, and every directory of a session started in the home directory
   or `/` (one that works in many projects), counts for its own `dir_project.project` (its last component when not
   resolved). Tool calls go to the session's own project. `cache_write_1h` (v5) as in `usage_hour`.
-- `limit_snapshot`, `task*`, `worklog_plan`, `summary`, `handoff`, `fts` (contentless FTS5) + `fts_doc`.
-- Limit sources live in `meta` (0.1.5, no column in `limit_snapshot`): `limit_src:<tool>:<window>:<source>` = the `ts`
+- `limit_snapshot` (v8: `account TEXT NOT NULL DEFAULT 'default'`, PK `(tool, account, window, ts)`; the v8 migration
+  copies older readings as the default account's), `task*`, `worklog_plan`, `summary`, `handoff`, `fts` (contentless
+  FTS5) + `fts_doc`. The v8 migration also gives sessions without a host `meta.host` and a new `seq`, and drops a
+  Mac's `remote_seq:` cursors so it pulls its servers' sessions and accounts again.
+- Limit sources live in `meta` (0.1.5, no column in `limit_snapshot`): `limit_src:<Store.limitKey>:<source>` = the `ts`
   of that source's newest reading of the window (`Store.addLimitSnapshot(_:source:)`; `<source>` "" = this store's own
   readings, else the ssh alias `ExportImport` was given), `limit_account:<alias>` = the server's `[limits] account`
-  (removed when its `limit` lines come without one). `Query.limitSources` names the source of each current reading
-  (its own newest reading, else the source's newest reading of the same window period) and whether more than one
-  source has a reading of that tool within 8 days. The Mac drops an alias's keys with its other rows (`Remote.forget`).
-  The pace history (`Query.limitHistory`) still mixes sources.
+  (from its default account's `limit` lines; removed when they come without one). `Query.limitSources` names the
+  source of each current reading (its own newest reading, else the source's newest reading of the same window period),
+  its `limitAccount` and label (`account`: another account's name, the default one's `[limits] account` of that
+  source) and whether more than one source has a reading of that tool and account within 8 days. The Mac drops an
+  alias's keys with its other rows (`Remote.forget`). The pace history (`Query.limitHistory(…, account:)`, default
+  account unless given) still mixes sources; `Query.limits` gives each reading's `account`.
 
 ## Time rules
 
@@ -260,7 +292,8 @@ NDJSON on stdout, keys in snake_case, one consistent read snapshot; the Mac app 
   `--since`; `version` is what `zagon --version` prints (`0.1.0`, `dev` for a local build); a zagon without the key
   predates the releases (it has no `zagon update`);
 - `{"type":"session", id, tool, host, project, cwd, git_branch, title, model, started_at, last_at, status, status_at,
-  status_detail, user_msgs, archived, seq, driver}` for every session with `seq > since` (missing keys = NULL), each followed
+  status_detail, user_msgs, archived, seq, driver, account}` for every session with `seq > since` (missing keys = NULL;
+  `host` NULL is sent as the store's own since v8; `account` v8), each followed
   by `{"type":"activity","session_id","kind","start","end","cwd"}` lines — the session's complete `working` /
   `waiting` intervals, merged per kind and directory (no overlaps inside one; `cwd` missing = not known): on a
   `session` line the client drops every interval it holds for that session and stores the ones that follow (none =
@@ -285,9 +318,11 @@ NDJSON on stdout, keys in snake_case, one consistent read snapshot; the Mac app 
 - `{"type":"summary", day, engine, text, created, seq}` — a kept day or period summary (`summary` row) changed after
   `since` (`meta` `summary_seq:<day>`; `since` 0 sends all): `day` = `YYYY-MM-DD` or `from..to`, `text` = the
   `SummaryDoc` JSON (`Notify/SummaryDoc.swift`); the client stores it as its `summary` row of that day and engine;
-- `{"type":"limit", tool, window, used_pct, resets_at, window_minutes, ts, host, account}` — the current reading per
-  (tool, window) (`Store.latestLimits`), in every export; `host` (0.1.5) = the exporting store's `meta.host`, `account`
-  (0.1.5) = its `[limits] account`, left out when not set; a line without them (0.1.4) = no account (the Mac's
+- `{"type":"limit", tool, window, used_pct, resets_at, window_minutes, ts, host, account, account_id}` — the current
+  reading per (tool, account, window) (`Store.latestLimits`), in every export; `host` (0.1.5) = the exporting store's
+  `meta.host`; `account_id` (v8) = the reading's account when it is not `default` (missing = `default`; `ExportImport`
+  stores the reading under it); `account` (0.1.5) = the reading's label: `account_id` when set, else the store's
+  `[limits] account`, left out when not set; a line without them (0.1.4) = no account (the Mac's
   `Remote.apply` takes host names of a server from its `session` / `day` lines only, not from this `host`);
 - unknown line types and keys must be ignored (the format only grows).
 
@@ -327,7 +362,8 @@ the pending batch and stop. Log: `<data-dir>/logs/daemon.log` (+ `.1`, `.2`, at 
 ## Live status from hooks (`Hooks/`)
 
 `zagon hook <claude|codex> <Event>` appends one line per call to `~/.zagon/spool/<UTC day>.ndjson` (ids, paths,
-event names; Cursor's prompts only as their task keys; never prompt text or tool input). A hook line also carries `pid` (`Sys.clientPid()`: the Claude Code /
+event names; Cursor's prompts only as their task keys; never prompt text or tool input). A Claude line carries
+`config_dir` = `CLAUDE_CONFIG_DIR` when set (v8, see Accounts); so does a status-line `limits` line. A hook line also carries `pid` (`Sys.clientPid()`: the Claude Code /
 Codex process, skipping the `sh -c` around hook commands; Linux only). Only handoff reads it, to match `zagon mcp` to
 its conversation; it is never stored in the database. `SpoolIngest.run` applies new lines to `session.status` /
 `status_at` and records a `waiting` activity interval when a `waiting_*` status ends. Older events never overwrite
@@ -398,9 +434,16 @@ codex.five_hour = [80, 95]
 codex.week = [80, 95]
 codex.<limit_id> = [80, 95]   # a Codex premium limit, both of its windows (stored as `<limit_id>:primary|secondary`)
 
+[notify.limits.corp]      # the same keys for one Claude Code account (see Accounts); missing keys come from
+claude.week = [90]        # [notify.limits]
+
 [limits]
-account = ""              # e.g. "work": names this machine's subscription; with readings from more than one
-                          # source (this Mac, servers) the Mac app shows "<server> · <account>" next to the rings
+account = ""              # e.g. "work": names this machine's subscription (its default Claude Code account); with
+                          # readings from more than one source (this Mac, servers) the Mac app shows
+                          # "<server> · <account>" next to the rings; beside other accounts it labels the default one
+
+[accounts]                # Claude Code accounts: CLAUDE_CONFIG_DIR folder = name (default: the folder's name without
+"/root/.claude-corp" = "corp"   # dots and a "claude-" prefix); their transcripts are read too (see Accounts)
 
 [telegram]
 token_file = "~/.config/zagon/tg-bot-token"   # the user's own bot; the token is read from this file only

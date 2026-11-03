@@ -16,8 +16,9 @@ import Foundation
 ///   that day (rows that vanished are gone). `ExportImport` is the reference client;
 /// - `{"type":"summary","day","engine","text","created","seq"}` per summary kept after `since` (`SummaryDoc` JSON in
 ///   `text`, `day` = its day or `from..to`);
-/// - `{"type":"limit",…}` the latest reading per (tool, window), every time (a handful of rows), with the exporting
-///   store's `host` and `account` (`[limits] account`; left out when not set).
+/// - `{"type":"limit",…}` the latest reading per (tool, account, window), every time (a handful of rows), with the
+///   exporting store's `host`, the reading's account (`account_id`, left out for the default one) and its label
+///   (`account`: the account's name, for the default one `[limits] account`; left out when not set).
 public enum Export {
     struct Header: Encodable { var type = "export"; var schema: Int; var since: Int; var seq: Int; var version: String? }
     struct SessionLine: Encodable {
@@ -28,6 +29,8 @@ public enum Export {
         var archived: Bool?, seq: Int
         /// The session that typed its last typed message (v6); nil = the human.
         var driver: String?
+        /// The Claude Code account (v8, `Accounts`); nil = not known.
+        var account: String?
     }
     struct DayRow: Encodable {
         var tool: String, project: String, model: String
@@ -61,8 +64,11 @@ public enum Export {
     struct LimitLine: Encodable {
         var type = "limit"
         var tool: String, window: String, usedPct: Double, resetsAt: Double?, windowMinutes: Int?, ts: Double
-        /// The exporting store's host and `[limits] account` (0.1.5; nil is left out).
+        /// The exporting store's host and the reading's label: its account's name, for the default account
+        /// `[limits] account` (0.1.5; nil is left out).
         var host: String, account: String?
+        /// The reading's account when it is not the default one (v8, `LimitSnapshot.account`).
+        var accountId: String?
     }
 
     /// Writes the lines through `write`; reads one consistent snapshot of the database. `version`: the CLI's
@@ -82,15 +88,15 @@ public enum Export {
 
         var sessions: [SessionLine] = []
         try db.query("""
-            SELECT id, tool, host, project, cwd, git_branch, title, model, started_at, last_at, status, status_at, user_msgs,
-                   archived, seq, status_detail, driver FROM session WHERE seq > ? ORDER BY seq
-            """, [.int(Int64(since))]) { r in
+            SELECT id, tool, coalesce(host, ?2), project, cwd, git_branch, title, model, started_at, last_at, status, status_at,
+                   user_msgs, archived, seq, status_detail, driver, account FROM session WHERE seq > ?1 ORDER BY seq
+            """, [.int(Int64(since)), .text(store.host)]) { r in
             sessions.append(SessionLine(id: r.text(0) ?? "", tool: r.text(1) ?? "", host: r.text(2), project: r.text(3),
                                         cwd: r.text(4), gitBranch: r.text(5), title: r.text(6), model: r.text(7),
                                         startedAt: r.optReal(8), lastAt: r.optReal(9), status: r.text(10),
                                         statusAt: r.optReal(11), statusDetail: r.text(15), userMsgs: r.int(12),
                                         archived: r.optInt(13).map { $0 != 0 },
-                                        seq: r.int(14), driver: r.text(16)))
+                                        seq: r.int(14), driver: r.text(16), account: r.text(17)))
         }
         for s in sessions {
             try out(s)
@@ -173,8 +179,10 @@ public enum Export {
         for x in summaries { try out(x) }
 
         for l in try store.latestLimits() {
+            let other = l.account != Accounts.defaultName
             try out(LimitLine(tool: l.tool.rawValue, window: l.window, usedPct: l.usedPct, resetsAt: l.resetsAt,
-                              windowMinutes: l.windowMinutes, ts: l.ts, host: store.host, account: account))
+                              windowMinutes: l.windowMinutes, ts: l.ts, host: store.host, account: other ? l.account : account,
+                              accountId: other ? l.account : nil))
         }
     }
 }
