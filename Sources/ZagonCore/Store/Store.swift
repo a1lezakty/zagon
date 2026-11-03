@@ -83,6 +83,18 @@ public final class Store {
                   .of(m.archived.map { $0 ? 1 : 0 }), .of(m.account)])
     }
 
+    /// The stored background tasks of a session (`Background`); empty for an unknown one.
+    func background(_ id: String) throws -> Background.State {
+        try db.one("SELECT bg_tasks, bg_until, bg_since FROM session WHERE id = ?", [.text(id)]) {
+            Background.State(tasks: $0.text(0), until: $0.optReal(1), since: $0.optReal(2))
+        } ?? Background.State()
+    }
+
+    func setBackground(_ id: String, _ s: Background.State) throws {
+        try db.run("UPDATE session SET bg_tasks = ?, bg_until = ?, bg_since = ?, seq = ? WHERE id = ?",
+                   [.of(s.tasks), .of(s.until), .of(s.since), .int(Int64(try nextSeq())), .text(id)])
+    }
+
     /// Live status from hooks: `working` | `waiting_permission` | `waiting_input` | `ended` (free text, short).
     /// `detail` says what it is about (the tool name for `waiting_permission`); nil clears it. A session new here is
     /// this machine's (`host`): hooks run where the session runs.

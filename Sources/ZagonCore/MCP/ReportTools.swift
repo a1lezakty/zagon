@@ -205,11 +205,8 @@ final class ReportTools {
         parts.append((s.project ?? "?") + (s.gitBranch.map { " (\($0))" } ?? ""))
         if let st = s.status {
             let label = ["waiting_input": "waiting for input", "waiting_permission": "waiting for permission"][st] ?? st
-            if st == "waiting_input", let n = s.background {
-                parts.append("working in background (\(Txt.count(n, "task")))")
-            } else if st == "waiting_input", let d = s.drivenBy {
-                parts.append((d.isEmpty ? "driven by another session" : "driven by \(d)")
-                             + (x.statusAt.map { " · turn ended \(Txt.dur(t - $0)) ago" } ?? ""))
+            if let state = s.turnState(now: t) {
+                parts.append(state)
             } else {
                 parts.append(label + (x.statusAt.map { " \(Txt.dur(t - $0))" } ?? ""))
             }

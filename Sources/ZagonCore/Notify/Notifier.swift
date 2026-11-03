@@ -196,21 +196,26 @@ public final class Notifier {
         let w = self.w
         guard config.waitingMinutes > 0 else { return [] }
         let wait = config.waitingMinutes * 60
+        // Its background tasks still run (`Background`): it may be waiting for them, so it is news only later (0 = never).
+        let bgWait = config.waitingBackgroundMinutes * 60
         var rows: [SessionRow] = []
-        // The agent must have done something just before (a fresh or resumed session waiting for the first prompt is not news).
+        // The agent must have done something just before (a fresh or resumed session waiting for the first prompt is not
+        // news), and nothing since (a turn on a task notification has begun: its hooks may not have come yet).
         try store.db.query("""
-            SELECT id, tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at, account FROM session
-            WHERE status IN ('waiting_input', 'waiting_permission') AND status_at <= ? AND status_at > ?
-              AND last_at >= status_at - 600 AND coalesce(archived, 0) = 0
+            SELECT id, tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at, account,
+                   status = 'waiting_input' AND coalesce(bg_until, 0) > ?3 FROM session
+            WHERE status IN ('waiting_input', 'waiting_permission') AND status_at <= ?1 AND status_at > ?2
+              AND last_at >= status_at - 600 AND last_at <= status_at + 5 AND coalesce(archived, 0) = 0
               AND NOT (status = 'waiting_input' AND \(UserTime.driverSQL("session", now: now)) IS NOT NULL)  -- waits for its driver, not you
-              AND NOT (status = 'waiting_input' AND coalesce(bg_until, 0) > ?3)  -- works in background
             """, [.real(now - wait), .real(now - wait - 86400), .real(now)]) {
             rows.append(SessionRow(id: $0.text(0) ?? "", tool: $0.text(1) ?? "", title: $0.text(2), project: $0.text(3),
-                                   status: $0.text(4), statusAt: $0.optReal(5), lastAt: $0.optReal(6), account: $0.text(7)))
+                                   status: $0.text(4), statusAt: $0.optReal(5), lastAt: $0.optReal(6),
+                                   inBackground: $0.int(8) != 0, account: $0.text(7)))
         }
-        return rows.map { s in
-            let since = s.statusAt ?? now
-            return Event(key: "wait:\(s.id)", anchor: since, at: since + wait) {
+        return rows.compactMap { s in
+            let since = s.statusAt ?? now, due = since + (s.inBackground ? bgWait : wait)
+            guard !s.inBackground || (bgWait > 0 && due <= now) else { return nil }
+            return Event(key: "wait:\(s.id)", anchor: since, at: due) {
                 let what = s.status == "waiting_permission" ? w.t("Просит разрешение.", "Asks for permission.")
                     : w.t("Ждёт ответа.", "Waits for your reply.")
                 return Message(title: w.t("Ждёт тебя \(w.dur(now - since))", "Waiting for you \(w.dur(now - since))"),

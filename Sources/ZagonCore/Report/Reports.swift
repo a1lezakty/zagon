@@ -47,6 +47,18 @@ public struct ProjectLine: Codable, Sendable {
 }
 public struct NameCount: Codable, Sendable { public var name: String; public var count: Int }
 
+extension SessionLine {
+    /// A session waiting for input that does not wait for you, for the CLI and MCP: "working in background (2 tasks) ·
+    /// 3h 05m" (since its turn ended) or "driven by <name> · turn ended 5m ago"; nil otherwise.
+    public func turnState(now: Timestamp) -> String? {
+        guard status == "waiting_input" else { return nil }
+        let ago = statusAt.map { Txt.dur(now - $0) }
+        if let n = background { return "working in background (\(Txt.count(n, "task")))" + (ago.map { " · \($0)" } ?? "") }
+        guard let d = drivenBy else { return nil }
+        return (d.isEmpty ? "driven by another session" : "driven by \(d)") + (ago.map { " · turn ended \($0) ago" } ?? "")
+    }
+}
+
 public struct SessionLine: Codable, Sendable {
     public var id: String
     public var tool: String
@@ -62,6 +74,8 @@ public struct SessionLine: Codable, Sendable {
     public var drivenBy: String?
     /// Waiting for input with background tasks still running (`Background`): working in background. Nil = none.
     public var background: Int?
+    /// When the current status began (hooks); nil = not known.
+    public var statusAt: Timestamp?
     public var startedAt: Timestamp?
     public var lastAt: Timestamp?
     public var userMsgs: Int
@@ -196,12 +210,13 @@ public struct Reports {
             try db.query("""
                 SELECT id, tool, title, \(Projects.sessionSQL("session")), git_branch, model, status, started_at, last_at,
                        user_msgs, archived, status_detail, \(UserTime.driverSQL("session", now: now)), account,
-                       bg_tasks FROM session WHERE id=?
+                       bg_tasks, status_at FROM session WHERE id=?
                 """, [.text(id)]) { r in
                 out.append(SessionLine(id: id, tool: r.text(1) ?? "", title: r.text(2), project: r.text(3), gitBranch: r.text(4),
                                        model: r.text(5), status: r.text(6), statusDetail: r.text(11), drivenBy: r.text(12),
                                        background: r.text(6) == "waiting_input"
                                            ? Optional(Background.count(r.text(14), now: now)).flatMap { $0 > 0 ? $0 : nil } : nil,
+                                       statusAt: r.optReal(15),
                                        startedAt: r.optReal(7), lastAt: r.optReal(8),
                                        userMsgs: r.int(9), archived: r.optInt(10).map { $0 != 0 },
                                        tokens: tokens[id] ?? TokenTotals(), workingSec: working[id] ?? 0,

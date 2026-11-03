@@ -56,8 +56,9 @@ struct NotifyCommand: ParsableCommand {
             } catch { print("task suggestions off: \(error)") }
             repeat {
                 Settings.applyTimezone(s.paths)  // follows `zagon tz` / MCP; the scan rebuilds days on a change
-                do { try SpoolIngest.run(store: s.store, spoolDir: s.paths.spool) } catch { print("spool: \(error)") }
+                // Transcripts first, then the spool, as the daemon reads them.
                 do { try common.ingest(s.store).scan() } catch { print("scan: \(error)") }
+                do { try SpoolIngest.run(store: s.store, spoolDir: s.paths.spool) } catch { print("spool: \(error)") }
                 do { try n.tick() } catch { print("notify: \(error)") }
                 if let bot { bot.pollOnce(timeout: once ? 0 : 25) } else if !once { sleep(30) }
             } while !once

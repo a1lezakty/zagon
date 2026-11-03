@@ -621,10 +621,8 @@ public final class Ingest {
 
         // Background tasks still running (`Background`): the set of each session moves with its transcript.
         for (id, xs) in Dictionary(grouping: out.background, by: \.sessionId) {
-            let stored = try db.one("SELECT bg_tasks FROM session WHERE id = ?", [.text(id)]) { $0.text(0) } ?? nil
-            guard let e = Background.apply(xs, to: stored) else { continue }
-            try db.run("UPDATE session SET bg_tasks = ?, bg_until = ?, seq = ? WHERE id = ?",
-                       [.of(e.tasks), .of(e.until), .int(Int64(try store.nextSeq())), .text(id)])
+            guard let e = Background.apply(xs, to: try store.background(id)) else { continue }
+            try store.setBackground(id, e)
         }
 
         // Typing into a terminal: decides later whether a message in another session was the human's.
