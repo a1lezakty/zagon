@@ -122,11 +122,45 @@ public struct AIRingsVM: Sendable, Equatable {
 public struct SessionRowVM: Sendable, Identifiable, Equatable {
     public var id: String
     public var title: String
+    /// After the title, kept whole when it is cut: " (corp)" for another Claude Code account (`Accounts.tag`), else "".
+    public var tag = ""
     public var subtitle: String
     public var time: String
     public var command: String
     /// Where its handoff is made (`TaskBackend.handoff` with `id`): the ssh alias, nil = this Mac.
     public var server: String? = nil
+}
+
+/// Another Claude Code account's limits in one line under the rings: "Claude · corp", "5h 23% · week 58%" (what is
+/// left in `left`), the next reset.
+public struct AccountLineVM: Sendable, Equatable {
+    public var name: String
+    public var used: String
+    public var left: String
+    public var reset: String
+    /// A window at 95 % or over (red, as the rings).
+    public var warn: Bool
+    public var spoken: String
+    public var spokenLeft: String
+
+    init(_ a: AccountLimits, _ f: Fmt) {
+        let l = a.limits
+        name = a.tool.name + " · " + a.account
+        // Without a 5-hour window on the plan (`AILimits.weekOnly`) the week alone.
+        let windows: [(key: String, window: LimitWindow?)] = (l.weekOnly(at: f.now) ? [] : [("limit.other.five", l.fiveHour)])
+            + [("limit.ai.week", l.week)]
+        func line(_ left: Bool) -> String {
+            windows.map { w in
+                f.t(w.key, w.window?.pct(at: f.now).map { f.pct(Double(left ? 100 - $0 : $0)) } ?? "–")
+            }.joined(separator: " · ")
+        }
+        used = line(false); left = line(true)
+        let current = windows.compactMap { $0.window }.filter { $0.pct(at: f.now) != nil }
+        reset = current.map(\.resetsAt).min().map { f.t("limit.resets", f.resetMoment($0)) } ?? f.t("limit.noReading")
+        warn = current.contains { $0.usedPct >= 95 }
+        spoken = name + ": " + used + ", " + reset
+        spokenLeft = name + ", " + f.t("limit.left") + ": " + left + ", " + reset
+    }
 }
 
 public struct MainVM: Sendable {
@@ -168,6 +202,8 @@ public struct MainVM: Sendable {
     public var claudeEnable: Bool
     /// No sessions at all: one line instead of an empty block.
     public var noSessions: String?
+    /// The other Claude Code accounts' limits, a line each under the rings (the rings are the default account's).
+    public var accounts: [AccountLineVM]
 
     public init(_ p: ZagonDataProvider, _ f: Fmt, colors: (Tool) -> RingColors = RingColors.standard) {
         let limits = p.limits().forRings(at: f.now), current = limits.tools(at: f.now), shown = limits.shown(at: f.now)
@@ -188,7 +224,7 @@ public struct MainVM: Sendable {
 
         let sessions = p.liveSessions().sorted { $0.since < $1.since }
         func row(_ s: LiveSession, _ detail: String) -> SessionRowVM {
-            SessionRowVM(id: s.id, title: s.title, subtitle: s.host + " · " + detail,
+            SessionRowVM(id: s.id, title: s.title, tag: Accounts.tag(s.account), subtitle: s.host + " · " + detail,
                          time: f.duration(f.now.timeIntervalSince(s.since)), command: s.command, server: s.server)
         }
         // A worker driven by another session waits for that session, not for you: listed with the idle ones.
@@ -244,6 +280,7 @@ public struct MainVM: Sendable {
         limitsMissing = ais.isEmpty ? five?.pct == nil && !weekOnly || week?.pct == nil
             : ais.contains { $0.five.pct == nil && !$0.weekOnly || $0.week.pct == nil }
         noSessions = sessions.isEmpty ? f.t("sessions.none") : nil
+        accounts = limits.others.map { AccountLineVM($0, f) }
     }
 
     /// Warn only when the current pace hits 100 % before the reset.
@@ -266,6 +303,8 @@ public struct SegmentVM: Sendable, Equatable {
 
 public struct LaneVM: Sendable, Equatable {
     public var title: String
+    /// " (corp)" for another Claude Code account (`Accounts.tag`), else "".
+    public var tag: String
     public var host: String
     public var segments: [SegmentVM]
 }
@@ -287,7 +326,7 @@ public struct TimelineVM: Sendable, Equatable {
         let span = Double(24 - from)
         ticks = stride(from: from, through: 24, by: 2).map { f.pad2($0) }
         self.lanes = lanes.map { lane in
-            LaneVM(title: lane.title, host: lane.host, segments: lane.intervals.compactMap { iv in
+            LaneVM(title: lane.title, tag: Accounts.tag(lane.account), host: lane.host, segments: lane.intervals.compactMap { iv in
                 let a = min(max(h(iv.start), Double(from)), 24), b = min(max(h(iv.end), Double(from)), 24)
                 guard b > a else { return nil }
                 return SegmentVM(x: (a - Double(from)) / span, width: (b - a) / span, waiting: iv.waiting)

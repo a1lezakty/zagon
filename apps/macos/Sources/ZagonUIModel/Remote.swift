@@ -113,7 +113,7 @@ public enum Remote {
             case "day":
                 n.days += 1
                 if l.contains("\"usage\":") { withUsage += 1 }
-            case "limit": n.limits += 1
+            case "limit", "account_limit": n.limits += 1
             default: break
             }
             // A `limit` line's `host` (0.1.5) is the store's own name, not a host of its rows: as before, rows only.

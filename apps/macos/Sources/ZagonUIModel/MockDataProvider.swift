@@ -15,6 +15,8 @@ public struct MockDataProvider: ZagonDataProvider {
     public var codexLimits = false
     /// Limits read on this Mac and on a server (two accounts): the rings say whose they are.
     public var twoSources = false
+    /// A second Claude Code account (`CLAUDE_CONFIG_DIR`, "corp") with its own limits and a session of it.
+    public var otherAccounts = false
     /// Claude on a plan without a 5-hour window: only the week comes.
     public var weekOnly = false
     /// Claude used where its status line does not run (an editor extension): sessions, no reading.
@@ -70,6 +72,11 @@ public struct MockDataProvider: ZagonDataProvider {
             l.codex.fiveHour?.from = LimitFrom(account: "personal")
             l.codex.week?.from = LimitFrom(account: "personal")
         }
+        if otherAccounts {
+            l.others = [AccountLimits(account: "corp", limits: AILimits(
+                fiveHour: LimitWindow(usedPct: 23, resetsAt: at(30, 15.5), tool: .claude, readAt: ago(9)),
+                week: LimitWindow(usedPct: 58, resetsAt: at(34, 10), tool: .claude, readAt: ago(9))))]
+        }
         if claudeUnread {
             l.claude = AILimits()
             l.claudeSeen = ago(4)
@@ -99,7 +106,7 @@ public struct MockDataProvider: ZagonDataProvider {
             LiveSession(id: "claude:train", title: "ml-train — run 300", host: "gpu-box", model: "Opus 5.5", status: .working,
                         since: ago(65), command: "ssh gpu-box -t tmux attach -t train"),
             LiveSession(id: "claude:cli", title: "cli-tool — parser", host: "laptop", model: "Sonnet 5.5", status: .working,
-                        since: ago(18), command: "claude --resume 5b1e09c4"),
+                        since: ago(18), command: "claude --resume 5b1e09c4", account: otherAccounts ? "corp" : nil),
             LiveSession(id: "claude:tracker", title: tr("tracker — worklogs", "tracker — ворклоги"), host: "build-box", model: "Haiku 4.5",
                         status: .idle, since: ago(180), command: "claude --resume 0c7d2e11"),
             LiveSession(id: "claude:worker", title: tr("web-app — worker", "web-app — воркер"), host: "build-box",

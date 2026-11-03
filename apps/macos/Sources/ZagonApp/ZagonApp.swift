@@ -948,6 +948,7 @@ struct LimitsBlock: View {
                         .disabled(app.cliBusy)
                     }
                 }
+                ForEach(vm.accounts, id: \.name) { account($0) }
             }
             if let fc = vm.forecast { Banner.amber(fc) }
         }
@@ -1007,6 +1008,20 @@ struct LimitsBlock: View {
         .accessibilityLabel(left ? a.spokenLeft : a.spoken)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { app.showLeft.toggle() }
+    }
+
+    /// Another Claude Code account: its name, both windows in one line and the next reset.
+    func account(_ a: AccountLineVM) -> some View {
+        let left = app.showLeft
+        return HStack(spacing: 8) {
+            Text(a.name).font(.system(size: 12, weight: .semibold)).foregroundColor(Z.text)
+            Text(left ? a.left : a.used).font(mono(12)).foregroundColor(a.warn ? Z.bad : Z.secondary)
+            Spacer(minLength: 4)
+            Text(a.reset).font(.system(size: 12)).foregroundColor(Z.muted)
+        }
+        .lineLimit(1).minimumScaleFactor(0.85)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(left ? a.spokenLeft : a.spoken)
     }
 
     func windowLine(_ color: UInt32, _ text: String) -> some View {
@@ -1107,7 +1122,7 @@ struct WaitingRow: View {
         HStack(spacing: 10) {
             Dot(color: Z.waiting)
             VStack(alignment: .leading, spacing: 1) {
-                Text(s.title).font(.system(size: 13, weight: .semibold)).foregroundColor(Z.text).lineLimit(1)
+                SessionTitle(title: s.title, tag: s.tag, weight: .semibold)
                 Text(s.subtitle).font(.system(size: 12)).foregroundColor(Z.alarmSub).lineLimit(1)
             }
             Spacer(minLength: 0)
@@ -1130,6 +1145,20 @@ struct WaitingRow: View {
     }
 }
 
+/// A session's title and its account tag (`Accounts.tag`, " (corp)"), the tag kept whole when the title is cut.
+struct SessionTitle: View {
+    let title: String
+    let tag: String
+    var weight: Font.Weight = .medium
+    var body: some View {
+        HStack(spacing: 0) {
+            Text(title).foregroundColor(Z.text).lineLimit(1)
+            if !tag.isEmpty { Text(tag).foregroundColor(Z.secondary).lineLimit(1).fixedSize() }
+        }
+        .font(.system(size: 13, weight: weight))
+    }
+}
+
 struct SessionRow: View {
     let s: SessionRowVM
     let dot: Color
@@ -1139,7 +1168,7 @@ struct SessionRow: View {
         HStack(spacing: 10) {
             Dot(color: dot)
             VStack(alignment: .leading, spacing: 1) {
-                Text(s.title).font(.system(size: 13, weight: .medium)).foregroundColor(Z.text).lineLimit(1)
+                SessionTitle(title: s.title, tag: s.tag)
                 Text(s.subtitle).font(.system(size: 12)).foregroundColor(Z.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)

@@ -93,14 +93,17 @@ final class StoreDataProviderTests: XCTestCase {
         let p = try StoreDataProvider.fixture(Self.fixtures)
         let now = p.now.timeIntervalSince1970
         _ = try p.query.db.run("DELETE FROM limit_snapshot")
-        func add(_ window: String, _ pct: Double, resets: Double, at ts: Double) throws {
-            _ = try p.query.db.run("INSERT INTO limit_snapshot VALUES('claude', ?, ?, ?, NULL, ?)",
-                                   [.text(window), .real(pct), .real(resets), .real(ts)])
+        func add(_ window: String, _ pct: Double, resets: Double, at ts: Double, account: String = "default") throws {
+            _ = try p.query.db.run("INSERT INTO limit_snapshot(tool, window, used_pct, resets_at, ts, account) VALUES('claude', ?, ?, ?, ?, ?)",
+                                   [.text(window), .real(pct), .real(resets), .real(ts), .text(account)])
         }
-        // Both come: nothing alone.
+        // Both come: nothing alone; nor with another account's week readings since.
         try add("five_hour", 30, resets: now + 3600, at: now - 120)
         try add("seven_day", 40, resets: now + 86400, at: now - 120)
+        try add("seven_day", 10, resets: now + 86400, at: now - 30, account: "corp")
+        try add("seven_day", 10, resets: now + 86400, at: now, account: "corp")
         XCTAssertNil(p.limits().claude.weekAlone)
+        _ = try p.query.db.run("DELETE FROM limit_snapshot WHERE account = 'corp'")
         // The week alone since: from its first reading over a minute after the 5 hours'.
         try add("seven_day", 40, resets: now + 86400, at: now - 90)  // within the minute: a reset's own reading
         try add("seven_day", 41, resets: now + 86400, at: now - 30)
@@ -122,6 +125,64 @@ final class StoreDataProviderTests: XCTestCase {
         // Under 10 minutes alone before the reset (a normal plan): from the reset.
         _ = try p.query.db.run("DELETE FROM limit_snapshot WHERE window = 'seven_day' AND ts < ?", [.real(now - 800)])
         XCTAssertEqual(try XCTUnwrap(p.limits().claude.weekAlone).timeIntervalSince1970, now - 200, accuracy: 0.01)
+    }
+
+    /// Claude Code accounts: the rings stay the default account's; the others with a reading within 8 days get a line
+    /// under them; with readings of another account only, the rings have none and no hint.
+    func testAccountLimits() throws {
+        let p = try StoreDataProvider.fixture(Self.fixtures)
+        let f = Fmt(lang: .en, timeZone: TimeZone(identifier: "UTC")!, now: p.now)
+        let now = p.now.timeIntervalSince1970
+        let before = p.limits()
+        XCTAssertTrue(before.others.isEmpty)
+        XCTAssertTrue(MainVM(p, f).accounts.isEmpty)
+        // Another account, fuller and read later than the default one.
+        for (window, pct, resets) in [("five_hour", 23.0, now + 3 * 3600), ("seven_day", 97, now + 5 * 86400)] {
+            try p.reader.addLimitSnapshot(LimitSnapshot(tool: .claude, window: window, usedPct: pct, resetsAt: resets,
+                                                        ts: now - 60, account: "corp"))
+        }
+        let l = p.limits()
+        XCTAssertEqual(l.claude.fiveHour?.usedPct, before.claude.fiveHour?.usedPct)
+        XCTAssertEqual(l.claude.week?.usedPct, before.claude.week?.usedPct)
+        XCTAssertEqual(l.others.map(\.account), ["corp"])
+        XCTAssertEqual(l.others.first?.limits.week?.usedPct, 97)
+        let main = MainVM(p, f)
+        XCTAssertEqual(main.five?.pct, 62)
+        XCTAssertNil(main.limitsSource)
+        XCTAssertEqual(main.accounts.map(\.name), ["Claude · corp"])
+        XCTAssertEqual(main.accounts.first?.used, "5h 23% · week 97%")
+        XCTAssertEqual(main.accounts.first?.left, "5h 77% · week 3%")
+        XCTAssertEqual(main.accounts.first?.reset, "resets at 14:42")
+        XCTAssertEqual(main.accounts.first?.warn, true)
+        // Over 8 days old: not listed.
+        _ = try p.reader.db.run("UPDATE limit_snapshot SET ts = ?, resets_at = ? WHERE account = 'corp'",
+                                [.real(now - 9 * 86400), .real(now - 8 * 86400)])
+        XCTAssertTrue(p.limits().others.isEmpty)
+        // Only another account reads limits (its sessions too): no rings, no hint, its line.
+        _ = try p.reader.db.run("UPDATE limit_snapshot SET ts = ?, resets_at = ? WHERE account = 'corp'", [.real(now - 60), .real(now + 3600)])
+        _ = try p.reader.db.run("DELETE FROM limit_snapshot WHERE account = 'default'")
+        _ = try p.reader.db.run("UPDATE session SET account = 'corp' WHERE tool = 'claude'")
+        let only = p.limits()
+        XCTAssertNil(only.claude.fiveHour)
+        XCTAssertNil(only.claude.week)
+        XCTAssertNil(only.claudeSeen)
+        XCTAssertFalse(only.claudeHint(at: p.now))
+        XCTAssertEqual(only.others.map(\.account), ["corp"])
+    }
+
+    /// A session of another Claude Code account carries its tag in the panel, the day's lanes and its project's sessions.
+    func testAccountTags() throws {
+        let p = try StoreDataProvider.fixture(Self.fixtures)
+        let f = Fmt(lang: .en, timeZone: TimeZone(identifier: "UTC")!, now: p.now)
+        _ = try p.reader.db.run("UPDATE session SET account = 'default' WHERE tool = 'claude'")
+        _ = try p.reader.db.run("UPDATE session SET account = 'corp' WHERE title LIKE '%parser%'")
+        let main = MainVM(p, f)
+        XCTAssertEqual(main.working.map { $0.title + $0.tag }.sorted(),
+                       ["cli-tool — parser (corp)", "ml-train — run 300", "zagon — mockups"])
+        XCTAssertTrue((main.waiting + main.idle).allSatisfy { $0.tag.isEmpty })
+        let day = DayVM(p.day(p.now.addingTimeInterval(-86400)), f)
+        XCTAssertEqual(day.timeline.lanes.filter { !$0.tag.isEmpty }.map { $0.title + $0.tag }, ["cli-tool — parser (corp)"])
+        XCTAssertEqual(day.projects.first { $0.name == "cli-tool" }?.sessions.map { $0.hasPrefix("parser (corp) — ") }, [true])
     }
 
     /// Under the hint, the editors' settings of the home folder: off in the editor found, then on.
