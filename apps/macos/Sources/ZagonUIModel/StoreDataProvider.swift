@@ -414,7 +414,8 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 return LiveSession(id: s.id, title: Self.title(s.title, s.project, s.id), host: host,
                                    tool: Tool(rawValue: s.tool) ?? .claude, model: Self.modelName(s.model), status: status,
                                    since: Self.date(s.since), command: command(tool: s.tool, id: s.nativeId, cwd: s.cwd, host: host),
-                                   drivenBy: s.drivenBy, server: host == localHost ? nil : host, account: s.account)
+                                   drivenBy: s.drivenBy, server: host == localHost ? nil : host, account: s.account,
+                                   background: s.background)
             }
         }
     }

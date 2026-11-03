@@ -150,20 +150,24 @@ public final class Bot {
         var lines: [String] = []
         try store.db.query("""
             SELECT tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at, \(UserTime.driverSQL("session", now: now)),
-                   account
-            FROM session WHERE coalesce(archived, 0) = 0 AND coalesce(status, '') <> 'ended' AND max(coalesce(status_at, 0), coalesce(last_at, 0)) > ?
-            ORDER BY CASE WHEN status = 'waiting_permission' OR (status = 'waiting_input' AND \(UserTime.driverSQL("session", now: now)) IS NULL)
+                   account, status = 'waiting_input' AND coalesce(bg_until, 0) > ?2
+            FROM session WHERE coalesce(archived, 0) = 0 AND coalesce(status, '') <> 'ended' AND max(coalesce(status_at, 0), coalesce(last_at, 0)) > ?1
+            ORDER BY CASE WHEN status = 'waiting_input' AND coalesce(bg_until, 0) > ?2 THEN 1
+                     WHEN status = 'waiting_permission' OR (status = 'waiting_input' AND \(UserTime.driverSQL("session", now: now)) IS NULL)
                      THEN 0 WHEN status = 'working' THEN 1 ELSE 2 END,
                      max(coalesce(status_at, 0), coalesce(last_at, 0)) DESC LIMIT 12
-            """, [.real(now - 86400)]) { r in
+            """, [.real(now - 86400), .real(now)]) { r in
             let since = r.optReal(4) ?? r.optReal(5) ?? now
             let state: String
             switch r.text(3) {
+            case "waiting_input" where r.int(8) != 0:  // the turn ended, its background tasks still run
+                state = w.t("▶ работает в фоне", "▶ working in background")
             case "waiting_permission": state = w.t("⏳ ждёт разрешения ", "⏳ waits for permission ") + w.dur(now - since)
             case "waiting_input":
-                if let d = r.text(6) {  // a worker waits for the session that drives it
-                    state = (d.isEmpty ? w.t("· ждёт другую сессию ", "· waits for another session ")
-                             : w.t("· ждёт сессию \(d) ", "· waits for session \(d) ")) + w.dur(now - since)
+                if let d = r.text(6) {  // a worker driven by another session: that one watches it
+                    state = (d.isEmpty ? w.t("· под управлением другой сессии", "· driven by another session")
+                             : w.t("· под управлением \(d)", "· driven by \(d)"))
+                        + w.t(" · ход окончен \(w.dur(now - since)) назад", " · turn ended \(w.dur(now - since)) ago")
                 } else {
                     state = w.t("⏳ ждёт тебя ", "⏳ waits for you ") + w.dur(now - since)
                 }

@@ -170,9 +170,9 @@ final class ReportTools {
         } ?? SessionExtra()
     }
 
-    /// Waiting for the user: a driven worker waiting for input waits for its driver.
+    /// Waiting for the user: a driven worker waiting for input waits for its driver, one with background tasks works.
     static func waiting(_ s: SessionLine) -> Bool {
-        s.status == "waiting_permission" || (s.status == "waiting_input" && s.drivenBy == nil)
+        s.status == "waiting_permission" || (s.status == "waiting_input" && s.drivenBy == nil && s.background == nil)
     }
 
     func sessions(_ a: MCPArgs) throws -> String {
@@ -195,7 +195,7 @@ final class ReportTools {
             return order[x.id]! < order[y.id]!
         }
         let t = now()
-        let nWait = list.filter(Self.waiting).count, nWork = list.filter { $0.status == "working" }.count
+        let nWait = list.filter(Self.waiting).count, nWork = list.filter { $0.status == "working" || $0.background != nil }.count
         return (["\(Txt.count(list.count, "session")): \(nWait) waiting for the user, \(nWork) working"]
                 + list.map { line($0, extras[$0.id] ?? SessionExtra(), t) }).joined(separator: "\n")
     }
@@ -204,9 +204,15 @@ final class ReportTools {
         var parts = ["\(s.tool)\(Accounts.tag(s.account)) \(Txt.shortId(s.id))", s.title.map { "\"\(Txt.oneLine($0, 60))\"" } ?? "(untitled)"]
         parts.append((s.project ?? "?") + (s.gitBranch.map { " (\($0))" } ?? ""))
         if let st = s.status {
-            var label = ["waiting_input": "waiting for input", "waiting_permission": "waiting for permission"][st] ?? st
-            if st == "waiting_input", let d = s.drivenBy { label = d.isEmpty ? "waiting for another session" : "waiting for session \(d)" }
-            parts.append(label + (x.statusAt.map { " \(Txt.dur(t - $0))" } ?? ""))
+            let label = ["waiting_input": "waiting for input", "waiting_permission": "waiting for permission"][st] ?? st
+            if st == "waiting_input", let n = s.background {
+                parts.append("working in background (\(Txt.count(n, "task")))")
+            } else if st == "waiting_input", let d = s.drivenBy {
+                parts.append((d.isEmpty ? "driven by another session" : "driven by \(d)")
+                             + (x.statusAt.map { " · turn ended \(Txt.dur(t - $0)) ago" } ?? ""))
+            } else {
+                parts.append(label + (x.statusAt.map { " \(Txt.dur(t - $0))" } ?? ""))
+            }
         }
         if let l = s.lastAt { parts.append("last active \(Txt.when(l, now: t))") }
         parts.append("\(Txt.tokens(s.tokens.total)) tokens, working \(Txt.dur(s.workingSec))")
@@ -221,7 +227,7 @@ final class ReportTools {
         let t = now()
         let live = try reports.sessions(limit: 50, now: t)
         let wait = try live.filter(Self.waiting).map { ($0, try extra($0.id)) }.sorted { ($0.1.statusAt ?? 0) < ($1.1.statusAt ?? 0) }
-        out.append("sessions: \(wait.count) waiting for the user, \(live.filter { $0.status == "working" }.count) working"
+        out.append("sessions: \(wait.count) waiting for the user, \(live.filter { $0.status == "working" || $0.background != nil }.count) working"
                    + (wait.isEmpty ? "" : ":"))
         out += wait.map { line($0.0, $0.1, t) }
         if let tasks {

@@ -97,4 +97,48 @@ func bgDone(_ t: Timestamp, _ id: String, status: String? = "completed", session
         #expect(open(env)?.hasPrefix("b2@") == true && Background.count(open(env), now: T0 + 40) == 1)
         #expect(try tokens() == before && before == 15)
     }
+
+    /// A session whose turn ended with a task in the background works; a driven one without is neutral.
+    @Test func readSideWorkingInBackgroundAndDriven() throws {
+        let env = ClaudeEnv(), now = T0 + 40 * minute
+        env.write("-w-alpha/S.jsonl", lines: [typed(T0), assistantLine(T0 + 5, id: "s1", output: 1), bgBash(T0 + 10, "b1")])
+        env.scan()
+        try env.store.setStatus(sessionId: "claude:S", tool: .claude, status: "waiting_input", at: T0 + minute)
+        try env.store.mergeSession(SessionMeta(id: "claude:L", tool: .claude, title: "lead"))
+        try env.store.setStatus(sessionId: "claude:L", tool: .claude, status: "working", at: T0 + 39 * minute)
+        try env.store.mergeSession(SessionMeta(id: "claude:W", tool: .claude, title: "worker"))
+        try env.store.db.run("UPDATE session SET driver = 'claude:L' WHERE id = 'claude:W'")
+        try env.store.setStatus(sessionId: "claude:W", tool: .claude, status: "waiting_input", at: T0 + 35 * minute)
+
+        let live = try Query(store: env.store).liveSessions(now: now)
+        let s = try #require(live.first { $0.id == "claude:S" })
+        #expect(s.state == .working && s.background == 1 && s.since == T0 + minute)  // past idleAfter: still working
+        #expect(live.first { $0.id == "claude:W" }?.background == 0)
+        let lines = try Reports(store: env.store).sessions(from: T0 - hour, to: T0 + hour, now: now)
+        let ls = try #require(lines.first { $0.id == "claude:S" })
+        #expect(ls.background == 1 && !ReportTools.waiting(ls))
+
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        Sys.writeFile(dir + "/token", Array("1:x\n".utf8))
+        Sys.writeFile(dir + "/curl", [0], mode: 0o755)
+        var c = NotifyConfig()
+        c.telegramTokenFile = dir + "/token"; c.telegramChatId = "1"
+        let bot = Bot(telegram: try #require(Telegram(c, curl: Curl(searchPath: dir), tmpDir: dir)), store: env.store, lang: .en)
+        let text = try bot.sessions(now: now)
+        #expect(text.contains("▶ working in background · alpha"))
+        #expect(text.contains("· driven by lead · turn ended 5 min ago · worker"))
+        #expect(!text.contains("waits"))
+        bot.lang = .ru
+        let ru = try bot.sessions(now: now)
+        #expect(ru.contains("▶ работает в фоне") && ru.contains("под управлением lead · ход окончен 5 мин назад"))
+
+        var nc = NotifyConfig(); nc.quiet = nil; nc.summaryAt = nil; nc.worklogAt = nil; nc.waitingMinutes = 5
+        let n = Notifier(store: env.store, config: nc, channels: [])
+        #expect(try n.waitingEvents(now: now).isEmpty)
+        // The task ends: the session waits for you again.
+        env.append("-w-alpha/S.jsonl", bgDone(T0 + 20 * minute, "b1") + "\n")
+        env.scan()
+        #expect(try n.waitingEvents(now: now).map(\.key) == ["wait:claude:S"])
+    }
 }

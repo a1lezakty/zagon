@@ -227,7 +227,7 @@ public struct MainVM: Sendable {
             SessionRowVM(id: s.id, title: s.title, tag: Accounts.tag(s.account), subtitle: s.host + " · " + detail,
                          time: f.duration(f.now.timeIntervalSince(s.since)), command: s.command, server: s.server)
         }
-        // A worker driven by another session waits for that session, not for you: listed with the idle ones.
+        // A worker driven by another session is watched by that session, not you: listed with the idle ones.
         func driven(_ s: LiveSession) -> Bool { s.status == .waitingInput && s.drivenBy != nil }
         // Cursor's sessions say so: their model names look like Claude's or Codex's.
         func cursor(_ s: LiveSession, _ detail: String) -> String { s.tool == .cursor ? "Cursor · " + detail : detail }
@@ -238,10 +238,13 @@ public struct MainVM: Sendable {
             default: return nil
             }
         }
-        working = sessions.filter { $0.status == .working }.map { row($0, cursor($0, $0.model)) }
+        // The turn ended but its background tasks run: working, in background.
+        working = sessions.filter { $0.status == .working }
+            .map { row($0, cursor($0, $0.background > 0 ? f.t("status.background") : $0.model)) }
         idle = sessions.compactMap {
             if driven($0), let d = $0.drivenBy {
-                return row($0, d.isEmpty ? f.t("status.otherSession") : f.t("status.session", d))
+                let ended = f.duration(f.now.timeIntervalSince($0.since))
+                return row($0, d.isEmpty ? f.t("status.otherSession", ended) : f.t("status.session", d, ended))
             }
             return $0.status == .idle ? row($0, cursor($0, $0.model)) : nil
         }

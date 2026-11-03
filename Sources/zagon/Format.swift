@@ -84,8 +84,10 @@ enum Fmt {
             let id = s.id.split(separator: ":").last.map { String($0.prefix(8)) } ?? s.id
             let title = (s.title ?? s.project ?? "-") + Accounts.tag(s.account)
             var state = (s.status.map { "  \($0)" } ?? "") + (s.statusDetail.map { " (\($0))" } ?? "")
-            if s.status == "waiting_input", let d = s.drivenBy {  // driven over tmux: waits for that session, not you
-                state += " (waits for " + (d.isEmpty ? "another session" : "session " + d) + ")"
+            if s.status == "waiting_input", let n = s.background {  // the turn ended, its background tasks run
+                state = "  working in background (\(n))"
+            } else if s.status == "waiting_input", let d = s.drivenBy {  // driven over tmux: that session watches it
+                state = "  turn ended, driven by " + (d.isEmpty ? "another session" : d)
             }
             print("  \(id)  \(pad(title, 40)) \(pad(s.project ?? "", 16)) \(lpad(tokens(s.tokens.total), 7)) \(lpad(dur(s.workingSec), 8))"
                   + " \(lpad(usd(s.cost, unpriced: s.unpriced), 7))" + state)

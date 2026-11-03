@@ -611,8 +611,10 @@ The service sends alerts through your own Telegram bot or an [ntfy](https://ntfy
 - a limit at 80 % and 95 % (5-hour and weekly, Claude and Codex; each Claude Code account on its own), and a limit
   reset;
 - a session waiting for you longer than 10 minutes (unless "finished" was already sent for that stop); a worker that
-  another session drives over `tmux send-keys` waits for that session, not for you, so it is shown as "waits for
-  session …" and sends no such alert; a leader killed without `SessionEnd` releases its workers after 12 hours;
+  another session drives over `tmux send-keys` is watched by that session, not by you, so it is shown as "driven by
+  … · turn ended … ago" and sends no such alert; a leader killed without `SessionEnd` releases its workers after 12
+  hours; a session whose turn ended while its background tasks (shells, agents, monitors) still run is "working in
+  background" and sends neither alert until they end (12 hours at most);
 - a turn that worked longer than 15 minutes has finished, and its sub-agents and background commands too (not for
   a worker another session drives: that session watches it);
 - the day summary at 20:00, with a picture of the day (written at that time even with no channel configured).
