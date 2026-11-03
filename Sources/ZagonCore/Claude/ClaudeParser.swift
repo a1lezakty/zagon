@@ -6,11 +6,12 @@ import Foundation
 
 /// Claude Code transcripts: `~/.claude/projects/<project>/<session>.jsonl` (main thread) and
 /// `<project>/<session>/subagents/**/agent-*.jsonl` (sub-agents, counted under the parent session).
+/// `account`: the Claude Code account whose `projects` folder `root` is (`Accounts.claudeRoots`); its sessions carry it.
 public enum ClaudeSource {
-    public static func spec(root: String, indexPrompts: Bool = true) -> SourceSpec {
+    public static func spec(root: String, indexPrompts: Bool = true, account: String? = nil) -> SourceSpec {
         SourceSpec(tool: .claude, root: root, accepts: { layout($0) != nil }, makeParser: { _, rel, _ in
             let l = layout(rel)!
-            return ClaudeParser(sessionId: "claude:" + l.session, agent: l.agent, indexPrompts: indexPrompts)
+            return ClaudeParser(sessionId: "claude:" + l.session, agent: l.agent, indexPrompts: indexPrompts, account: account)
         })
     }
 
@@ -114,14 +115,15 @@ public struct ClaudeParser: LineParser {
     let sessionId: String
     let agent: String
     let indexPrompts: Bool
+    let account: String?
     var isSub: Bool { !agent.isEmpty }
     // Last values sent as SessionMeta; per pass only, so a new pass re-sends them once (merge is idempotent).
     var sentCwd: String?, sentBranch: String?, sentModel: String?, sentTitle: String?
     var started = false
     static let textLimit = 2000
 
-    public init(sessionId: String, agent: String, indexPrompts: Bool) {
-        self.sessionId = sessionId; self.agent = agent; self.indexPrompts = indexPrompts
+    public init(sessionId: String, agent: String, indexPrompts: Bool, account: String? = nil) {
+        self.sessionId = sessionId; self.agent = agent; self.indexPrompts = indexPrompts; self.account = account
     }
 
     public func saveState() -> String? { nil }
@@ -297,7 +299,7 @@ public struct ClaudeParser: LineParser {
     }
 
     mutating func meta(_ r: ClaudeRecord, model: String?, into out: inout ParseOutput) {
-        var m = SessionMeta(id: sessionId, tool: .claude)
+        var m = SessionMeta(id: sessionId, tool: .claude, account: account)
         var changed = !started
         started = true
         if !isSub {

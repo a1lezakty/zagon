@@ -37,8 +37,15 @@ struct Common: ParsableArguments {
         var o = IngestOptions()
         o.idleGap = idleGap * 60; o.sessionGap = sessionGap * 60; o.indexPrompts = !noIndexPrompts
         o.keyPattern = Settings.keyPattern(ZagonPaths(dir: dataDir))
-        return Ingest(store: store, sources: [ClaudeSource.spec(root: claudeDir, indexPrompts: !noIndexPrompts)]
-                      + CodexSource.specs(codexHome: codexDir) + CursorSource.specs(paths: ZagonPaths(dir: dataDir)), options: o)
+        return Ingest(store: store, sources: claudeRoots(store).map {
+            ClaudeSource.spec(root: $0.root, indexPrompts: !noIndexPrompts, account: $0.account)
+        } + CodexSource.specs(codexHome: codexDir) + CursorSource.specs(paths: ZagonPaths(dir: dataDir)), options: o)
+    }
+
+    /// `--claude-dir` (the default account) and the `projects` folders of the other Claude Code accounts
+    /// (`Accounts.claudeRoots`: `[accounts]` in config.toml and the folders hooks reported).
+    func claudeRoots(_ store: Store?) -> [(root: String, account: String)] {
+        Accounts.claudeRoots(defaultRoot: claudeDir, paths: ZagonPaths(dir: dataDir), db: store?.db)
     }
 
     /// One incremental pass: transcripts and rollouts, Cursor's conversation list, then Codex's own thread index (titles,

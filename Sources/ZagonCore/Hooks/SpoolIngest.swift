@@ -29,16 +29,25 @@ public enum SpoolIngest {
         public var lines = 0, statuses = 0, limits = 0, bad = 0, expired = 0
     }
 
+    /// Names of Claude Code accounts (`Accounts`): `[accounts]` of config.toml and the home `~/.claude` is in.
+    struct Names {
+        var home: String, map: [String: String]
+        func name(_ dir: String?) -> String? { dir.map { Accounts.name(configDir: $0, home: home, map: map) } }
+    }
+
     /// Reads every spool file from its saved offset (complete lines only), then deletes files older than
-    /// `retainDays` (UTC day in the name) and offsets of files that are gone.
+    /// `retainDays` (UTC day in the name) and offsets of files that are gone. Account names come from the config.toml
+    /// next to `spoolDir` (`<data dir>/spool`).
     @discardableResult
     public static func run(store: Store, spoolDir: String, retainDays: Int = 7, now: Double = Sys.now()) throws -> Result {
         var res = Result()
-        let names = Sys.listDir(spoolDir)
-        let files = names.filter { $0.hasSuffix(".ndjson") }
+        let paths = ZagonPaths(dir: Sys.dirname(spoolDir))
+        let names = Names(home: paths.home, map: Accounts.map(paths))
+        let entries = Sys.listDir(spoolDir)
+        let files = entries.filter { $0.hasSuffix(".ndjson") }
         let oldest = Sys.utcDay(now - Double(retainDays) * 86400)
         // Last status-line readings of sessions (StatusLine.shouldSpool) go with the spool files of their age.
-        for name in names where name.hasPrefix(".limits-") {
+        for name in entries where name.hasPrefix(".limits-") {
             if let m = Sys.mtime(spoolDir + "/" + name), m < now - Double(retainDays) * 86400 { Sys.remove(spoolDir + "/" + name) }
         }
         // Cursor's lines are its only record of time (CursorSource): kept 40 days, beyond Claude Code's 30-day cleanup,
@@ -51,7 +60,7 @@ public enum SpoolIngest {
                 res.expired += 1
                 continue
             }
-            try ingest(file: spoolDir + "/" + name, key: "spool:" + name, store: store, into: &res)
+            try ingest(file: spoolDir + "/" + name, key: "spool:" + name, store: store, names: names, into: &res)
         }
         let live = Set(files.map { "spool:" + $0 })
         var stale: [String] = []
@@ -62,7 +71,7 @@ public enum SpoolIngest {
         return res
     }
 
-    static func ingest(file: String, key: String, store: Store, into res: inout Result) throws {
+    static func ingest(file: String, key: String, store: Store, names: Names, into res: inout Result) throws {
         let saved = try store.db.one("SELECT value FROM meta WHERE key = ?", [.text(key)]) { $0.int(0) } ?? 0
         let size = Sys.fileSize(file) ?? 0
         let offset = saved <= size ? saved : 0  // shrunk = replaced: start over
@@ -72,7 +81,7 @@ public enum SpoolIngest {
             var start = 0
             while start <= lastNL {
                 let end = data[start...lastNL].firstIndex(of: 0x0A) ?? lastNL
-                if end > start { try apply(Array(data[start..<end]), store: store, into: &res) }
+                if end > start { try apply(Array(data[start..<end]), store: store, names: names, into: &res) }
                 start = end + 1
             }
             try store.db.run("INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
@@ -80,29 +89,42 @@ public enum SpoolIngest {
         }
     }
 
-    static func apply(_ line: [UInt8], store: Store, into res: inout Result) throws {
+    static func apply(_ line: [UInt8], store: Store, names: Names = Names(home: "/", map: [:]), into res: inout Result) throws {
         res.lines += 1
         guard let v = JValue.parse(line), let ts = v["ts"]?.double, let tool = v["tool"]?.string.flatMap(ToolKind.init)
         else { res.bad += 1; return }
+        // The Claude Code account: `CLAUDE_CONFIG_DIR` the hook or status line ran with, else the folder of the
+        // transcript (hooks of a zagon before accounts); a folder other than `~/.claude` becomes a transcript root.
+        var configDir: String?
+        if tool == .claude {
+            configDir = v["config_dir"]?.string ?? v["transcript_path"]?.string.flatMap { Accounts.configDir(transcript: $0) }
+            if let d = configDir { try Accounts.learn(d, store: store, home: names.home) }
+        }
         switch v["kind"]?.string {
         case "hook":
             guard let sid = v["session_id"]?.string, let event = v["event"]?.string else { res.bad += 1; return }
             guard let st = status(tool: tool.rawValue, event: event, notificationType: v["notification_type"]?.string,
                                   source: v["source"]?.string) else { return }
             if try setStatus(store: store, id: "\(tool.rawValue):\(sid)", tool: tool, status: st, at: ts,
-                             cwd: v["cwd"]?.string, detail: st == "waiting_permission" ? v["tool_name"]?.string : nil) {
+                             cwd: v["cwd"]?.string, detail: st == "waiting_permission" ? v["tool_name"]?.string : nil,
+                             account: names.name(configDir)) {
                 res.statuses += 1
             }
         case "limits":
+            // A status line of a zagon before accounts sent no folder: the account of its session, when known.
+            let account = try names.name(configDir) ?? v["session_id"]?.string.flatMap { sid in
+                try store.db.one("SELECT account FROM session WHERE id = ?", [.text("\(tool.rawValue):\(sid)")]) { $0.text(0) } ?? nil
+            } ?? Accounts.defaultName
             for (window, minutes) in windowMinutes.sorted(by: { $0.key < $1.key }) {
                 guard let pct = v[window + "_pct"]?.double else { continue }
                 let resets = v[window + "_resets_at"]?.double
                 let last = try store.db.one("""
-                    SELECT used_pct, resets_at, ts FROM limit_snapshot WHERE tool = ? AND window = ? ORDER BY ts DESC LIMIT 1
-                    """, [.text(tool.rawValue), .text(window)]) { ($0.real(0), $0.optReal(1), $0.real(2)) }
+                    SELECT used_pct, resets_at, ts FROM limit_snapshot WHERE tool = ? AND account = ? AND window = ?
+                    ORDER BY ts DESC LIMIT 1
+                    """, [.text(tool.rawValue), .text(account), .text(window)]) { ($0.real(0), $0.optReal(1), $0.real(2)) }
                 if let last, last.0 == pct, last.1 == resets, ts - last.2 < limitRefresh, ts >= last.2 { continue }
                 try store.addLimitSnapshot(LimitSnapshot(tool: tool, window: window, usedPct: pct, resetsAt: resets,
-                                                         windowMinutes: minutes, ts: ts))
+                                                         windowMinutes: minutes, ts: ts, account: account))
                 res.limits += 1
             }
         default: res.bad += 1
@@ -110,14 +132,17 @@ public enum SpoolIngest {
     }
 
     /// Sets the status unless an equal or newer one is stored. Leaving a `waiting_*` status records the
-    /// `waiting` interval from when it started. Returns whether anything changed.
+    /// `waiting` interval from when it started. Returns whether anything changed. A session first seen here is this
+    /// machine's (`Store.host`); `account` fills a session that has none yet.
     static func setStatus(store: Store, id: String, tool: ToolKind, status: String, at: Timestamp, cwd: String?,
-                          detail: String? = nil) throws -> Bool {
-        let row = try store.db.one("SELECT status, status_at, status_detail FROM session WHERE id = ?", [.text(id)]) {
-            ($0.text(0), $0.optReal(1), $0.text(2))
+                          detail: String? = nil, account: String? = nil) throws -> Bool {
+        let row = try store.db.one("SELECT status, status_at, status_detail, account FROM session WHERE id = ?", [.text(id)]) {
+            ($0.text(0), $0.optReal(1), $0.text(2), $0.text(3))
         }
-        if row == nil, let cwd { try store.mergeSession(SessionMeta(id: id, tool: tool, cwd: cwd)) }
-        let (prev, prevAt, prevDetail) = row ?? (nil, nil, nil)
+        if row == nil || (account != nil && row?.3 == nil) {
+            try store.mergeSession(SessionMeta(id: id, tool: tool, cwd: row == nil ? cwd : nil, account: account), host: store.host)
+        }
+        let (prev, prevAt, prevDetail) = row.map { ($0.0, $0.1, $0.2) } ?? (nil, nil, nil)
         // The same state already set without its detail (`claude agents` saw the prompt before its hook came): keep the tool.
         if prev == status, let detail, prevDetail == nil {
             let seq = try store.nextSeq()

@@ -107,20 +107,21 @@ public final class Notifier {
     func limitEvents(now: Double) throws -> [Event] {
         let w = self.w
         var out: [Event] = []
-        for s in try store.latestLimits() {
+        for (s, label) in Accounts.labeled(try store.latestLimits(), now: now, localAccount: config.limitsAccount) {
             if let r = s.resetsAt, r <= now { continue }  // that window is over
-            let crossed = config.thresholds(NotifyConfig.limitCategory(s.tool, s.window)).filter { s.usedPct >= $0 }
+            let crossed = config.thresholds(NotifyConfig.limitCategory(s.tool, s.window), account: s.account).filter { s.usedPct >= $0 }
             guard let top = crossed.last else { continue }
             let window = Double(s.windowMinutes ?? Notifier.defaultMinutes(s.window)) * 60
-            let key = { (t: Double) in "limit:\(s.tool.rawValue):\(s.window):\(Int(t))" }
+            let key = { (t: Double) in "limit:\(Store.limitKey(s)):\(Int(t))" }
+            let who = w.tool(s.tool, account: label)
             let eta = try forecast(s)
             out.append(Event(key: key(top), anchor: s.resetsAt ?? s.ts, tolerance: s.resetsAt == nil ? window : window / 2,
                              at: s.ts, alsoMark: crossed.dropLast().map(key)) {
                 var text = w.t("Сейчас \(w.pct(s.usedPct)).", "Now \(w.pct(s.usedPct)).")
                 if let eta { text += w.t(" Кончится к \(w.clock(eta)) при таком темпе.", " Runs out by \(w.clock(eta)) at this pace.") }
                 if let r = s.resetsAt { text += w.t(" Сброс \(w.when(r, now: now)).", " Resets \(w.when(r, now: now)).") }
-                return Message(title: w.t("\(w.tool(s.tool)): лимит \(w.window(s)) — \(w.pct(top))",
-                                          "\(w.tool(s.tool)): \(w.window(s)) limit — \(w.pct(top))"), text: text,
+                return Message(title: w.t("\(who): лимит \(w.window(s)) — \(w.pct(top))",
+                                          "\(who): \(w.window(s)) limit — \(w.pct(top))"), text: text,
                                priority: top >= 95 ? 5 : 4, tags: ["warning"])
             })
         }
@@ -140,17 +141,23 @@ public final class Notifier {
         let w = self.w
         guard config.limitReset else { return [] }
         var out: [Event] = []
+        // Named like the limit notifications: another account by its name, the default one only beside another's.
+        let others = Set(Accounts.labeled(try store.latestLimits(), now: now, localAccount: nil).compactMap { $0.1 == nil ? nil : $0.0.tool })
         try store.db.query("""
-            SELECT tool, window, resets_at, max(used_pct), max(window_minutes) FROM limit_snapshot
-            WHERE resets_at <= ? AND resets_at > ? GROUP BY tool, window, resets_at
+            SELECT tool, window, resets_at, max(used_pct), max(window_minutes), account FROM limit_snapshot
+            WHERE resets_at <= ? AND resets_at > ? GROUP BY tool, account, window, resets_at
             """, [.real(now), .real(now - 6 * 3600)]) { r in
+            let account = r.text(5) ?? Accounts.defaultName
             guard let tool = ToolKind(rawValue: r.text(0) ?? ""),
-                  let low = config.thresholds(NotifyConfig.limitCategory(tool, r.text(1) ?? "")).first, r.real(3) >= low else { return }
+                  let low = config.thresholds(NotifyConfig.limitCategory(tool, r.text(1) ?? ""), account: account).first,
+                  r.real(3) >= low else { return }
             let s = LimitSnapshot(tool: tool, window: r.text(1) ?? "", usedPct: r.real(3), resetsAt: r.real(2),
-                                  windowMinutes: r.optInt(4), ts: r.real(2))
+                                  windowMinutes: r.optInt(4), ts: r.real(2), account: account)
             let window = Double(s.windowMinutes ?? Notifier.defaultMinutes(s.window)) * 60
-            out.append(Event(key: "reset:\(tool.rawValue):\(s.window)", anchor: r.real(2), tolerance: window / 2, at: r.real(2)) {
-                Message(title: w.t("\(w.tool(tool)): лимит \(w.window(s)) сбросился", "\(w.tool(tool)): \(w.window(s)) limit reset"),
+            let who = w.tool(tool, account: account != Accounts.defaultName || others.contains(tool)
+                                ? Accounts.label(account, localAccount: config.limitsAccount) : nil)
+            out.append(Event(key: "reset:\(Store.limitKey(s))", anchor: r.real(2), tolerance: window / 2, at: r.real(2)) {
+                Message(title: w.t("\(who): лимит \(w.window(s)) сбросился", "\(who): \(w.window(s)) limit reset"),
                         text: w.t("Было \(w.pct(s.usedPct)).", "Was \(w.pct(s.usedPct))."),
                         tags: ["white_check_mark"])
             })
@@ -166,15 +173,19 @@ public final class Notifier {
         var id, tool: String; var title, project: String?; var status: String?; var statusAt, lastAt: Double?
         /// The session that drives it over tmux (`UserTime.driverSQL`); nil = you.
         var drivenBy: String? = nil
+        /// The Claude Code account (`Accounts.tag` after the name).
+        var account: String? = nil
+        var shownProject: String? { project.map { $0 + Accounts.tag(account) } ?? (Accounts.tag(account).isEmpty ? nil : account) }
     }
 
     func session(_ id: String, now: Double) throws -> SessionRow? {
         try store.db.one("""
-            SELECT id, tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at, \(UserTime.driverSQL("session", now: now))
+            SELECT id, tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at, \(UserTime.driverSQL("session", now: now)),
+                   account
             FROM session WHERE id = ?
             """, [.text(id)]) {
             SessionRow(id: $0.text(0) ?? "", tool: $0.text(1) ?? "", title: $0.text(2), project: $0.text(3), status: $0.text(4),
-                       statusAt: $0.optReal(5), lastAt: $0.optReal(6), drivenBy: $0.text(7))
+                       statusAt: $0.optReal(5), lastAt: $0.optReal(6), drivenBy: $0.text(7), account: $0.text(8))
         }
     }
 
@@ -185,13 +196,13 @@ public final class Notifier {
         var rows: [SessionRow] = []
         // The agent must have done something just before (a fresh or resumed session waiting for the first prompt is not news).
         try store.db.query("""
-            SELECT id, tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at FROM session
+            SELECT id, tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at, account FROM session
             WHERE status IN ('waiting_input', 'waiting_permission') AND status_at <= ? AND status_at > ?
               AND last_at >= status_at - 600 AND coalesce(archived, 0) = 0
               AND NOT (status = 'waiting_input' AND \(UserTime.driverSQL("session", now: now)) IS NOT NULL)  -- waits for its driver, not you
             """, [.real(now - wait), .real(now - wait - 86400)]) {
             rows.append(SessionRow(id: $0.text(0) ?? "", tool: $0.text(1) ?? "", title: $0.text(2), project: $0.text(3),
-                                   status: $0.text(4), statusAt: $0.optReal(5), lastAt: $0.optReal(6)))
+                                   status: $0.text(4), statusAt: $0.optReal(5), lastAt: $0.optReal(6), account: $0.text(7)))
         }
         return rows.map { s in
             let since = s.statusAt ?? now
@@ -199,7 +210,7 @@ public final class Notifier {
                 let what = s.status == "waiting_permission" ? w.t("Просит разрешение.", "Asks for permission.")
                     : w.t("Ждёт ответа.", "Waits for your reply.")
                 return Message(title: w.t("Ждёт тебя \(w.dur(now - since))", "Waiting for you \(w.dur(now - since))"),
-                               text: "\(w.name(s.project, s.title)). \(what)", priority: 4, tags: ["hourglass"],
+                               text: "\(w.name(s.shownProject, s.title)). \(what)", priority: 4, tags: ["hourglass"],
                                buttons: Self.resume(s.id, w))
             }
         }
@@ -234,7 +245,7 @@ public final class Notifier {
             // The wait of this same stop is covered by the done (one message, not "done" and 10 min later "waiting").
             out.append(Event(key: "done:\(id)", anchor: anchor, at: doneAt, covers: hookAt.map { ["wait:\(id)": $0] } ?? [:]) {
                 Message(title: w.t("Готово: ", "Done: ") + (s.project ?? w.tool(s.tool)),
-                        text: "\(w.name(s.project, s.title)) — " + w.t("работала \(w.dur(last.length)).", "worked \(w.dur(last.length))."),
+                        text: "\(w.name(s.shownProject, s.title)) — " + w.t("работала \(w.dur(last.length)).", "worked \(w.dur(last.length))."),
                         tags: ["white_check_mark"], buttons: Self.resume(id, w))
             })
         }

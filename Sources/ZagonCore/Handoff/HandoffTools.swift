@@ -12,7 +12,7 @@ import Darwin
 /// the hook, a log written in the last few seconds is taken for the caller's.
 public final class HandoffTools: HandoffService {
     let store: Store?
-    let claudeDir: String, codexHome: String, runDir: String, spoolDir: String
+    let claudeDirs: [String], codexHome: String, runDir: String, spoolDir: String
     let handoffs: HandoffStore
     let cwd: String?
     let startedAt: Timestamp
@@ -21,10 +21,11 @@ public final class HandoffTools: HandoffService {
     let now: () -> Timestamp
 
     /// `store`: for task → sessions (`task_session`); `cwd`: where the client runs (`latest` prefers sessions there).
+    /// `claudeDir`: the default account's `projects` folder; `moreClaudeDirs`: those of the other accounts.
     public init(store: Store?, claudeDir: String, codexHome: String, paths: ZagonPaths = ZagonPaths(),
                 cwd: String? = HandoffTools.currentDirectory(), startedAt: Timestamp = Time.now(),
-                clientPid: Int32? = Sys.clientPid(), now: @escaping () -> Timestamp = Time.now) {
-        self.store = store; self.claudeDir = claudeDir; self.codexHome = codexHome; self.runDir = paths.dir + "/run"
+                clientPid: Int32? = Sys.clientPid(), now: @escaping () -> Timestamp = Time.now, moreClaudeDirs: [String] = []) {
+        self.store = store; self.claudeDirs = [claudeDir] + moreClaudeDirs; self.codexHome = codexHome; self.runDir = paths.dir + "/run"
         self.spoolDir = paths.spool
         self.handoffs = HandoffStore(paths: paths); self.cwd = cwd; self.startedAt = startedAt; self.clientPid = clientPid
         self.now = now
@@ -53,7 +54,7 @@ public final class HandoffTools: HandoffService {
     public func get(_ ref: String) throws -> String {
         if !["latest", "current"].contains(ref), let md = handoffs.get(ref) { return md }
         let target = try resolve(ref, exclude: nil)
-        if let (tool, id, path) = Handoff.find(target.ref, claudeDir: claudeDir, codexHome: codexHome, cwd: cwd, caller: target.caller) {
+        if let (tool, id, path) = Handoff.find(target.ref, claudeDirs: claudeDirs, codexHome: codexHome, cwd: cwd, caller: target.caller) {
             let name = "\(tool.rawValue)-\(Handoff.safeName(id))"
             if let saved = Sys.mtime(handoffs.path(name)), saved >= Sys.mtime(path) ?? .infinity, let md = handoffs.get(name) { return md }
         }
@@ -91,13 +92,13 @@ public final class HandoffTools: HandoffService {
             let (canonical, linked) = try sessionsOf(task)
             // the task's sessions whose logs are still here, without the caller's own
             sessions = linked.filter { s in
-                !target.caller.exclude.contains(Self.native(s)) && Handoff.find(s, claudeDir: claudeDir, codexHome: codexHome) != nil
+                !target.caller.exclude.contains(Self.native(s)) && Handoff.find(s, claudeDirs: claudeDirs, codexHome: codexHome) != nil
             }
             guard !sessions.isEmpty else { throw MCPToolError("no log of a session of task \(canonical) is on this machine") }
             key = canonical
         }
         do {
-            let doc = try Handoff.create(sessions, task: key, claudeDir: claudeDir, codexHome: codexHome, cwd: cwd,
+            let doc = try Handoff.create(sessions, task: key, claudeDirs: claudeDirs, codexHome: codexHome, cwd: cwd,
                                          caller: target.caller)
             return (doc, false)
         } catch let e as Handoff.Failure {

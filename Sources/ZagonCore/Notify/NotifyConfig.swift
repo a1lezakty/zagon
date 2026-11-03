@@ -26,6 +26,9 @@ import Darwin
 ///     codex.week = [80, 95]
 ///     codex.<limit_id> = [80, 95] # Codex premium limits (both of their windows)
 ///
+///     [notify.limits.<account>]   # the same keys for one Claude Code account (`Accounts`, e.g. `corp`); a key
+///     claude.week = [90]          # missing here comes from [notify.limits]
+///
 ///     [telegram]
 ///     token_file = "~/.config/zagon/tg-bot-token"
 ///     chat_id = "123456789"       # the only chat the bot writes to and answers
@@ -47,6 +50,8 @@ public struct NotifyConfig: Sendable, Equatable {
     public var limits: [String: [Double]] = [:]
     public static let defaultLimits: [Double] = [80, 95]
     public var limitReset = true
+    /// `[limits] account`: the label of the default account where several accounts' limits are shown; nil = not set.
+    public var limitsAccount: String?
     public var waitingMinutes = 10.0
     public var longWorkMinutes = 15.0
     /// Minutes after local midnight; nil = off.
@@ -85,10 +90,18 @@ public struct NotifyConfig: Sendable, Equatable {
             return p.hasPrefix("~/") ? home + p.dropFirst() : p
         }
         if let v = b("notify", "enabled") { c.enabled = v }
-        for k in TOMLLite.keys(in: text, section: "notify.limits") {
-            guard let v = TOMLLite.numbers(in: text, section: "notify.limits", key: k) else { continue }
-            c.limits[String(k.filter { $0 != "\"" && $0 != "'" })] = Array(Set(v.filter { $0 >= 50 && $0 <= 100 && $0.truncatingRemainder(dividingBy: 5) == 0 })).sorted()
+        // `[notify.limits]` keys as they are, `[notify.limits.<account>]` ones as `<account>/<key>`.
+        let sections = ["notify.limits"] + text.split(separator: "\n").compactMap { TOMLLite.header($0) }
+            .filter { $0.hasPrefix("notify.limits.") && $0.count > 14 }
+        for sec in sections {
+            let prefix = sec == "notify.limits" ? "" : String(sec.dropFirst(14).filter { $0 != "\"" && $0 != "'" }) + "/"
+            for k in TOMLLite.keys(in: text, section: sec) {
+                guard let v = TOMLLite.numbers(in: text, section: sec, key: k) else { continue }
+                c.limits[prefix + String(k.filter { $0 != "\"" && $0 != "'" })] =
+                    Array(Set(v.filter { $0 >= 50 && $0 <= 100 && $0.truncatingRemainder(dividingBy: 5) == 0 })).sorted()
+            }
         }
+        if let v = s("limits", "account"), !v.isEmpty { c.limitsAccount = v }
         if let v = b("notify", "limit_reset") { c.limitReset = v }
         if let v = n("notify", "waiting_minutes") { c.waitingMinutes = v }
         if let v = n("notify", "long_work_minutes") { c.longWorkMinutes = v }
@@ -113,8 +126,11 @@ public struct NotifyConfig: Sendable, Equatable {
         return c
     }
 
-    /// Thresholds of a limit category, ascending; empty = no notifications for it.
-    public func thresholds(_ category: String) -> [Double] { limits[category] ?? NotifyConfig.defaultLimits }
+    /// Thresholds of a limit category, ascending; empty = no notifications for it. An account other than the default one
+    /// takes its own `[notify.limits.<account>]` key first.
+    public func thresholds(_ category: String, account: String = Accounts.defaultName) -> [Double] {
+        (account == Accounts.defaultName ? nil : limits[account + "/" + category]) ?? limits[category] ?? NotifyConfig.defaultLimits
+    }
 
     /// Category of a stored limit window: `claude.five_hour`, `claude.week`, `codex.five_hour`, `codex.week`,
     /// `codex.<limit_id>` (Codex stores premium windows as `<limit_id>:primary|secondary`).

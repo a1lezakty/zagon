@@ -82,7 +82,7 @@ enum Fmt {
     static func sessionRows<S: Sequence>(_ xs: S) where S.Element == SessionLine {
         for s in xs {
             let id = s.id.split(separator: ":").last.map { String($0.prefix(8)) } ?? s.id
-            let title = s.title ?? s.project ?? "-"
+            let title = (s.title ?? s.project ?? "-") + Accounts.tag(s.account)
             var state = (s.status.map { "  \($0)" } ?? "") + (s.statusDetail.map { " (\($0))" } ?? "")
             if s.status == "waiting_input", let d = s.drivenBy {  // driven over tmux: waits for that session, not you
                 state += " (waits for " + (d.isEmpty ? "another session" : "session " + d) + ")"

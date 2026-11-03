@@ -23,6 +23,8 @@ struct DaemonCommand: ParsableCommand {
             var o = Daemon.Options()
             o.debounce = debounce; o.verbose = verbose; o.healthEvery = healthMinutes * 60
             o.spoolDir = paths.spool; o.codexHome = common.codexDir; o.paths = paths
+            let claudeDir = common.claudeDir
+            o.claudeRoots = { db in Accounts.claudeRoots(defaultRoot: claudeDir, paths: paths, db: db).map(\.root) }
             try Daemon(ingest: common.ingest(store), options: o, log: { log.write($0) }).run {
                 if !noArchive {
                     Daemon.startArchiver(dbPath: common.dataDir + "/zagon.db", dir: common.dataDir + "/archive", log: { log.write($0) })
