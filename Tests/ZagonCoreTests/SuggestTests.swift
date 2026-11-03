@@ -333,3 +333,45 @@ private func h(_ x: Double) -> Double { D0 + x * H }
         #expect(Set(asked).isSubset(of: Set(segs.map(\.id))))
     }
 }
+
+/// Hours are wall-clock: parallel sessions (a leader driving workers) count once in a draft and in the day's total.
+@Suite struct SuggestWallClockTests {
+    /// Three sessions working the same two hours are two hours, not six.
+    @Test func parallelSessionsCountOnce() throws {
+        let x = try SuggestFixture(lang: .en)
+        for s in ["lead", "w1", "w2"] { try x.f.session("claude:" + s, title: "example-project " + s, working: [(h(9), h(11))]) }
+        x.calls.answer = """
+            [{"segment": "S1", "new": "Parser rewrite", "done": "Parser"}, {"segment": "S2", "new": "parser rewrite"},
+             {"segment": "S3", "new": "Parser rewrite"}]
+            """
+        let r = try x.s.suggest(day, now: h(20))
+        #expect(r.drafts.count == 1 && r.drafts[0].stretches.count == 3 && abs(r.drafts[0].workedSec - 2 * H) < 1e-6)
+        #expect(abs(r.workedSec - 2 * H) < 1e-6)
+        let m = try #require(try x.s.message(day, now: h(20)))
+        #expect(m.text.contains("\"Parser rewrite\" — 2 h") && !m.text.contains("6 h"), "\(m.text)")
+    }
+
+    /// Overlapping in part: each suggestion keeps its own session's time; a draft and the total are the union.
+    @Test func partialOverlapIsUnion() throws {
+        let x = try SuggestFixture(lang: .en)
+        let a = try x.tasks.add(title: "Encoder research", key: "PROJ-1")
+        try x.tasks.setStatus(a.id, .inProgress)
+        try x.f.session("claude:s1", title: "encoder gains", working: [(h(9), h(11))])
+        try x.f.session("claude:s2", title: "encoder tests", working: [(h(10), h(12))])
+        try x.f.session("claude:s3", title: "slides", working: [(h(11.5), h(13))])
+        try x.f.session("claude:s4", title: "slides review", working: [(h(12), h(13.5))])
+        x.calls.answer = """
+            [{"segment": "S1", "key": "PROJ-1", "confidence": 0.9, "reason": "encoder"},
+             {"segment": "S2", "key": "PROJ-1", "confidence": 0.9, "reason": "encoder"},
+             {"segment": "S3", "new": "Demo slides"}, {"segment": "S4", "new": "Demo slides"}]
+            """
+        let r = try x.s.suggest(day, now: h(20))
+        #expect(r.items.map(\.key) == ["PROJ-1", "PROJ-1"] && r.items.allSatisfy { abs($0.workedSec - 2 * H) < 1e-6 })
+        #expect(r.drafts.count == 1 && abs(r.drafts[0].workedSec - 2 * H) < 1e-6)   // 11:30–13:30, not 3 h
+        #expect(abs(r.workedSec - 4.5 * H) < 1e-6)                                     // 09:00–13:30, not 7 h
+        #expect(SuggestText.run(r, day: day).contains(" · 4h 30m in all"), "\(SuggestText.run(r, day: day))")
+        let m = try #require(try x.s.message(day, now: h(20)))
+        #expect(m.text.contains("work without a task key, 4 h 30 min in all. Is it this task?")
+                && m.text.contains("\"Demo slides\" — 2 h"), "\(m.text)")
+    }
+}

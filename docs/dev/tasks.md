@@ -228,7 +228,10 @@ keyed time). Per stretch the most confident task not rejected is kept. The AI is
 asked about yet (the asked periods are kept in `suggest:<day>`) that no open suggestion covers, so work going on after
 a call, stretches the size limit left out and the rest after a failed call come later; `--again` drops the open ones
 and asks about all. Open suggestions whose time got any link since are dropped before each run.
-`zagon task suggest [day] [--json] [--again] [--prompt]` (`--json`: the run with its items, drafts, engine, cost, note;
+Times are wall-clock: a suggestion shows its session's working time in the stretch, a new task and the run's total
+(`worked_sec`, in the evening message's first line when it lists two or more) the union of their stretches, so
+parallel sessions (a leader and its workers) count once.
+`zagon task suggest [day] [--json] [--again] [--prompt]` (`--json`: the run with its items, drafts, engine, cost, note, worked_sec;
 `--prompt` prints what the next call would send: no AI call, nothing stored), `zagon task drafts [--json]`, `zagon task
 accept|reject <id…>` (numbers or `N…`), `zagon task jira-projects [--json] [--type-of <KEY>]` (`--type-of`: only the name of the issue
 type a new task gets in that project, for the app's create sheet); MCP `task_suggestions`,
