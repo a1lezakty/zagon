@@ -1,6 +1,16 @@
 /// Schema migrations; `PRAGMA user_version` = number of applied entries. Append only, never edit a shipped entry.
 enum Schema {
-    static let migrations: [String] = [v1, v2, v3, v4, v5, v6, v7, v8]
+    static let migrations: [String] = [v1, v2, v3, v4, v5, v6, v7, v8, v9]
+
+    /// v9: background tasks still running in a Claude session (`bg_tasks`, `Background`; `bg_until` = when the last of
+    /// them stops counting), written by transcript ingest. The main transcripts changed within that cap
+    /// (`UserTime.driverIdle`, 12 h) are recounted once (`recount`, as in v5) so tasks launched before the upgrade show.
+    static let v9 = """
+    ALTER TABLE session ADD COLUMN bg_tasks TEXT;
+    ALTER TABLE session ADD COLUMN bg_until REAL;
+    UPDATE source_file SET recount = 1 WHERE tool = 'claude' AND path NOT LIKE '%/subagents/%'
+      AND coalesce(mtime, 0) >= strftime('%s', 'now') - 43200;
+    """
 
     /// v8: Claude Code accounts (`CLAUDE_CONFIG_DIR`): the account of a session (`session.account`, NULL = unknown or not
     /// Claude) and of a limit reading (`limit_snapshot.account`, part of the key; readings from before are the default

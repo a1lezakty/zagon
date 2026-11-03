@@ -180,7 +180,7 @@ import Testing
                 """)
         }
         let s = try Store(path: dir + "/z.db")
-        #expect(s.userVersion == 8 && s.host == "build-box")
+        #expect(s.userVersion == Store.schemaVersion && s.host == "build-box")
         #expect(try queryRows(s, "SELECT account, used_pct, ts FROM limit_snapshot ORDER BY ts") == [["default", "86.0", "500.0"],
                                                                                                     ["default", "87.0", "600.0"]])
         #expect(try queryRows(s, "SELECT id, host, seq FROM session ORDER BY id") == [["claude:a", "build-box", "11"],

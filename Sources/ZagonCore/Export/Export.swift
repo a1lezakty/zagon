@@ -32,6 +32,8 @@ public enum Export {
         var driver: String?
         /// The Claude Code account (v8, `Accounts`); nil = not known.
         var account: String?
+        /// Background tasks still running (v9, `Background`).
+        var bgTasks: String?, bgUntil: Double?
     }
     struct DayRow: Encodable {
         var tool: String, project: String, model: String
@@ -89,14 +91,16 @@ public enum Export {
         var sessions: [SessionLine] = []
         try db.query("""
             SELECT id, tool, coalesce(host, ?2), project, cwd, git_branch, title, model, started_at, last_at, status, status_at,
-                   user_msgs, archived, seq, status_detail, driver, account FROM session WHERE seq > ?1 ORDER BY seq
+                   user_msgs, archived, seq, status_detail, driver, account, bg_tasks,
+                   bg_until FROM session WHERE seq > ?1 ORDER BY seq
             """, [.int(Int64(since)), .text(store.host)]) { r in
             sessions.append(SessionLine(id: r.text(0) ?? "", tool: r.text(1) ?? "", host: r.text(2), project: r.text(3),
                                         cwd: r.text(4), gitBranch: r.text(5), title: r.text(6), model: r.text(7),
                                         startedAt: r.optReal(8), lastAt: r.optReal(9), status: r.text(10),
                                         statusAt: r.optReal(11), statusDetail: r.text(15), userMsgs: r.int(12),
                                         archived: r.optInt(13).map { $0 != 0 },
-                                        seq: r.int(14), driver: r.text(16), account: r.text(17)))
+                                        seq: r.int(14), driver: r.text(16), account: r.text(17),
+                                        bgTasks: r.text(18), bgUntil: r.optReal(19)))
         }
         for s in sessions {
             try out(s)

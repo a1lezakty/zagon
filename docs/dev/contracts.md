@@ -17,6 +17,7 @@ others, not fail.
 | `ActivityEvent` | the agent did something at `ts` | feeds `working` intervals; `cwd` = the record's working directory (Claude: every transcript line, so sub-agents get their own; Codex: `session_meta.cwd`, then `turn_context.cwd`) |
 | `UserMessage` | the human typed a message at `ts` | starts a turn, counts as a user action (unless a `Relay` says another session typed it, see Time rules); `cwd` as for events; parsers always pass `text`: Ingest puts it into the contentless FTS index (only with `index_prompts`) and extracts task keys from it; it is never stored. Claude: `user` records typed by the human, messages through a channel plugin (`origin.kind = channel`, Telegram…; `channel = true`: always the human's) and messages sent while the agent was working (`attachment` `queued_command`, `commandMode = prompt`, origin `human` / `channel`, or no origin and not a generated prefix such as `<task-notification`; they never become `user` records) |
 | `Relay` | the agent typed into a terminal at `ts` | Claude `Bash` tool calls that run `tmux send-keys` / `send` / `paste-buffer`; `targets` = the session names of their `-t` (lower case, `=`, `:window`, `.pane` cut off), `""` = no `-t` or not a plain name (`$s`, `%3`). Only the targets are kept, never the command |
+| `BackgroundTask` | a background task of a Claude session launched or finished at `ts` | main transcript only. Launch (`until` = when it stops counting: `ts` + 12 h, `UserTime.driverIdle`; a non-persistent Monitor at its `timeoutMs` if sooner) from a `user` record's `toolUseResult`: `backgroundTaskId` (Bash in the background), `isAsync` + `agentId` (async Agent), `taskId` + `persistent` (Monitor). End (`until` nil): a `queue-operation` `enqueue` whose `content` holds `<task-notification>` blocks with a `<task-id>` and a `<status>` (completed / failed / killed …; a Monitor `<event>` without `<status>` is not an end), or a TaskStop result (`toolUseResult.task_id` + `task_type`). |
 | `LimitSnapshot` | subscription limit reading | Claude windows `five_hour` / `seven_day`. Codex: the main limit (`rate_limits.limit_id` absent or `codex`) as `primary` (300 min ≈ 5 h) / `secondary` (10 080 min = week); any other `limit_id` (e.g. `premium`) as `<limit_id>:primary` / `<limit_id>:secondary`. Ingest stores them as readings (`limit_snapshot`, key tool + account + window + ts), not as file contributions. `account` (v8): whose subscription, `default` unless a Claude status line ran under another `CLAUDE_CONFIG_DIR` (Codex: always `default`). |
 
 ## Parsers (`Model/Parsing.swift`)
@@ -156,7 +157,7 @@ Claude Code runs under several accounts on one machine: each `CLAUDE_CONFIG_DIR`
   once another account has readings within 8 days every reading of that tool is labeled (`Claude (corp)`, the
   default one by `[limits] account`, else `default`); another account's readings older than 8 days are left out.
 
-## Tables (schema v8, `Store/Schema.swift`; migrations are append-only)
+## Tables (schema v9, `Store/Schema.swift`; migrations are append-only)
 
 - `source_file` — per-file tail state; `usage_hour`, `tool_use`, `activity`, `user_action`, `fts_doc`, `msg`,
   `relay` carry `file_id`, so one file's contribution can be retracted. `recount` (v5) = 1: count the file again from
@@ -186,10 +187,21 @@ Claude Code runs under several accounts on one machine: each `CLAUDE_CONFIG_DIR`
   driver is live (not `ended`, not archived, active within the last 12 hours: one killed without `SessionEnd` stops
   counting then; `UserTime.driverIdle`) waits for that session, not for you: the live list
   (`LiveSessionInfo.drivenBy`) and `sessions` (`SessionLine.drivenBy`, JSON `driven_by`) carry the driver's title,
-  else its project ("" = neither; `UserTime.driverSQL`); the CLI, the bot and MCP say "waits for session <name>",
+  else its project ("" = neither; `UserTime.driverSQL`); the CLI, the bot and MCP say "driven by <name>" (v9; "waits for session <name>" before),
   the Mac lists it with the idle ones, and no "waiting for you" or "finished" notification is sent for it (its
   driver watches it). The v6 migration also
   drops the Mac's `remote_seq:` cursors, so it pulls its servers' sessions (with their drivers) once again.
+  `bg_tasks` (v9) = background tasks still running (`Background`: `id@launched@until` entries, epoch seconds, space
+  separated), `bg_until` = the latest `until`; written by transcript ingest from `BackgroundTask` (a launch adds, an
+  end removes, entries past their `until` by the batch's last record go), and on a Claude `SessionStart` that is not
+  `compact` by the spool, which drops the entries launched before it (a new process: the old one's tasks died with
+  it; transcripts are read before the spool in a pass). Hooks keep owning `status`. A session `waiting_input` with
+  `bg_until > now` is "working in background" (`LiveSessionInfo.background`, `SessionLine.background` = the number
+  of entries with `until > now`): the CLI, MCP and the bot say "working in background" / «работает в фоне», list it
+  with the working ones, the Mac in its working group, and no "waiting for you" or "finished" notification is sent.
+  Driven without background tasks it is neutral: "driven by <name> · turn ended N min ago" / «под управлением … ·
+  ход окончен N мин». The v9 migration recounts (`recount`) the main Claude transcripts changed in the last 12 h, so
+  tasks launched before the upgrade are known.
 - `activity(kind = working | waiting)`, `user_action(kind = msg | channel | read)`, `user_activity` (derived: your
   time, see Time rules).
 - `relay(file_id, session_id, ts, target)` (v5) — one row per `Relay` target.
@@ -297,8 +309,8 @@ NDJSON on stdout, keys in snake_case, one consistent read snapshot; the Mac app 
   `--since`; `version` is what `zagon --version` prints (`0.1.0`, `dev` for a local build); a zagon without the key
   predates the releases (it has no `zagon update`);
 - `{"type":"session", id, tool, host, project, cwd, git_branch, title, model, started_at, last_at, status, status_at,
-  status_detail, user_msgs, archived, seq, driver, account}` for every session with `seq > since` (missing keys = NULL;
-  `host` NULL is sent as the store's own since v8; `account` v8), each followed
+  status_detail, user_msgs, archived, seq, driver, account, bg_tasks, bg_until}` for every session with `seq > since` (missing keys = NULL;
+  `host` NULL is sent as the store's own since v8; `account` v8; `bg_tasks`, `bg_until` v9: a client before v9 ignores them), each followed
   by `{"type":"activity","session_id","kind","start","end","cwd"}` lines — the session's complete `working` /
   `waiting` intervals, merged per kind and directory (no overlaps inside one; `cwd` missing = not known): on a
   `session` line the client drops every interval it holds for that session and stores the ones that follow (none =
