@@ -20,6 +20,8 @@ public struct LimitReading: Sendable, Equatable {
     public var resetsAt: Timestamp?
     public var windowMinutes: Int?
     public var ts: Timestamp
+    /// Whose subscription (`LimitSnapshot.account`).
+    public var account: String = Accounts.defaultName
     /// Growth in percent per hour over the 15–60 minutes before the reading, same window; nil without an earlier
     /// reading or when the latest reading is over 15 minutes old (nothing is running, so the rate is stale).
     public var pctPerHour: Double?
@@ -31,7 +33,7 @@ extension Query {
         var out: [LimitReading] = []
         for s in try Store.latestLimits(db) {
             var r = LimitReading(tool: s.tool, window: s.window, usedPct: s.usedPct, resetsAt: s.resetsAt,
-                                 windowMinutes: s.windowMinutes, ts: s.ts)
+                                 windowMinutes: s.windowMinutes, ts: s.ts, account: s.account)
             if now - s.ts <= 900, let (pct, ts) = try Store.paceBase(db, s, from: s.ts - 3600, to: s.ts - 900), s.ts > ts {
                 r.pctPerHour = (s.usedPct - pct) / ((s.ts - ts) / 3600)
             }
@@ -45,14 +47,18 @@ extension Query {
 public struct LimitSource: Sendable, Equatable {
     public var tool: ToolKind
     public var window: String
+    /// The reading's account (`LimitSnapshot.account`).
+    public var limitAccount: String = Accounts.defaultName
     /// "" = this store's own readings, else the ssh alias they were imported under (`ExportImport`).
     public var source: String
     /// `[limits] account` of that source; nil = not set.
     public var account: String?
     /// More than one source read this tool's limits within 8 days: the rings may mix two accounts, so say whose they are.
     public var several: Bool
-    public init(tool: ToolKind, window: String, source: String, account: String? = nil, several: Bool) {
+    public init(tool: ToolKind, window: String, source: String, account: String? = nil, several: Bool,
+                limitAccount: String = Accounts.defaultName) {
         self.tool = tool; self.window = window; self.source = source; self.account = account; self.several = several
+        self.limitAccount = limitAccount
     }
 }
 
@@ -73,67 +79,71 @@ extension Query {
         try db.query("SELECT substr(key, 15), value FROM meta WHERE key LIKE 'limit\\_account:%' ESCAPE '\\'") {
             accounts[$0.text(0) ?? ""] = $0.text(1)
         }
-        var out: [LimitSource] = [], recent: [ToolKind: Set<String>] = [:]
+        var out: [LimitSource] = [], recent: [String: Set<String>] = [:]
         for c in try Store.latestLimits(db) {
-            let prefix = "limit_src:\(c.tool.rawValue):\(c.window):"
+            let prefix = "limit_src:\(Store.limitKey(c)):", group = c.tool.rawValue + ":" + c.account
             var best: (source: String, ts: Timestamp, exact: Bool)?
             for (key, ts) in newest where key.hasPrefix(prefix) {
                 let source = String(key.dropFirst(prefix.count)), exact = ts == c.ts
-                if now - ts <= 8 * 86400 { recent[c.tool, default: []].insert(source) }
+                if now - ts <= 8 * 86400 { recent[group, default: []].insert(source) }
                 if let b = best, b.exact || !exact && b.ts >= ts { continue }
                 if !exact {
                     guard let r = c.resetsAt, let rs = try db.one("""
-                        SELECT resets_at FROM limit_snapshot WHERE tool = ? AND window = ? AND ts = ?
-                        """, [.text(c.tool.rawValue), .text(c.window), .real(ts)], { $0.optReal(0) }) ?? nil,
+                        SELECT resets_at FROM limit_snapshot WHERE tool = ? AND window = ? AND ts = ? AND account = ?
+                        """, [.text(c.tool.rawValue), .text(c.window), .real(ts), .text(c.account)], { $0.optReal(0) }) ?? nil,
                           abs(rs - r) < 120 else { continue }
                 }
                 best = (source, ts, exact)
             }
             if let b = best {
-                out.append(LimitSource(tool: c.tool, window: c.window, source: b.source,
-                                       account: b.source.isEmpty ? localAccount : accounts[b.source], several: false))
+                // The label of another account is its name; the default account's is the source's `[limits] account`.
+                let label = c.account != Accounts.defaultName ? c.account : b.source.isEmpty ? localAccount : accounts[b.source]
+                out.append(LimitSource(tool: c.tool, window: c.window, source: b.source, account: label, several: false,
+                                       limitAccount: c.account))
             }
         }
-        for i in out.indices { out[i].several = (recent[out[i].tool]?.count ?? 0) > 1 }
+        for i in out.indices { out[i].several = (recent[out[i].tool.rawValue + ":" + out[i].limitAccount]?.count ?? 0) > 1 }
         return out
     }
 }
 
 extension Query {
-    /// Readings of one window since `since`, oldest first: (ts, used percent).
-    public func limitHistory(tool: ToolKind, window: String, since: Timestamp) throws -> [(ts: Timestamp, pct: Double)] {
+    /// Readings of one window of an account since `since`, oldest first: (ts, used percent).
+    public func limitHistory(tool: ToolKind, window: String, since: Timestamp,
+                             account: String = Accounts.defaultName) throws -> [(ts: Timestamp, pct: Double)] {
         var out: [(ts: Timestamp, pct: Double)] = []
-        try db.query("SELECT ts, used_pct FROM limit_snapshot WHERE tool = ? AND window = ? AND ts >= ? ORDER BY ts",
-                     [.text(tool.rawValue), .text(window), .real(since)]) { out.append(($0.real(0), $0.real(1))) }
+        try db.query("SELECT ts, used_pct FROM limit_snapshot WHERE tool = ? AND window = ? AND account = ? AND ts >= ? ORDER BY ts",
+                     [.text(tool.rawValue), .text(window), .text(account), .real(since)]) { out.append(($0.real(0), $0.real(1))) }
         return out
     }
 }
 
 extension Store {
-    /// The current reading per (tool, window): of its newest window period (`resets_at` within 2 minutes of the latest:
+    /// The current reading per (tool, account, window): of its newest window period (`resets_at` within 2 minutes of the latest:
     /// Codex readings with only `resets_in_seconds` drift by seconds), the highest percent, the newest of equals.
     /// Not simply the newest row: `ts` is when a reading was written, not when it was measured. A Claude Code status
     /// line left open re-sends its last reading every minute with a fresh time (on a busy server one in five rows is
     /// below the current usage), and a Codex rollout may still report a period that has already reset. Usage only grows
     /// within a period, so its highest reading is the latest. A reading without `resets_at` counts as a period of its
     /// own ending at its `ts`: it wins only when newer than the end of every known period.
-    /// ponytail: one account assumed. Readings carry no account, so two accounts (e.g. one per machine) mix: the one
-    /// whose window resets last is shown (`Query.limitSources` says from where); split by an account id once the status
-    /// line or Codex reports one, or by a source column in `limit_snapshot` (schema v8).
+    /// Accounts of one machine are told apart (`account`, from `CLAUDE_CONFIG_DIR`); readings imported from other
+    /// machines under the same account name (`default` on each) still mix: the one whose window resets last is shown
+    /// (`Query.limitSources` says from where).
+    /// Ordered by tool, then the default account first, then the other accounts by name.
     static func latestLimits(_ db: SQLite) throws -> [LimitSnapshot] {
         var out: [LimitSnapshot] = []
         try db.query("""
-            WITH s AS (SELECT tool, window, used_pct, resets_at, window_minutes, ts,
+            WITH s AS (SELECT tool, account, window, used_pct, resets_at, window_minutes, ts,
                               coalesce(resets_at, ts) AS period FROM limit_snapshot),
-                 p AS (SELECT tool, window, max(period) AS period FROM s GROUP BY tool, window)
-            SELECT tool, window, used_pct, resets_at, window_minutes, ts FROM (
-              SELECT s.*, row_number() OVER (PARTITION BY s.tool, s.window ORDER BY s.used_pct DESC, s.ts DESC) AS n
-              FROM s JOIN p ON s.tool = p.tool AND s.window = p.window AND s.period >= p.period - 120)
-            WHERE n = 1 ORDER BY tool, window
-            """) { r in
+                 p AS (SELECT tool, account, window, max(period) AS period FROM s GROUP BY tool, account, window)
+            SELECT tool, window, used_pct, resets_at, window_minutes, ts, account FROM (
+              SELECT s.*, row_number() OVER (PARTITION BY s.tool, s.account, s.window ORDER BY s.used_pct DESC, s.ts DESC) AS n
+              FROM s JOIN p ON s.tool = p.tool AND s.account = p.account AND s.window = p.window AND s.period >= p.period - 120)
+            WHERE n = 1 ORDER BY tool, account <> ?1, account, window
+            """, [.text(Accounts.defaultName)]) { r in
             guard let tool = ToolKind(rawValue: r.text(0) ?? "") else { return }
             out.append(LimitSnapshot(tool: tool, window: r.text(1) ?? "", usedPct: r.real(2), resetsAt: r.optReal(3),
-                                     windowMinutes: r.optInt(4), ts: r.real(5)))
+                                     windowMinutes: r.optInt(4), ts: r.real(5), account: r.text(6) ?? Accounts.defaultName))
         }
         return out
     }
@@ -144,11 +154,12 @@ extension Store {
     static func paceBase(_ db: SQLite, _ s: LimitSnapshot, from: Timestamp, to: Timestamp) throws -> (pct: Double, ts: Timestamp)? {
         try db.one("""
             WITH w AS (SELECT used_pct, ts FROM limit_snapshot
-                       WHERE tool = ?1 AND window = ?2 AND abs(coalesce(resets_at, 0) - coalesce(?3, 0)) < 120
+                       WHERE tool = ?1 AND window = ?2 AND account = ?7 AND abs(coalesce(resets_at, 0) - coalesce(?3, 0)) < 120
                          AND ts >= coalesce(?3 - ?6 * 60, ?4))
             SELECT (SELECT max(used_pct) FROM w WHERE ts <= f.ts), f.ts
             FROM (SELECT min(ts) AS ts FROM w WHERE ts >= ?4 AND ts <= ?5) f WHERE f.ts IS NOT NULL
-            """, [.text(s.tool.rawValue), .text(s.window), .of(s.resetsAt), .real(from), .real(to), .of(s.windowMinutes)]) {
+            """, [.text(s.tool.rawValue), .text(s.window), .of(s.resetsAt), .real(from), .real(to), .of(s.windowMinutes),
+                  .text(s.account)]) {
             ($0.real(0), $0.real(1))
         }
     }
@@ -159,19 +170,19 @@ extension Store {
 /// `Store.latestLimits`); a reading of a period before the current one is a late report and is skipped. A reading without
 /// `resets_at` belongs to the current period while that has not reset, else it opens a new one.
 struct LimitUsage {
-    let tool: String, window: String
+    let tool: String, window: String, account: String
     /// The usage now and its period's reset; nil before any reading.
     private(set) var pct: Double?, resets: Timestamp?
 
     /// The usage just before `t`: the highest reading of the newest period seen before it.
     /// ponytail: scans the window's whole history before `t`; bound it once `limit_snapshot` holds years.
-    init(_ db: SQLite, tool: String, window: String, before t: Timestamp) throws {
-        self.tool = tool; self.window = window
+    init(_ db: SQLite, tool: String, window: String, before t: Timestamp, account: String = Accounts.defaultName) throws {
+        self.tool = tool; self.window = window; self.account = account
         if let (p, r) = try db.one("""
-            SELECT max(used_pct), resets_at FROM limit_snapshot WHERE tool = ?1 AND window = ?2 AND ts < ?3
+            SELECT max(used_pct), resets_at FROM limit_snapshot WHERE tool = ?1 AND window = ?2 AND account = ?4 AND ts < ?3
               AND coalesce(resets_at, ts) >= (SELECT max(coalesce(resets_at, ts)) FROM limit_snapshot
-                                              WHERE tool = ?1 AND window = ?2 AND ts < ?3) - 120
-            """, [.text(tool), .text(window), .real(t)], { ($0.optReal(0), $0.optReal(1)) }), let p {
+                                              WHERE tool = ?1 AND window = ?2 AND account = ?4 AND ts < ?3) - 120
+            """, [.text(tool), .text(window), .real(t), .text(account)], { ($0.optReal(0), $0.optReal(1)) }), let p {
             pct = p; resets = r
         }
     }
@@ -195,8 +206,9 @@ struct LimitUsage {
     mutating func read(_ db: SQLite, from: Timestamp, to: Timestamp,
                        _ each: (Timestamp, Double?, LimitUsage, Bool) -> Void) throws {
         try db.query("""
-            SELECT ts, used_pct, resets_at FROM limit_snapshot WHERE tool = ? AND window = ? AND ts >= ? AND ts < ? ORDER BY ts
-            """, [.text(tool), .text(window), .real(from), .real(to)]) { r in
+            SELECT ts, used_pct, resets_at FROM limit_snapshot WHERE tool = ? AND window = ? AND account = ? AND ts >= ? AND ts < ?
+            ORDER BY ts
+            """, [.text(tool), .text(window), .text(account), .real(from), .real(to)]) { r in
             let before = pct
             if let new = add(r.real(1), resets: r.optReal(2), at: r.real(0)) { each(r.real(0), before, self, new) }
         }
@@ -224,6 +236,8 @@ public struct LiveSessionInfo: Sendable, Equatable {
     /// When the current state began.
     public var since: Timestamp
     public var lastAt: Timestamp?
+    /// The Claude Code account (`Accounts`; `default` = `~/.claude`); nil = not known or not Claude.
+    public var account: String?
     /// The id without the `<tool>:` prefix (what `claude --resume` / `codex resume` take).
     public var nativeId: String { id.split(separator: ":", maxSplits: 1).last.map(String.init) ?? id }
 }
@@ -242,7 +256,7 @@ extension Query {
         try db.query("""
             SELECT id, tool, title, \(Projects.sessionSQL("session")), cwd, host, model, status, status_at, last_at,
                    (SELECT max(start) FROM activity a WHERE a.session_id = session.id AND a.kind = 'working'),
-                   \(UserTime.driverSQL("session", now: now))
+                   \(UserTime.driverSQL("session", now: now)), account
             FROM session
             WHERE max(coalesce(last_at, 0), coalesce(status_at, 0)) >= ?1 AND coalesce(archived, 0) = 0
               AND coalesce(status, '') <> 'ended'
@@ -265,7 +279,7 @@ extension Query {
             }
             out.append(LiveSessionInfo(id: r.text(0) ?? "", tool: r.text(1) ?? "", title: r.text(2), project: r.text(3),
                                        cwd: r.text(4), host: r.text(5), model: r.text(6), state: state, drivenBy: r.text(11),
-                                       since: since, lastAt: lastAt))
+                                       since: since, lastAt: lastAt, account: r.text(12)))
         }
         return out.sorted { $0.since < $1.since }
     }

@@ -173,6 +173,8 @@ public struct Words: Sendable, Equatable {
     }
 
     func tool(_ t: ToolKind) -> String { Ru.tool(t) }
+    /// `Claude (corp)`: the tool and the label of the account (`Accounts.labeled`), nil = the tool alone.
+    func tool(_ t: ToolKind, account: String?) -> String { Ru.tool(t) + (account.map { " (\($0))" } ?? "") }
     func tool(_ t: String) -> String { Ru.tool(t) }
 
     /// `5 h` / `weekly` / `N min` from the window length.

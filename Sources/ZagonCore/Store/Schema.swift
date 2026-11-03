@@ -1,6 +1,25 @@
 /// Schema migrations; `PRAGMA user_version` = number of applied entries. Append only, never edit a shipped entry.
 enum Schema {
-    static let migrations: [String] = [v1, v2, v3, v4, v5, v6, v7]
+    static let migrations: [String] = [v1, v2, v3, v4, v5, v6, v7, v8]
+
+    /// v8: Claude Code accounts (`CLAUDE_CONFIG_DIR`): the account of a session (`session.account`, NULL = unknown or not
+    /// Claude) and of a limit reading (`limit_snapshot.account`, part of the key; readings from before are the default
+    /// account's). Sessions known only from hooks were stored without a host: they are this machine's, and get a new
+    /// `seq` so a client pulls them again. A Mac pulls its servers once more (`remote_seq:`) to get the accounts.
+    static let v8 = """
+    ALTER TABLE session ADD COLUMN account TEXT;
+    CREATE TABLE limit_snapshot_v8(
+      tool TEXT NOT NULL, window TEXT NOT NULL, used_pct REAL NOT NULL, resets_at REAL, window_minutes INTEGER,
+      ts REAL NOT NULL, account TEXT NOT NULL DEFAULT 'default', PRIMARY KEY(tool, account, window, ts)) WITHOUT ROWID;
+    INSERT INTO limit_snapshot_v8(tool, window, used_pct, resets_at, window_minutes, ts)
+      SELECT tool, window, used_pct, resets_at, window_minutes, ts FROM limit_snapshot;
+    DROP TABLE limit_snapshot;
+    ALTER TABLE limit_snapshot_v8 RENAME TO limit_snapshot;
+    INSERT INTO meta(key, value) VALUES('seq', 1) ON CONFLICT(key) DO UPDATE SET value = value + 1;
+    UPDATE session SET host = (SELECT value FROM meta WHERE key = 'host'), seq = (SELECT value FROM meta WHERE key = 'seq')
+      WHERE host IS NULL AND EXISTS (SELECT 1 FROM meta WHERE key = 'host');
+    DELETE FROM meta WHERE key LIKE 'remote_seq:%';
+    """
 
     /// v7: where a task key came from (`how`): NULL = typed in the message, 'brief' = the title of a brief the
     /// message points to. The Claude transcripts of the last 14 days are recounted once (`recount`, as in v5) so their

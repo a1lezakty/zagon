@@ -47,7 +47,7 @@ enum UserTime {
         }
         var acts: [(session: String, ts: Timestamp, kind: String)] = []
         try db.query("""
-            SELECT a.session_id, a.ts, a.kind FROM user_action a LEFT JOIN session s ON s.id = a.session_id
+            SELECT DISTINCT a.session_id, a.ts, a.kind FROM user_action a LEFT JOIN session s ON s.id = a.session_id
             WHERE coalesce(s.host, ?1) = ?1 ORDER BY a.session_id, a.ts
             """, [.text(host)]) { acts.append(($0.text(0) ?? "", $0.real(1), $0.text(2) ?? "")) }
         var points: [Timestamp] = [], messages: [String: Int] = [:], drivers: [String: (by: String, named: Bool)] = [:]

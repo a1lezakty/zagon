@@ -17,7 +17,8 @@ struct MCPCommand: ParsableCommand {
         if let e = try common.worklog(store).jiraSetupError { log("mcp: jira: \(e)") }
         let tasks = TaskTools(store: store, worklog: { try common.worklog(store) }, suggester: { try common.suggester(store) },
                               refresh: refresh, exportDir: common.dataDir + "/exports", log: log)
-        let handoff = HandoffTools(store: store, claudeDir: common.claudeDir, codexHome: common.codexDir)
+        let handoff = HandoffTools(store: store, claudeDir: common.claudeDir, codexHome: common.codexDir,
+                                   moreClaudeDirs: common.claudeRoots(store).dropFirst().map(\.root))
         let server = ZagonMCP.server(store: store, exportDir: common.dataDir + "/exports", refresh: refresh,
                                      handoff: handoff, tasks: tasks, paths: ZagonPaths(dir: common.dataDir), log: log)
         // stdout carries protocol lines only.

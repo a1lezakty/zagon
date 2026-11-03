@@ -30,13 +30,19 @@ public enum HookSpool {
                                         "permission_mode", "transcript_path", "source"]
     static let maxField = 4096
 
-    /// Builds the spool line for a hook call; nil if the payload has no session id. `pid`: the client process
+    /// `CLAUDE_CONFIG_DIR` of this process (the Claude Code account a hook or the status line runs for); nil = not set.
+    public static var claudeConfigDir: String? { Sys.env("CLAUDE_CONFIG_DIR").flatMap { $0.isEmpty ? nil : $0 } }
+
+    /// Builds the spool line for a hook call; nil if the payload has no session id. A Claude hook line carries
+    /// `config_dir` (`claudeConfigDir`, the session's account) when it is set. `pid`: the client process
     /// (`Sys.clientPid`), read only by handoff to tell which conversation a `zagon mcp` belongs to; never stored.
-    public static func hookLine(tool: String, event: String, payload: [UInt8], ts: Double, pid: Int32? = nil) -> String? {
+    public static func hookLine(tool: String, event: String, payload: [UInt8], ts: Double, pid: Int32? = nil,
+                                configDir: String? = claudeConfigDir) -> String? {
         guard let f = JValue.topLevelStrings(payload, keys: hookKeys), let sid = f["session_id"], !sid.isEmpty else { return nil }
         var m: [JValue.Member] = [.init("kind", .string("hook")), .init("tool", .string(String(tool.prefix(32)))),
                                   .init("event", .string(String(event.prefix(64)))), .init("ts", .number(fmt(ts)))]
         if let pid { m.append(.init("pid", .number("\(pid)"))) }
+        if tool == "claude", let d = configDir { m.append(.init("config_dir", .string(String(d.prefix(maxField))))) }
         for k in ["session_id", "cwd", "hook_event_name", "notification_type", "tool_name", "permission_mode",
                   "transcript_path", "source"] {
             if let v = f[k] { m.append(.init(k, .string(String(v.prefix(maxField))))) }

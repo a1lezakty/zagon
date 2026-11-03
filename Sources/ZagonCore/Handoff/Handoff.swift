@@ -42,14 +42,22 @@ public enum Handoff {
     /// prefers sessions started in `cwd`.
     public static func find(_ arg: String, claudeDir: String, codexHome: String, cwd: String? = nil,
                             caller: Caller = Caller()) -> (ToolKind, String, String)? {
-        if arg == "latest" { return latest(claudeDir: claudeDir, codexHome: codexHome, cwd: cwd, caller: caller) }
+        find(arg, claudeDirs: [claudeDir], codexHome: codexHome, cwd: cwd, caller: caller)
+    }
+
+    /// `claudeDirs`: the `projects` folders of every Claude Code account (`Accounts.claudeRoots`).
+    public static func find(_ arg: String, claudeDirs: [String], codexHome: String, cwd: String? = nil,
+                            caller: Caller = Caller()) -> (ToolKind, String, String)? {
+        if arg == "latest" { return latest(claudeDirs: claudeDirs, codexHome: codexHome, cwd: cwd, caller: caller) }
         var tool: ToolKind?, id = arg
         if arg.hasPrefix("claude:") { tool = .claude; id = String(arg.dropFirst(7)) }
         if arg.hasPrefix("codex:") { tool = .codex; id = String(arg.dropFirst(6)) }
         guard !id.isEmpty, id == safeName(id) else { return nil }
         if tool != .codex {
-            for p in Sys.listDir(claudeDir) where Sys.exists("\(claudeDir)/\(p)/\(id).jsonl") {
-                return (.claude, id, "\(claudeDir)/\(p)/\(id).jsonl")
+            for claudeDir in claudeDirs {
+                for p in Sys.listDir(claudeDir) where Sys.exists("\(claudeDir)/\(p)/\(id).jsonl") {
+                    return (.claude, id, "\(claudeDir)/\(p)/\(id).jsonl")
+                }
             }
         }
         if tool != .claude {
@@ -65,12 +73,14 @@ public enum Handoff {
 
     /// The most recently written main transcript of either tool; among those started in `cwd` when there are any
     /// (another project may be busy at the same time).
-    static func latest(claudeDir: String, codexHome: String, cwd: String?, caller: Caller = Caller()) -> (ToolKind, String, String)? {
+    static func latest(claudeDirs: [String], codexHome: String, cwd: String?, caller: Caller = Caller()) -> (ToolKind, String, String)? {
         var all: [(Double, ToolKind, String, String)] = []
-        for p in Sys.listDir(claudeDir) {
-            for f in Sys.listDir(claudeDir + "/" + p) where f.hasSuffix(".jsonl") {
-                let path = "\(claudeDir)/\(p)/\(f)"
-                all.append((Sys.mtime(path) ?? 0, .claude, String(f.dropLast(6)), path))
+        for claudeDir in claudeDirs {
+            for p in Sys.listDir(claudeDir) {
+                for f in Sys.listDir(claudeDir + "/" + p) where f.hasSuffix(".jsonl") {
+                    let path = "\(claudeDir)/\(p)/\(f)"
+                    all.append((Sys.mtime(path) ?? 0, .claude, String(f.dropLast(6)), path))
+                }
             }
         }
         for rel in Ingest.walk(codexHome + "/sessions") where CodexSource.isRollout(rel) {
@@ -265,8 +275,13 @@ public enum Handoff {
     /// `cwd`: where the command runs (`latest` prefers sessions started there).
     public static func create(_ sessions: [String], task: String? = nil, claudeDir: String, codexHome: String,
                               cwd: String? = nil, caller: Caller = Caller()) throws -> Document {
+        try create(sessions, task: task, claudeDirs: [claudeDir], codexHome: codexHome, cwd: cwd, caller: caller)
+    }
+
+    public static func create(_ sessions: [String], task: String? = nil, claudeDirs: [String], codexHome: String,
+                              cwd: String? = nil, caller: Caller = Caller()) throws -> Document {
         let digests = try sessions.map { arg -> SessionDigest in
-            guard let (tool, id, path) = find(arg, claudeDir: claudeDir, codexHome: codexHome, cwd: cwd, caller: caller) else {
+            guard let (tool, id, path) = find(arg, claudeDirs: claudeDirs, codexHome: codexHome, cwd: cwd, caller: caller) else {
                 throw Failure.notFound(arg)
             }
             return SessionDigest.read(tool: tool, id: id, path: path)

@@ -12,7 +12,7 @@ public struct NewTaskDraft: Codable, Sendable, Equatable {
     public var confidence: Double
     /// The stretches of work it is for that no link covers now.
     public var stretches: [DraftStretch]
-    /// Working time of those stretches.
+    /// Working time of those stretches, wall-clock (their union: parallel sessions count once).
     public var workedSec: Double = 0
 }
 
@@ -102,9 +102,8 @@ extension TaskSuggester {
                 try store.db.query("SELECT title, project FROM session WHERE id = ?", [.text(d.stretches[i].sessionId)]) {
                     d.stretches[i].sessionTitle = $0.text(0); d.stretches[i].project = $0.text(1)
                 }
-                d.workedSec += try TaskLinker.working(store.db, d.stretches[i].sessionId)
-                    .reduce(0) { $0 + max(0, min($1.end, d.stretches[i].end) - max($1.start, d.stretches[i].start)) }
             }
+            d.workedSec = try worked(d.stretches.map { ($0.sessionId, $0.start, $0.end) })
             out.append(d)
         }
         return out.sorted { ($0.day, $0.workedSec) > ($1.day, $1.workedSec) }

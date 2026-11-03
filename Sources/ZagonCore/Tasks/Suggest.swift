@@ -82,6 +82,8 @@ public struct TaskSuggester {
         public var segments = 0, asked = 0
         public var seconds = 0.0, costUSD: Double?, inputTokens: Int?, outputTokens: Int?
         public var note: String?
+        /// Working time of the items and drafts together, wall-clock: parallel sessions count once.
+        public var workedSec = 0.0
     }
 
     /// The day's suggestions. The AI is asked only about work it was not asked about yet and no open suggestion
@@ -104,7 +106,9 @@ public struct TaskSuggester {
         let prev = try meta(metaKey)
         let p = try prepare(day, from: from, to: to, now: now, skip: try skipPeriods(day, from: from, to: to), relink: false)
         guard !p.segs.isEmpty else {
-            return Run(items: try list(day), drafts: try drafts(day), made: false, engine: prev?["engine"]?.string ?? "none", segments: 0)
+            var r = Run(items: try list(day), drafts: try drafts(day), made: false, engine: prev?["engine"]?.string ?? "none", segments: 0)
+            r.workedSec = try worked(r)
+            return r
         }
         var run = Run(items: [], made: true, engine: "none", segments: p.segs.count, asked: p.asked.count)
         if p.missing > 0 { run.note = "\(p.missing) of your Jira issues of those days are not read yet (zagon task import reads them)" }
@@ -176,7 +180,25 @@ public struct TaskSuggester {
         }
         run.items = try list(day)
         run.drafts = try drafts(day)
+        run.workedSec = try worked(run)
         return run
+    }
+
+    /// Working time of stretches (a session's work inside [start, end)) as the union of their intervals: parallel
+    /// sessions, and a stretch stored twice, count once, so a total never exceeds the wall clock.
+    func worked(_ stretches: [(String, Timestamp, Timestamp)]) throws -> Double {
+        var bySession: [String: [Interval]] = [:], all: [Interval] = []
+        for (sid, a, b) in stretches {
+            if bySession[sid] == nil { bySession[sid] = try TaskLinker.working(store.db, sid) }
+            all += bySession[sid]!.map { Interval(max($0.start, a), min($0.end, b)) }
+        }
+        return Intervals.merge(all).reduce(0) { $0 + $1.length }
+    }
+
+    /// The run's items and drafts together.
+    func worked(_ r: Run) throws -> Double {
+        let items: [(String, Timestamp, Timestamp)] = r.items.map { ($0.sessionId, $0.start, $0.end) }
+        return try worked(items + r.drafts.flatMap { $0.stretches.map { ($0.sessionId, $0.start, $0.end) } })
     }
 
     /// Work not to ask about: open suggestions of the day and periods the AI was asked about already.
@@ -277,10 +299,7 @@ public struct TaskSuggester {
                                   sessionId: sid, sessionTitle: r.text(7), project: r.text(8),
                                   start: start, end: r.real(4), workedSec: 0, confidence: w?.0 ?? 0, reason: w?.1 ?? "", done: w?.2 ?? ""))
         }
-        for i in out.indices {
-            out[i].workedSec = try TaskLinker.working(store.db, out[i].sessionId)
-                .reduce(0) { $0 + max(0, min($1.end, out[i].end) - max($1.start, out[i].start)) }
-        }
+        for i in out.indices { out[i].workedSec = try worked([(out[i].sessionId, out[i].start, out[i].end)]) }
         return out.sorted { $0.workedSec > $1.workedSec }
     }
 
@@ -760,8 +779,10 @@ public struct TaskSuggester {
         let r = try suggest(day, now: now)
         guard !r.items.isEmpty || !r.drafts.isEmpty else { return nil }
         let w = words, q = { (s: String) in w.t("«\(s)»", "\"\(s)\"") }
-        var lines = ["\(w.date(day)): " + (r.items.isEmpty ? w.t("работа без задачи. Завести новую?", "work without a task. Make a new one?")
-                                                           : w.t("работа без ключа задачи. Это она?", "work without a task key. Is it this task?"))]
+        // Each line is one session's time; parallel sessions overlap, so the total is the union, not their sum.
+        let all = r.items.count + r.drafts.count < 2 ? "" : w.t(", всего \(w.dur(r.workedSec))", ", \(w.dur(r.workedSec)) in all")
+        var lines = ["\(w.date(day)): " + (r.items.isEmpty ? w.t("работа без задачи\(all). Завести новую?", "work without a task\(all). Make a new one?")
+                                                           : w.t("работа без ключа задачи\(all). Это она?", "work without a task key\(all). Is it this task?"))]
         for s in r.items {
             lines.append("#\(s.id) \(s.key) — \(w.dur(s.workedSec)), \(w.clock(s.start))–\(w.clock(s.end)), "
                          + q(Self.clip(60)(s.sessionTitle ?? s.project ?? s.sessionId))

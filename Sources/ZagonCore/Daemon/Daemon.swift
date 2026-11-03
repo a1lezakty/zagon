@@ -40,6 +40,11 @@ public final class Daemon {
         public var healthEvery = 600.0
         /// config.toml: when its time zone changes (`zagon tz`, MCP, the bot) the service restarts in the new zone.
         public var paths: ZagonPaths?
+        /// The Claude Code transcript roots with their accounts (`root<TAB>account`) that should be read now
+        /// (`Accounts.claudeRoots`); when they differ from `startRoots`, the ones the daemon started with (a hook
+        /// reported a new `CLAUDE_CONFIG_DIR`, `[accounts]` changed), it restarts in place to read them. nil = never checked.
+        public var claudeRoots: (@Sendable (SQLite) -> [String])?
+        public var startRoots: [String] = []
         public init() {}
     }
 
@@ -143,7 +148,8 @@ public final class Daemon {
         watchRoots()
         var health = Health(store: store)
         log("watching \(w.watched.count) directories")
-        var zoneCheck = 0.0
+        var zoneCheck = 0.0, rootCheck = 0.0
+        let started = Set(options.startRoots)
         while true {
             // config.toml is not watched (the database next to it changes all the time): a zone set by the CLI or MCP
             // is seen at the next wake-up, at most 10 s away.
@@ -182,6 +188,16 @@ public final class Daemon {
                     if !dirty.isEmpty { try? apply(dirty, lost: lost) }
                     Daemon.restart(p, log: log)
                     zoneCheck = Time.monotonic() + 600  // only reached when the restart failed
+                }
+            }
+            if let roots = options.claudeRoots, due == nil, Time.monotonic() >= rootCheck {
+                rootCheck = Time.monotonic() + 10
+                let now = Set(roots(store.db))
+                if now != started {
+                    log("accounts: Claude Code roots \(now.sorted().map { $0.replacingOccurrences("\t", " = ") }.joined(separator: ", ")), restarting")
+                    Settings.restart()
+                    log("accounts: restart failed (errno \(errno)); new roots are read after a manual restart")
+                    rootCheck = Time.monotonic() + 600
                 }
             }
             if health.due(every: options.healthEvery) {

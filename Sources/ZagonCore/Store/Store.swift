@@ -65,8 +65,8 @@ public final class Store {
     public func mergeSession(_ m: SessionMeta, host: String? = nil) throws {
         let seq = try nextSeq()
         try db.run("""
-            INSERT INTO session(id, tool, host, project, cwd, git_branch, title, title_rank, model, archived, seq)
-            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, CASE WHEN ?7 IS NULL THEN 0 ELSE ?8 END, ?9, ?11, ?10)
+            INSERT INTO session(id, tool, host, project, cwd, git_branch, title, title_rank, model, archived, account, seq)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, CASE WHEN ?7 IS NULL THEN 0 ELSE ?8 END, ?9, ?11, ?12, ?10)
             ON CONFLICT(id) DO UPDATE SET
               host = coalesce(session.host, excluded.host),
               project = coalesce(excluded.project, session.project),
@@ -76,32 +76,43 @@ public final class Store {
               title_rank = CASE WHEN excluded.title IS NOT NULL AND ?8 >= session.title_rank THEN ?8 ELSE session.title_rank END,
               model = coalesce(excluded.model, session.model),
               archived = coalesce(excluded.archived, session.archived),
+              account = coalesce(excluded.account, session.account),
               seq = excluded.seq
             """, [.text(m.id), .text(m.tool.rawValue), .of(host), .of(m.project), .of(m.cwd), .of(m.gitBranch),
                   .of(m.title), .int(Int64(m.titleRank)), .of(m.model), .int(Int64(seq)),
-                  .of(m.archived.map { $0 ? 1 : 0 })])
+                  .of(m.archived.map { $0 ? 1 : 0 }), .of(m.account)])
     }
 
     /// Live status from hooks: `working` | `waiting_permission` | `waiting_input` | `ended` (free text, short).
-    /// `detail` says what it is about (the tool name for `waiting_permission`); nil clears it.
+    /// `detail` says what it is about (the tool name for `waiting_permission`); nil clears it. A session new here is
+    /// this machine's (`host`): hooks run where the session runs.
     public func setStatus(sessionId: String, tool: ToolKind, status: String, at: Timestamp, detail: String? = nil) throws {
         let seq = try nextSeq()
         try db.run("""
-            INSERT INTO session(id, tool, status, status_at, status_detail, seq) VALUES(?1, ?2, ?3, ?4, ?6, ?5)
+            INSERT INTO session(id, tool, host, status, status_at, status_detail, seq) VALUES(?1, ?2, ?7, ?3, ?4, ?6, ?5)
             ON CONFLICT(id) DO UPDATE SET status = excluded.status, status_at = excluded.status_at,
               status_detail = excluded.status_detail, seq = excluded.seq
             WHERE session.status_at IS NULL OR excluded.status_at >= session.status_at
-            """, [.text(sessionId), .text(tool.rawValue), .text(status), .real(at), .int(Int64(seq)), .of(detail)])
+            """, [.text(sessionId), .text(tool.rawValue), .text(status), .real(at), .int(Int64(seq)), .of(detail), .text(host)])
     }
 
     /// `source`: "" = this store's own reading, else the alias it was imported under (`ExportImport`). The newest `ts` of
-    /// each source is kept in `meta` (`limit_src:<tool>:<window>:<source>`) for `Query.limitSources`.
+    /// each source is kept in `meta` (`limit_src:<Store.limitKey>:<source>`) for `Query.limitSources`.
     public func addLimitSnapshot(_ s: LimitSnapshot, source: String = "") throws {
-        try db.run("INSERT OR REPLACE INTO limit_snapshot VALUES(?, ?, ?, ?, ?, ?)",
-                   [.text(s.tool.rawValue), .text(s.window), .real(s.usedPct), .of(s.resetsAt), .of(s.windowMinutes), .real(s.ts)])
+        try db.run("""
+            INSERT OR REPLACE INTO limit_snapshot(tool, window, used_pct, resets_at, window_minutes, ts, account)
+            VALUES(?, ?, ?, ?, ?, ?, ?)
+            """, [.text(s.tool.rawValue), .text(s.window), .real(s.usedPct), .of(s.resetsAt), .of(s.windowMinutes), .real(s.ts),
+                  .text(s.account)])
         try db.run("""
             INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2 WHERE ?2 > meta.value
-            """, [.text("limit_src:\(s.tool.rawValue):\(s.window):\(source)"), .real(s.ts)])
+            """, [.text("limit_src:\(Store.limitKey(s)):\(source)"), .real(s.ts)])
+    }
+
+    /// `<tool>:<window>` of a reading, `<tool>:<account>/<window>` for an account other than the default one (the keys
+    /// of the default account stay as they were before accounts).
+    public static func limitKey(_ s: LimitSnapshot) -> String {
+        s.account == Accounts.defaultName ? "\(s.tool.rawValue):\(s.window)" : "\(s.tool.rawValue):\(s.account)/\(s.window)"
     }
 
     /// The current reading per (tool, window), see `Store.latestLimits(_:)`.

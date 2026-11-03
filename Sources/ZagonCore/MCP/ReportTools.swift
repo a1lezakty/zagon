@@ -15,15 +15,18 @@ public enum ZagonMCP {
                               now: @escaping () -> Timestamp = Time.now,
                               log: @escaping (String) -> Void = { _ in }) -> MCPServer {
         let r = ReportTools(store: store, exportDir: exportDir, refresh: refresh, tasks: tasks, now: now, log: log)
+        r.localAccount = paths.flatMap(Settings.limitsAccount)
         return MCPServer(tools: r.tools + ServiceTools.tools(handoff: handoff, tasks: tasks) + (paths.map { SettingsTools.tools($0, store: store) } ?? []),
                          prompts: [ServiceTools.resume(handoff)], log: log)
     }
 }
 
 extension ZagonMCP {
-    /// The text of the `limits` tool (also printed by `zagon today`).
-    public static func limitsText(store: Store, now: Timestamp = Time.now()) throws -> String {
-        try ReportTools(store: store, exportDir: "", refresh: nil, tasks: nil, now: { now }, log: { _ in }).limits(MCPArgs(.object([])))
+    /// The text of the `limits` tool (also printed by `zagon today`). `localAccount`: `[limits] account`.
+    public static func limitsText(store: Store, now: Timestamp = Time.now(), localAccount: String? = nil) throws -> String {
+        let r = ReportTools(store: store, exportDir: "", refresh: nil, tasks: nil, now: { now }, log: { _ in })
+        r.localAccount = localAccount
+        return try r.limits(MCPArgs(.object([])))
     }
 }
 
@@ -37,6 +40,8 @@ final class ReportTools {
     let tasks: TaskService?
     let now: () -> Timestamp
     let log: (String) -> Void
+    /// `[limits] account`: the default account's label beside another account's limits.
+    var localAccount: String?
 
     init(store: Store, exportDir: String, refresh: (() throws -> Void)?, tasks: TaskService?, now: @escaping () -> Timestamp,
          log: @escaping (String) -> Void) {
@@ -114,8 +119,8 @@ final class ReportTools {
                 + "Claude Code 2.1.80+ on Pro/Max), Codex limits from its session files."
         }
         let t = now()
-        return try all.map { s in
-            var line = "\(Ru.tool(s.tool)) \(Self.window(s.window, s.windowMinutes)): "
+        return try Accounts.labeled(all, now: t, localAccount: localAccount).map { s, label in
+            var line = "\(Ru.tool(s.tool))\(label.map { " (\($0))" } ?? "") \(Self.window(s.window, s.windowMinutes)): "
             guard let r = s.resetsAt else { return line + "\(Txt.pct(s.usedPct)) used (reading \(Txt.ago(t - s.ts)))" }
             if r <= t {
                 return line + "window reset at \(Txt.when(r, now: t)); last reading before it \(Txt.pct(s.usedPct)), "
@@ -196,7 +201,7 @@ final class ReportTools {
     }
 
     func line(_ s: SessionLine, _ x: SessionExtra, _ t: Timestamp) -> String {
-        var parts = ["\(s.tool) \(Txt.shortId(s.id))", s.title.map { "\"\(Txt.oneLine($0, 60))\"" } ?? "(untitled)"]
+        var parts = ["\(s.tool)\(Accounts.tag(s.account)) \(Txt.shortId(s.id))", s.title.map { "\"\(Txt.oneLine($0, 60))\"" } ?? "(untitled)"]
         parts.append((s.project ?? "?") + (s.gitBranch.map { " (\($0))" } ?? ""))
         if let st = s.status {
             var label = ["waiting_input": "waiting for input", "waiting_permission": "waiting for permission"][st] ?? st
@@ -262,7 +267,7 @@ final class ReportTools {
         if !r.sessions.isEmpty {
             out.append("top sessions:")
             for s in r.sessions.prefix(8) {
-                out.append("- \(s.tool) \(Txt.shortId(s.id)) \(s.title.map { "\"\(Txt.oneLine($0, 60))\"" } ?? "(untitled)") · "
+                out.append("- \(s.tool)\(Accounts.tag(s.account)) \(Txt.shortId(s.id)) \(s.title.map { "\"\(Txt.oneLine($0, 60))\"" } ?? "(untitled)") · "
                            + "\(s.project ?? "?") · \(Txt.tokens(s.tokens.total)) tokens, working \(Txt.dur(s.workingSec))")
             }
         }

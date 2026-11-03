@@ -43,9 +43,12 @@ struct HandoffCommand: ParsableCommand {
     func note(_ s: String) { Sys.writeAll(fd: 2, Array((s + "\n").utf8)) }
 
     func run() throws {
-        var doc = try Handoff.create(sessions, task: task, claudeDir: claudeDir, codexHome: codexDir,
-                                     cwd: HandoffTools.currentDirectory())
         let paths = ZagonPaths()
+        // The other accounts' transcripts too (`[accounts]`, folders hooks reported); the database only read.
+        let db = Sys.exists(paths.dir + "/zagon.db") ? try? SQLite(path: paths.dir + "/zagon.db", readOnly: true) : nil
+        let dirs = Accounts.claudeRoots(defaultRoot: claudeDir, paths: paths, db: db).map(\.root)
+        var doc = try Handoff.create(sessions, task: task, claudeDirs: dirs, codexHome: codexDir,
+                                     cwd: HandoffTools.currentDirectory())
         if ai {
             if let s = Handoff.compress(doc.markdown, tool: aiTool, runDir: paths.dir + "/run") { doc.markdown = s }
             else { note("--ai: \(aiTool) gave no usable result; using the summary built without AI") }

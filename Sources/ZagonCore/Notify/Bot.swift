@@ -130,9 +130,10 @@ public final class Bot {
         let n = Notifier(store: store, config: NotifyConfig(), channels: [])
         var lines: [String] = []
         var newest = 0.0
-        for s in try store.latestLimits() {
+        let local = paths.flatMap(Settings.limitsAccount)
+        for (s, label) in Accounts.labeled(try store.latestLimits(), now: now, localAccount: local) {
             let over = s.resetsAt.map { $0 <= now } ?? false
-            var l = "\(w.tool(s.tool)) \(w.window(s)): " + (over ? w.t("сброшен", "reset") : w.pct(s.usedPct))
+            var l = "\(w.tool(s.tool, account: label)) \(w.window(s)): " + (over ? w.t("сброшен", "reset") : w.pct(s.usedPct))
             if let r = s.resetsAt, !over { l += w.t(" · сброс ", " · resets ") + w.when(r, now: now) }
             if !over, let eta = try n.forecast(s) { l += w.t("\n  кончится к \(w.clock(eta)) при таком темпе", "\n  runs out by \(w.clock(eta)) at this pace") }
             lines.append(l)
@@ -148,7 +149,8 @@ public final class Bot {
     func sessions(now: Double) throws -> String {
         var lines: [String] = []
         try store.db.query("""
-            SELECT tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at, \(UserTime.driverSQL("session", now: now))
+            SELECT tool, title, \(Projects.sessionSQL("session")), status, status_at, last_at, \(UserTime.driverSQL("session", now: now)),
+                   account
             FROM session WHERE coalesce(archived, 0) = 0 AND coalesce(status, '') <> 'ended' AND max(coalesce(status_at, 0), coalesce(last_at, 0)) > ?
             ORDER BY CASE WHEN status = 'waiting_permission' OR (status = 'waiting_input' AND \(UserTime.driverSQL("session", now: now)) IS NULL)
                      THEN 0 WHEN status = 'working' THEN 1 ELSE 2 END,
@@ -168,7 +170,7 @@ public final class Bot {
             case "working": state = w.t("▶ работает", "▶ working")
             default: state = "· " + w.t("\(w.dur(now - (r.optReal(5) ?? since))) назад", "\(w.dur(now - (r.optReal(5) ?? since))) ago")
             }
-            lines.append("\(state) · \(w.name(r.text(2), r.text(1)))")
+            lines.append("\(state) · \(w.name(r.text(2), r.text(1)))" + Accounts.tag(r.text(7)))
         }
         return lines.isEmpty ? w.t("За сутки сессий не было.", "No sessions in the last 24 hours.") : lines.joined(separator: "\n")
     }

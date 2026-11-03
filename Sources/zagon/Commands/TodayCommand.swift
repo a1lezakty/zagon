@@ -10,7 +10,7 @@ struct TodayCommand: ParsableCommand {
         let r = try Reports(store: store).day(Time.dayString(Time.now()))
         if report.json { try emit(r); return }
         Fmt.day(r)
-        for (i, l) in try ZagonMCP.limitsText(store: store).split(separator: "\n").enumerated() {
+        for (i, l) in try ZagonMCP.limitsText(store: store, localAccount: Settings.limitsAccount(ZagonPaths(dir: common.dataDir))).split(separator: "\n").enumerated() {
             print((i == 0 ? "limits     " : "           ") + l)
         }
     }
