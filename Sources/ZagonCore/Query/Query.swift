@@ -119,6 +119,9 @@ extension Query {
 }
 
 extension Store {
+    /// See `latestLimits`: how much later a reading of an earlier-ending period must come to put an older one out.
+    static let superseded = 600.0
+
     /// The current reading per (tool, account, window): of its newest window period (`resets_at` within 2 minutes of the latest:
     /// Codex readings with only `resets_in_seconds` drift by seconds), the highest percent, the newest of equals.
     /// Not simply the newest row: `ts` is when a reading was written, not when it was measured. A Claude Code status
@@ -129,12 +132,20 @@ extension Store {
     /// Accounts of one machine are told apart (`account`, from `CLAUDE_CONFIG_DIR`); readings imported from other
     /// machines under the same account name (`default` on each) still mix: the one whose window resets last is shown
     /// (`Query.limitSources` says from where).
+    /// A reading is out of the series once a running period (`resets_at` after its own `ts`) that resets earlier than
+    /// its own was read `superseded` seconds or more after it: one account's periods only move forward, so it belongs
+    /// to another series (another account's 5-hour window, mixed in by a zagon before 0.1.6 and imported by a Mac, would
+    /// otherwise stay current until it resets). A late report of a period that has already reset supersedes nothing.
     /// Ordered by tool, then the default account first, then the other accounts by name.
     static func latestLimits(_ db: SQLite) throws -> [LimitSnapshot] {
         var out: [LimitSnapshot] = []
         try db.query("""
-            WITH s AS (SELECT tool, account, window, used_pct, resets_at, window_minutes, ts,
-                              coalesce(resets_at, ts) AS period FROM limit_snapshot),
+            WITH a AS (SELECT tool, account, window, used_pct, resets_at, window_minutes, ts,
+                              coalesce(resets_at, ts) AS period,
+                              min(CASE WHEN resets_at > ts THEN resets_at END) OVER (PARTITION BY tool, account, window
+                                ORDER BY ts RANGE BETWEEN \(superseded) FOLLOWING AND UNBOUNDED FOLLOWING) AS later
+                       FROM limit_snapshot),
+                 s AS (SELECT * FROM a WHERE later IS NULL OR later >= period - 120),
                  p AS (SELECT tool, account, window, max(period) AS period FROM s GROUP BY tool, account, window)
             SELECT tool, window, used_pct, resets_at, window_minutes, ts, account FROM (
               SELECT s.*, row_number() OVER (PARTITION BY s.tool, s.account, s.window ORDER BY s.used_pct DESC, s.ts DESC) AS n

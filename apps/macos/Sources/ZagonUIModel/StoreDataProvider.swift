@@ -233,9 +233,9 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
         return p
     }
 
-    /// No data at all (the local store did not open).
-    public static func empty() -> StoreDataProvider {
-        let p = StoreDataProvider(store: try! Store(path: ":memory:"))
+    /// No data at all (the local store did not open); `now` fixed for tests.
+    public static func empty(now: Date? = nil) -> StoreDataProvider {
+        let p = StoreDataProvider(store: try! Store(path: ":memory:"), now: now)
         p.isReady = true
         return p
     }

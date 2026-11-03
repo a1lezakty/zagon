@@ -57,6 +57,29 @@ import Testing
         #expect(r.usedPct == 2 && abs((r.pctPerHour ?? 0) - 3) < 1e-9)  // from 1 %, not from the 50 % hours before
     }
 
+    /// Another account's window mixed into one series (a zagon before 0.1.6 kept both accounts as one; a Mac imported
+    /// that as its default account): its later reset must not keep it current once this account's readings go on
+    /// without it. Seen live: the other account's 5 hours (resets 12:10) stuck over this one's (11:10) for an hour.
+    @Test func anotherSeriesWithALaterResetIsPutOutByNewerReadings() throws {
+        let s = try Store(path: ":memory:")
+        let other = T0 + 3 * hour, mine = T0 + 2 * hour
+        try add(s, 30, at: T0 - 40 * minute, resets: other); try add(s, 31, at: T0 - 30 * minute, resets: other)
+        try add(s, 8, at: T0 - 25 * minute, resets: mine)
+        // Within ten minutes both stand: the later reset is shown, as before.
+        #expect(try five(s, now: T0 - 25 * minute)?.usedPct == 31)
+        try add(s, 9, at: T0 - 5 * minute, resets: mine); try add(s, 10, at: T0, resets: mine)
+        let r = try #require(try five(s, now: T0 + minute))
+        #expect(r.usedPct == 10 && r.resetsAt == mine)
+        // That account read again: it is current again (its newest reading is not put out).
+        try add(s, 33, at: T0 + 2 * minute, resets: other)
+        #expect(try five(s, now: T0 + 3 * minute)?.usedPct == 33)
+        // A late report of a period that has already reset puts nothing out.
+        let t = try Store(path: ":memory:")
+        try add(t, 40, at: T0, resets: T0 + hour)
+        try add(t, 90, at: T0 + 20 * minute, resets: T0 - minute)
+        #expect(try five(t, now: T0 + 21 * minute)?.usedPct == 40)
+    }
+
     /// A pace starts from the usage at its first reading, not from that reading when it is an older one re-sent.
     @Test func paceIgnoresAnOldReadingReSentAtItsStart() throws {
         let s = try Store(path: ":memory:"), resets = T0 + 150 * minute
