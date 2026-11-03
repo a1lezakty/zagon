@@ -180,7 +180,7 @@ struct Timeline: View {
     func lane(_ l: LaneVM) -> some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(l.title).font(.system(size: 13, weight: .medium)).foregroundColor(Z.text).lineLimit(1)
+                SessionTitle(title: l.title, tag: l.tag)
                 Text(l.host).font(.system(size: 11)).foregroundColor(Z.muted).lineLimit(1)
             }
             .padding(.trailing, 12)

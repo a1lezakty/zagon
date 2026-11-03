@@ -191,7 +191,8 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
         }
     }
 
-    /// This Mac: `~/.zagon/zagon.db` fed by `~/.claude/projects`, the Codex home and `~/.zagon/spool`.
+    /// This Mac: `~/.zagon/zagon.db` fed by `~/.claude/projects` (and the other Claude Code accounts' folders,
+    /// `Accounts.claudeRoots`), the Codex home and `~/.zagon/spool`.
     ///
     /// The database's days are cut in `timezone` of config.toml when set (`zagon tz`), as the CLI does: a scan in
     /// another zone would rebuild every day, and the app and the CLI would take turns at it. The zone chosen in the
@@ -202,12 +203,23 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
         try FileManager.default.createDirectory(atPath: paths.dir, withIntermediateDirectories: true)
         let writer = try Store(path: paths.dir + "/zagon.db")
         let codex = CodexSource.defaultHome()
-        let ingest = Ingest(store: writer, sources: [ClaudeSource.spec(root: paths.home + "/.claude/projects")]
-                            + CodexSource.specs(codexHome: codex) + CursorSource.specs(paths: paths))
+        // Every Claude Code account's transcripts: `[accounts]` and the folders hooks reported (`Accounts.claudeRoots`);
+        // read again on each pass, so a new account is scanned from the pass after its first hook.
+        func roots() -> [(root: String, account: String)] {
+            Accounts.claudeRoots(defaultRoot: paths.home + "/.claude/projects", paths: paths, db: writer.db)
+        }
+        func make(_ roots: [(root: String, account: String)]) -> Ingest {
+            Ingest(store: writer, sources: roots.map { ClaudeSource.spec(root: $0.root, account: $0.account) }
+                   + CodexSource.specs(codexHome: codex) + CursorSource.specs(paths: paths))
+        }
+        func key(_ roots: [(root: String, account: String)]) -> [String] { roots.map { $0.root + "\n" + $0.account } }
+        var known = roots(), ingest = make(known)
         let p = StoreDataProvider(store: try Store(path: paths.dir + "/zagon.db"), writer: writer, host: ingest.host) {
             if baseZone(paths) {
                 Task { @MainActor in NotificationCenter.default.post(name: .NSSystemTimeZoneDidChange, object: nil) }
             }
+            let now = roots()
+            if key(now) != key(known) { known = now; ingest = make(now) }
             let s = try ingest.scan()
             let cursor = CursorHeaders.sync(store: writer, paths: paths)
             if cursor { try ingest.update(paths: [CursorHeaders.file(paths)]) }
@@ -296,28 +308,34 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
 
     // MARK: menu bar
 
+    /// The rings: the default Claude Code account's readings (`~/.claude`; the only one before accounts). The other
+    /// accounts' with a reading within 8 days (`Accounts.labeled`) go to `Limits.others`.
     public func limits() -> Limits {
         read(Limits()) {
             let all = try query.limits(now: now.timeIntervalSince1970)
             // Whose reading each is, said only with more than one source; a failed read loses only the labels.
             let sources = (try? query.limitSources(now: now.timeIntervalSince1970,
                                                    localAccount: Settings.limitsAccount(paths))) ?? []
-            func window(_ tool: ToolKind, _ name: String) -> LimitWindow? {
-                guard let r = all.first(where: { $0.tool == tool && $0.window == name }) else { return nil }
+            func window(_ tool: ToolKind, _ name: String, _ account: String) -> LimitWindow? {
+                guard let r = all.first(where: { $0.tool == tool && $0.window == name && $0.account == account }) else { return nil }
                 let reset = r.resetsAt ?? r.ts + Double((r.windowMinutes ?? 0) * 60)
-                let from = sources.first { $0.tool == tool && $0.window == name && $0.several }
+                // The sources of the default account's rings; another account's line is named by its account.
+                let from = account != Accounts.defaultName ? nil
+                    : sources.first { $0.tool == tool && $0.window == name && $0.limitAccount == account && $0.several }
                     .map { LimitFrom(server: $0.source.isEmpty ? nil : $0.source, account: $0.account) }
                 return LimitWindow(usedPct: r.usedPct, resetsAt: Self.date(reset), pctPerHour: r.pctPerHour,
                                    tool: tool == .codex ? .codex : .claude, readAt: Self.date(r.ts), from: from)
             }
             // For `AILimits.weekAlone`: week readings over a minute after the 5-hour one was due (a reset's own reading
             // lands within seconds of it); a failed read keeps both rings.
-            func ai(_ tool: ToolKind, _ five: String, _ week: String) -> AILimits {
-                var a = AILimits(fiveHour: window(tool, five), week: window(tool, week))
+            func ai(_ tool: ToolKind, _ account: String = Accounts.defaultName) -> AILimits {
+                let (five, week) = tool == .codex ? ("primary", "secondary") : ("five_hour", "seven_day")
+                var a = AILimits(fiveHour: window(tool, five, account), week: window(tool, week, account))
                 guard a.week != nil, let f = a.fiveHour, let due = a.fiveDue(at: now) else { return a }
                 func run(after: Date, upTo: Double = .greatestFiniteMagnitude) -> (Double, Double)? {
-                    try? query.db.one("SELECT min(ts), max(ts) FROM limit_snapshot WHERE tool = ? AND window = ? AND ts > ? AND ts <= ?",
-                                      [.text(tool.rawValue), .text(week), .real(after.timeIntervalSince1970 + 60), .real(upTo)]) { r in
+                    try? query.db.one("""
+                        SELECT min(ts), max(ts) FROM limit_snapshot WHERE tool = ? AND account = ? AND window = ? AND ts > ? AND ts <= ?
+                        """, [.text(tool.rawValue), .text(account), .text(week), .real(after.timeIntervalSince1970 + 60), .real(upTo)]) { r in
                         r.optReal(0).map { ($0, r.real(1)) }
                     } ?? nil
                 }
@@ -330,10 +348,19 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 }
                 return a
             }
-            var l = Limits(claude: ai(.claude, "five_hour", "seven_day"), codex: ai(.codex, "primary", "secondary"))
-            // For `Limits.claudeHint`; a failed read loses only the hint.
-            try? query.db.query("SELECT max(last_at) FROM session WHERE tool = 'claude' AND last_at >= ?",
-                                [.real(now.timeIntervalSince1970 - 7 * 86400)]) { r in l.claudeSeen = r.optReal(0).map(Self.date) }
+            var l = Limits(claude: ai(.claude), codex: ai(.codex))
+            var listed = Set<String>()
+            for r in all where r.account != Accounts.defaultName && now.timeIntervalSince1970 - r.ts <= 8 * 86400
+                && (r.tool == .claude || r.tool == .codex) && listed.insert(r.tool.rawValue + ":" + r.account).inserted {
+                l.others.append(AccountLimits(account: r.account, tool: r.tool == .codex ? .codex : .claude, limits: ai(r.tool, r.account)))
+            }
+            // For `Limits.claudeHint`: the default account's sessions (unknown = before accounts); a failed read loses only
+            // the hint.
+            try? query.db.query("""
+                SELECT max(last_at) FROM session WHERE tool = 'claude' AND last_at >= ? AND coalesce(account, ?) = ?
+                """, [.real(now.timeIntervalSince1970 - 7 * 86400), .text(Accounts.defaultName), .text(Accounts.defaultName)]) { r in
+                l.claudeSeen = r.optReal(0).map(Self.date)
+            }
             // A few small files, only under the hint and at most once a minute; a failure loses only the hint.
             if l.claudeHint(at: now) {
                 if editors.map({ abs(Date().timeIntervalSince($0.at)) >= 60 }) ?? true {
@@ -348,8 +375,9 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
     /// The editors' settings changed (`zagon editor-panels`, connect): the next `limits()` reads them again.
     public func forgetEditors() { queue.sync { editors = nil } }
 
-    // ponytail: the pace history mixes sources: with two accounts it runs through both accounts' readings of the window
-    // (the rings say whose the current one is, `Query.limitSources`). Exact: a source column in `limit_snapshot` (schema v8).
+    // ponytail: the pace history is the default account's but mixes sources: a server's default account and this Mac's run
+    // through one history (the rings say whose the current reading is, `Query.limitSources`). Exact: a source column in
+    // `limit_snapshot`.
     public func limitHistory(_ kind: LimitKind) -> [LimitPoint] {
         read([]) {
             let windows: [(ToolKind, String)] = kind == .fiveHour ? [(.claude, "five_hour"), (.codex, "primary")]
@@ -376,7 +404,7 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 return LiveSession(id: s.id, title: Self.title(s.title, s.project, s.id), host: host,
                                    tool: Tool(rawValue: s.tool) ?? .claude, model: Self.modelName(s.model), status: status,
                                    since: Self.date(s.since), command: command(tool: s.tool, id: s.nativeId, cwd: s.cwd, host: host),
-                                   drivenBy: s.drivenBy, server: host == localHost ? nil : host)
+                                   drivenBy: s.drivenBy, server: host == localHost ? nil : host, account: s.account)
             }
         }
     }
@@ -428,11 +456,12 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
             func rows(_ xs: [UsageLine], name: (String) -> String = { $0 }) -> [UsageRow] {
                 xs.map { UsageRow(name($0.name), tokens: $0.tokens, cost: $0.cost) }
             }
+            let kept = try kept(key), (branches, accounts) = try sessionInfo(d.lanes.map(\.id))
             let lanes = d.lanes.map { l in
                 Lane(title: Self.title(l.title, l.project, l.id), host: shown(l.host),
-                     intervals: l.intervals.map { Interval(Self.date($0.start), Self.date($0.end), waiting: $0.waiting) })
+                     intervals: l.intervals.map { Interval(Self.date($0.start), Self.date($0.end), waiting: $0.waiting) },
+                     account: accounts[l.id])
             }
-            let kept = try kept(key), branches = try branches(d.lanes.map(\.id))
             var hostProjects: [String: [DoneProject]] = [:]
             for h in Set(d.lanes.map { shown($0.host) }) {
                 var part = d
@@ -440,7 +469,7 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 // The day's price of a project is not split by machine: none for one worked on several.
                 let elsewhere = Set(d.lanes.filter { shown($0.host) != h }.map { $0.project ?? "" })
                 part.byProject = d.byProject.filter { !elsewhere.contains($0.name) }
-                hostProjects[h] = Self.projects(part, branches: branches)
+                hostProjects[h] = Self.projects(part, branches: branches, accounts: accounts)
             }
             return DayData(
                 day: start, totals: Totals(sessionSec: d.sessionSec, userSec: d.userSec, tokens: d.tokens.total, cost: d.cost),
@@ -448,7 +477,7 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 weekPctStart: d.weekPctStart, weekPctEnd: d.weekPctEnd, lanes: lanes,
                 usage: [.project: rows(d.byProject), .model: rows(d.byModel, name: Self.modelName), .agent: rows(d.byAgent),
                         .tool: d.byTool.map { UsageRow($0.name, tokens: $0.count, cost: 0) }, .host: rows(d.byHost) { shown($0.isEmpty ? nil : $0) }],
-                doc: kept?.doc, projects: Self.projects(d, branches: branches),
+                doc: kept?.doc, projects: Self.projects(d, branches: branches, accounts: accounts),
                 summaryInfo: kept.map { SummaryInfo(engine: $0.engine, at: $0.at, weekPct: nil, sources: ($0.doc.hosts ?? []).map(shown)) },
                 hostProjects: hostProjects,
                 cursorSec: d.lanes.filter { $0.id.hasPrefix("cursor:") }
@@ -457,15 +486,16 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
     }
 
     /// The day by project without a written summary: its sessions with their working time and branch, most time first;
-    /// the price is the project's (tokens count for the directory they were spent in).
-    static func projects(_ d: DayDetail, branches: [String: String]) -> [DoneProject] {
+    /// the price is the project's (tokens count for the directory they were spent in). A session of another Claude Code
+    /// account says so after its title (`Accounts.tag`).
+    static func projects(_ d: DayDetail, branches: [String: String], accounts: [String: String] = [:]) -> [DoneProject] {
         var out: [String: DoneProject] = [:]
         for l in d.lanes {
             let sec = l.intervals.filter { !$0.waiting }.reduce(0) { $0 + $1.end - $1.start }
             let p = l.project ?? ""
             out[p, default: DoneProject(p, sec: 0, cost: 0, sessions: [])].sec += sec
-            out[p]?.sessions.append(DoneSession(l.title ?? String(l.id.split(separator: ":").last?.prefix(8) ?? ""),
-                                                branch: branches[l.id], sec: sec))
+            out[p]?.sessions.append(DoneSession((l.title ?? String(l.id.split(separator: ":").last?.prefix(8) ?? ""))
+                                                + Accounts.tag(accounts[l.id]), branch: branches[l.id], sec: sec))
         }
         for u in d.byProject { out[u.name]?.cost = u.cost }
         return out.values.map { p in
@@ -475,14 +505,16 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
         }.sorted { ($0.name.isEmpty ? 1 : 0, -$0.sec, $0.name) < ($1.name.isEmpty ? 1 : 0, -$1.sec, $1.name) }
     }
 
-    /// `session.git_branch` of these sessions (none for a detached HEAD or outside git).
-    func branches(_ ids: [String]) throws -> [String: String] {
-        var out: [String: String] = [:]
+    /// `session.git_branch` (none for a detached HEAD or outside git) and `session.account` of these sessions.
+    func sessionInfo(_ ids: [String]) throws -> (branches: [String: String], accounts: [String: String]) {
+        var out: (branches: [String: String], accounts: [String: String]) = ([:], [:])
         guard !ids.isEmpty else { return out }
         // ponytail: one bound value per session of the day; chunks if a day ever nears SQLite's 32766 variables.
-        try query.db.query("SELECT id, git_branch FROM session WHERE id IN (\(ids.map { _ in "?" }.joined(separator: ",")))",
+        try query.db.query("SELECT id, git_branch, account FROM session WHERE id IN (\(ids.map { _ in "?" }.joined(separator: ",")))",
                            ids.map { .text($0) }) { r in
-            if let id = r.text(0), let b = r.text(1), !b.isEmpty, b != "HEAD" { out[id] = b }
+            guard let id = r.text(0) else { return }
+            if let b = r.text(1), !b.isEmpty, b != "HEAD" { out.branches[id] = b }
+            out.accounts[id] = r.text(2)
         }
         return out
     }

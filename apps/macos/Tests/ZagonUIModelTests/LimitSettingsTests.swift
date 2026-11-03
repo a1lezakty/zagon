@@ -30,6 +30,26 @@ final class LimitSettingsTests: XCTestCase {
         XCTAssertEqual(Limits(fiveHour: nil, week: LimitWindow(usedPct: 5, resetsAt: soon, tool: .codex)).codex.week?.usedPct, 5)
     }
 
+    /// A second Claude Code account: the rings and the icon stay the default account's, the account gets a line under
+    /// them and its session a tag; with one account nothing changes.
+    func testOtherAccounts() {
+        var p = MockDataProvider(lang: .en, timeZone: utc)
+        let f = Fmt(lang: .en, timeZone: utc, now: p.now)
+        let one = MainVM(p, f)
+        XCTAssertTrue(one.accounts.isEmpty)
+        XCTAssertTrue((one.waiting + one.working + one.idle).allSatisfy { $0.tag.isEmpty })
+        p.otherAccounts = true
+        let two = MainVM(p, f)
+        XCTAssertEqual([two.five?.pct, two.week?.pct], [one.five?.pct, one.week?.pct])
+        XCTAssertEqual(MenuBarVM(p.limits(), f), MenuBarVM(MockDataProvider(lang: .en, timeZone: utc).limits(), f))
+        XCTAssertEqual(two.accounts.map(\.name), ["Claude · corp"])
+        XCTAssertEqual(two.accounts.first?.used, "5h 23% · week 58%")
+        XCTAssertEqual(two.accounts.first?.reset, "resets at 15:30")
+        XCTAssertEqual(two.accounts.first?.warn, false)
+        XCTAssertEqual(two.working.filter { !$0.tag.isEmpty }.map { $0.title + $0.tag }, ["cli-tool — parser (corp)"])
+        XCTAssertEqual(MainVM(p, Fmt(lang: .ru, timeZone: utc, now: p.now)).accounts.first?.used, "5 ч 23 % · неделя 58 %")
+    }
+
     /// The status item: a pair of rings for one AI, a ring-in-ring per AI for two; the tip names the AIs.
     func testMenuBar() {
         var p = MockDataProvider(lang: .ru, timeZone: utc)

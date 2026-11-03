@@ -109,10 +109,22 @@ public struct AILimits: Sendable {
     }
 }
 
-/// The limits of Claude and Codex, each AI on its own.
+/// Another Claude Code account's limits (`CLAUDE_CONFIG_DIR`, see `Accounts`): a line under the rings.
+public struct AccountLimits: Sendable {
+    public var account: String
+    public var tool: Tool
+    public var limits: AILimits
+    public init(account: String, tool: Tool = .claude, limits: AILimits) {
+        self.account = account; self.tool = tool; self.limits = limits
+    }
+}
+
+/// The limits of Claude and Codex, each AI on its own: the default account's (the rings, the icon).
 public struct Limits: Sendable {
     public var claude: AILimits
     public var codex: AILimits
+    /// The other accounts with a reading within 8 days, by AI and name; empty with one account.
+    public var others: [AccountLimits] = []
     /// When a Claude session was last active, within the last 7 days; nil = none.
     public var claudeSeen: Date?
     /// Where the setting that brings Claude's limits from an editor's panel (`claudeCode.claudeProcessWrapper`) stands
@@ -239,10 +251,13 @@ public struct LiveSession: Sendable, Identifiable {
     public var drivenBy: String?
     /// The ssh alias of the server it runs on; nil = this Mac.
     public var server: String?
+    /// The Claude Code account (`Accounts`); nil = unknown or not Claude.
+    public var account: String?
     public init(id: String, title: String, host: String, tool: Tool = .claude, model: String, status: SessionStatus,
-                since: Date, command: String, drivenBy: String? = nil, server: String? = nil) {
+                since: Date, command: String, drivenBy: String? = nil, server: String? = nil, account: String? = nil) {
         self.id = id; self.title = title; self.host = host; self.tool = tool; self.model = model
         self.status = status; self.since = since; self.command = command; self.drivenBy = drivenBy; self.server = server
+        self.account = account
     }
 }
 
@@ -277,8 +292,10 @@ public struct Lane: Sendable {
     public var title: String
     public var host: String
     public var intervals: [Interval]
-    public init(title: String, host: String, intervals: [Interval]) {
-        self.title = title; self.host = host; self.intervals = intervals
+    /// The Claude Code account (`Accounts`); nil = unknown or not Claude.
+    public var account: String?
+    public init(title: String, host: String, intervals: [Interval], account: String? = nil) {
+        self.title = title; self.host = host; self.intervals = intervals; self.account = account
     }
 }
 
