@@ -110,6 +110,7 @@ struct SettingsScreen: View {
                     app.monoIcon = $0 == 1
                 }
             }
+            CheckRow(title: f.t("settings.view.othersAt80"), on: app.iconOthersAt80) { app.iconOthersAt80.toggle() }
             Text(f.t("settings.view.note")).font(.system(size: 12)).foregroundColor(Z.muted)
                 .fixedSize(horizontal: false, vertical: true)
             colors(f)

@@ -8,7 +8,7 @@ import ZagonUIModel
 /// the outer ring a little fainter so the two rims read apart. A warning keeps the ring apart from the others: from
 /// 80 % its digits turn red, from 95 % the ring too. The track is the bar's own colour, faint. An AI without a 5-hour
 /// window shows its week ring alone, the week's number inside (`MenuBarVM.AI.weekOnly`). Another Claude Code account
-/// at 80 % or over follows as a ring-in-ring with its higher number inside (`MenuBarVM.accounts`).
+/// follows as a ring-in-ring with its higher number inside, next to the default account (`MenuBarVM.accounts`, `row`).
 struct MenuBarLabel: View {
     let vm: MenuBarVM
     var colored = true
@@ -20,12 +20,14 @@ struct MenuBarLabel: View {
     var body: some View {
         HStack(spacing: 4) {
             if vm.nested {
-                ForEach(vm.ais.indices, id: \.self) { nested(vm.ais[$0]) }
-            } else if let ai = vm.ais.first {
-                if !ai.weekOnly { ring(ai.five, ai.colors.five) }
-                ring(ai.week, ai.colors.week)
+                ForEach(vm.row.indices, id: \.self) { nested(vm.row[$0]) }
+            } else {
+                if let ai = vm.ais.first {
+                    if !ai.weekOnly { ring(ai.five, ai.colors.five) }
+                    ring(ai.week, ai.colors.week)
+                }
+                ForEach(vm.accounts.indices, id: \.self) { nested(vm.accounts[$0]) }
             }
-            ForEach(vm.accounts.indices, id: \.self) { nested(vm.accounts[$0]) }
         }
         .fixedSize()
     }

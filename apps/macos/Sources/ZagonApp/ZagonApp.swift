@@ -83,6 +83,8 @@ final class AppState: ObservableObject {
     @Published var pace = false { didSet { save(pace, "limitsPace") } }
     @Published var paceWeekdays = false { didSet { save(paceWeekdays, "paceWeekdays") } }
     @Published var monoIcon = false { didSet { save(monoIcon, "monoIcon"); refreshIcon() } }
+    /// Other Claude Code accounts in the icon only from 80 % (as in 0.1.8); off = always.
+    @Published var iconOthersAt80 = false { didSet { save(iconOthersAt80, "iconOthersAt80"); refreshIcon() } }
     @Published var showLeft = false { didSet { save(showLeft, "limitsShowLeft") } }
     /// Ring colours per AI (menu bar, panel), set in settings.
     @Published var claudeColors = RingColors.standard(.claude) {
@@ -126,7 +128,8 @@ final class AppState: ObservableObject {
     func refreshIcon() {
         guard iconOn else { return }
         let claude = claudeColors, codex = codexColors
-        if icon.update(colors: { $0 == .codex ? codex : claude }, mono: monoIcon, dark: StatusButton.dark, f) {
+        if icon.update(colors: { $0 == .codex ? codex : claude }, othersAt80: iconOthersAt80, mono: monoIcon,
+                       dark: StatusButton.dark, f) {
             objectWillChange.send()
         }
         syncStatusButton()
@@ -307,6 +310,7 @@ final class AppState: ObservableObject {
             let d = UserDefaults.standard
             state.pace = d.bool(forKey: "limitsPace"); state.paceWeekdays = d.bool(forKey: "paceWeekdays")
             state.monoIcon = d.bool(forKey: "monoIcon"); state.showLeft = d.bool(forKey: "limitsShowLeft")
+            state.iconOthersAt80 = d.bool(forKey: "iconOthersAt80")
             state.claudeColors = RingColors.load(.claude, d); state.codexColors = RingColors.load(.codex, d)
             state.macNotify = d.object(forKey: "macNotify") as? Bool ?? true
             state.macNotifyRemote = d.bool(forKey: "macNotifyRemote")
@@ -735,7 +739,8 @@ struct ZagonApp: App {
 /// The status item, rasterised because a menu bar label shows only images and text. Monochrome without a warning is
 /// a template image (the menu bar tints it); otherwise it is drawn in the bar's text colour. Drawn at 1x and 2x: the bar
 /// is on every screen, and each picks its own. 44 × 20 pt for a pair of rings or two ring-in-rings, 20 × 20 for a week
-/// ring alone (`MenuBarVM.AI.weekOnly`), 24 pt more per other account shown (`MenuBarVM.accounts`).
+/// ring alone (`MenuBarVM.AI.weekOnly`), 24 pt more per other account shown (`MenuBarVM.accounts`): the image takes the
+/// view's own width, so nothing is cut off.
 ///
 /// Only `StatusIcon` calls this, when the picture changes; nil if nothing got drawn.
 @MainActor

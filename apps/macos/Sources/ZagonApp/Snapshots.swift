@@ -45,8 +45,8 @@ enum Snapshots {
     /// `menubar-digits@<n>x.png` / `menubar-both-digits@<n>x.png`: every value 0…99, to see each one inside its ring.
     /// `menubar-weekonly-<mode>@<n>x.png`, no 5-hour window: Claude alone at rest, red digits, red ring; Claude's week
     /// ring next to Codex's ring-in-ring, red digits there; both AIs without it.
-    /// `menubar-accounts-<mode>@<n>x.png`, another Claude Code account at 80 % or over after the default account's rings:
-    /// its week, its 5 hours, next to Codex.
+    /// `menubar-accounts-<mode>@<n>x.png`, other Claude Code accounts (shown always) after the default account's rings:
+    /// below 80 %, red from 80 %, between Claude and Codex, two of them.
     static func menubar(_ dir: URL) -> Bool {
         let bars: [(UInt32, Color)] = [(0xF2F2F4, .black.opacity(0.85)), (0x1E1E22, .white.opacity(0.9)),
                                        (0x2F67C8, .white.opacity(0.95))]
@@ -54,9 +54,9 @@ enum Snapshots {
         func vm(_ ais: [(Tool, Int?, Int?)]) -> MenuBarVM {
             MenuBarVM(ais: ais.map { MenuBarVM.AI(tool: $0.0, five: $0.1, week: $0.2, colors: .standard($0.0)) }, f)
         }
-        func corp(_ ais: [(Tool, Int?, Int?)], _ five: Int, _ week: Int) -> MenuBarVM {
-            MenuBarVM(ais: vm(ais).ais, others: [MenuBarVM.AI(tool: .claude, account: "corp", five: five, week: week,
-                                                              colors: .standard(.claude))], f)
+        func corp(_ ais: [(Tool, Int?, Int?)], _ others: [(String, Int, Int)]) -> MenuBarVM {
+            MenuBarVM(ais: vm(ais).ais, others: others.map { MenuBarVM.AI(tool: .claude, account: $0.0, five: $0.1, week: $0.2,
+                                                                         colors: .standard(.claude)) }, f)
         }
         func weekOnly(_ ais: [(Tool, Int?, Int?)]) -> MenuBarVM {
             MenuBarVM(ais: ais.map { MenuBarVM.AI(tool: $0.0, five: $0.1, week: $0.2, colors: .standard($0.0), weekOnly: $0.1 == nil) }, f)
@@ -68,8 +68,9 @@ enum Snapshots {
             ("weekonly-", [weekOnly([(.claude, nil, 41)]), weekOnly([(.claude, nil, 88)]), weekOnly([(.claude, nil, 97)]),
                            weekOnly([(.claude, nil, 41), (.codex, 18, 71)]), weekOnly([(.claude, nil, 85), (.codex, 18, 71)]),
                            weekOnly([(.claude, nil, 41), (.codex, nil, 71)])]),
-            ("accounts-", [corp([(.claude, 62, 41)], 23, 85), corp([(.claude, 2, 41)], 91, 30),
-                           corp([(.claude, 62, 35), (.codex, 18, 71)], 23, 97)]),
+            ("accounts-", [corp([(.claude, 3, 89)], [("corp", 23, 13)]), corp([(.claude, 2, 41)], [("corp", 91, 30)]),
+                           corp([(.claude, 62, 35), (.codex, 18, 71)], [("corp", 23, 97)]),
+                           corp([(.claude, 3, 89)], [("corp", 23, 13), ("lab", 40, 85)])]),
         ]
         var ok = true
         for (name, states) in sheets {
@@ -293,7 +294,11 @@ enum Snapshots {
         let accountsBoth = AppState(provider: corp, lang: lang)
         accountsBoth.cli = stale.cli
         let m = write(MainPanel().environmentObject(accountsBoth), width: 400, "main-accounts-both-\(lang.rawValue)", dir)
-        return a && b && c && d && e && g && h && i && j && k && m
+        // The window's Sessions: the same rings.
+        accountsBoth.screen = .sessions
+        let n = write(WindowRoot().environmentObject(accountsBoth).fixedSize(horizontal: false, vertical: true), width: 1280,
+                      "sessions-accounts-\(lang.rawValue)", dir)
+        return a && b && c && d && e && g && h && i && j && k && m && n
     }
 
     static func write<V: View>(_ view: V, width: CGFloat, scale: CGFloat = 2, _ name: String, _ dir: URL) -> Bool {

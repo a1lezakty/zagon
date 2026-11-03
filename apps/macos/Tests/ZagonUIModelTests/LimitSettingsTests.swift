@@ -31,8 +31,8 @@ final class LimitSettingsTests: XCTestCase {
     }
 
     /// A second Claude Code account: a ring-in-ring of its own next to the default account's (both then nested), its
-    /// session a tag; the icon stays the default account's below 80 %, the tip names it; with one account nothing
-    /// changes.
+    /// session a tag; the icon shows it too, always (or only from 80 % with the setting), the tip names it; with one
+    /// account nothing changes.
     func testOtherAccounts() {
         var p = MockDataProvider(lang: .en, timeZone: utc)
         let f = Fmt(lang: .en, timeZone: utc, now: p.now)
@@ -43,7 +43,12 @@ final class LimitSettingsTests: XCTestCase {
         let two = MainVM(p, f)
         XCTAssertEqual([two.five?.pct, two.week?.pct], [one.five?.pct, one.week?.pct])
         let icon = MenuBarVM(p.limits(), f), single = MenuBarVM(MockDataProvider(lang: .en, timeZone: utc).limits(), f)
-        XCTAssertEqual([icon.ais, icon.accounts], [single.ais, []])
+        XCTAssertEqual(icon.ais, single.ais)
+        XCTAssertEqual(icon.accounts.map { [$0.five, $0.week, $0.inside] }, [[23, 58, 58]])
+        XCTAssertEqual(icon.accounts[0].account, "corp")
+        XCTAssertFalse(icon.alarm)  // below 80 %: shown, not red
+        XCTAssertEqual(MenuBarVM(p.limits(), othersAt80: true, f).accounts, [])  // the 0.1.8 way, a setting
+        XCTAssertEqual(single.accounts, [])
         XCTAssertEqual(icon.tip, "Claude: 5 hours 62%, week 41% · Claude · corp: 5 hours 23%, week 58%")
         XCTAssertEqual(two.ais.map(\.name), ["Claude", "Claude · corp"])
         XCTAssertEqual(two.ais.map { [$0.five.pct, $0.week.pct] }, [[62, 41], [23, 58]])
@@ -68,13 +73,17 @@ final class LimitSettingsTests: XCTestCase {
         l.claude = p.limits().claude
         XCTAssertFalse(MainVM(ZagonUIModelTests.Fixed(base: p, l: l), f).limitsMissing)
 
-        // The icon: another account at 80 % or over follows the default one's rings, its higher number inside.
+        // The icon: another account at 80 % or over is red (also with the setting), its higher number inside; with
+        // Codex it stands between Claude and Codex.
         var hot = p.limits()
         hot.others[0].limits.week?.usedPct = 85
         let warm = MenuBarVM(hot, f)
         XCTAssertEqual(warm.ais.map(\.tool), [.claude, .codex])
+        XCTAssertEqual(warm.row.map(\.name), ["Claude", "Claude · corp", "Codex"])
         XCTAssertEqual(warm.accounts.map { [$0.five, $0.week, $0.inside] }, [[23, 85, 85]])
         XCTAssertTrue(warm.alarm)
+        XCTAssertEqual(MenuBarVM(hot, othersAt80: true, f).accounts, warm.accounts)
+        XCTAssertFalse(MenuBarVM(p.limits(), f).alarm)
         XCTAssertTrue(warm.spoken.hasSuffix("Claude · corp: 5 hours 23% used, week 85% used"), warm.spoken)
     }
 

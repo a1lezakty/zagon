@@ -4,7 +4,8 @@ import ZagonCore
 /// The status item. Both AIs with a current reading (or Claude under `Limits.claudeHint`): a ring-in-ring each, Claude
 /// left, Codex right (outer the week, inner 5 hours, the 5-hour number inside). One AI, or none: its pair of rings,
 /// 5 hours left and the week right. An AI without a 5-hour window (`Limits.weekOnly`): its week ring alone, the week's
-/// number inside. Another Claude Code account shows only from 80 % in a window (`accounts`); the tip names them all.
+/// number inside. Other Claude Code accounts follow as a ring-in-ring each, by default always, or only from 80 % in a
+/// window (`othersAt80`, a setting); the tip names them all.
 public struct MenuBarVM: Sendable, Equatable {
     public struct AI: Sendable, Equatable {
         public var tool: Tool
@@ -26,21 +27,26 @@ public struct MenuBarVM: Sendable, Equatable {
     }
 
     public var ais: [AI]
-    /// Other accounts at 80 % or over in a window: a ring-in-ring each after the default account's rings, which stay as
-    /// they are.
+    /// Other accounts shown: a ring-in-ring each next to the default account's rings, which stay as they are.
     public var accounts: [AI]
+    /// The ring-in-rings in order when `nested`: each other account right after its AI (a Claude account next to Claude).
+    public var row: [AI] {
+        ais.flatMap { a in [a] + accounts.filter { $0.tool == a.tool } } + accounts.filter { o in !ais.contains { $0.tool == o.tool } }
+    }
     /// A ring-in-ring per AI instead of one pair of rings.
     public var nested: Bool { ais.count > 1 }
-    /// Something is red: digits from 80 % (in a ring-in-ring only the 5-hour ones show), a ring from 95 %.
+    /// Something is red: digits from 80 % (in a ring-in-ring only the 5-hour ones show, another account's higher one),
+    /// a ring from 95 %.
     public var alarm: Bool {
-        !accounts.isEmpty
+        accounts.contains { ($0.inside ?? 0) >= 80 }
             || ais.contains { max($0.five ?? 0, nested && !$0.weekOnly ? 0 : $0.week ?? 0) >= 80 || max($0.five ?? 0, $0.week ?? 0) >= 95 }
     }
     public var tip: String
     /// What VoiceOver reads for the status item.
     public var spoken: String
 
-    public init(_ limits: Limits, colors: (Tool) -> RingColors = RingColors.standard, _ f: Fmt) {
+    /// `othersAt80`: other accounts only while a window of theirs is at 80 % or over (0.1.8); otherwise always.
+    public init(_ limits: Limits, colors: (Tool) -> RingColors = RingColors.standard, othersAt80: Bool = false, _ f: Fmt) {
         let now = f.now, limits = limits.forRings(at: now), current = limits.tools(at: now), shown = limits.shown(at: now)
         let known = shown.fiveHour ?? shown.week
         let hint = limits.claudeHint(at: now) ? limits.claudeHintLine(f) : nil
@@ -57,15 +63,18 @@ public struct MenuBarVM: Sendable, Equatable {
             return AI(tool: o.tool, account: o.account, five: weekOnly ? nil : o.limits.fiveHour?.pct(at: now),
                       week: o.limits.week?.pct(at: now), colors: colors(o.tool), weekOnly: weekOnly)
         }
-        self.init(ais: ais, others: others, known: known != nil || hint != nil || !others.isEmpty, hint: hint, f)
+        self.init(ais: ais, others: others, othersAt80: othersAt80, known: known != nil || hint != nil || !others.isEmpty,
+                  hint: hint, f)
     }
 
     /// Sample values (settings preview, snapshots).
-    public init(ais: [AI], others: [AI] = [], _ f: Fmt) { self.init(ais: ais, others: others, known: true, f) }
+    public init(ais: [AI], others: [AI] = [], othersAt80: Bool = false, _ f: Fmt) {
+        self.init(ais: ais, others: others, othersAt80: othersAt80, known: true, f)
+    }
 
-    private init(ais: [AI], others: [AI], known: Bool, hint: String? = nil, _ f: Fmt) {
+    private init(ais: [AI], others: [AI], othersAt80: Bool, known: Bool, hint: String? = nil, _ f: Fmt) {
         self.ais = ais
-        accounts = others.filter { max($0.five ?? 0, $0.week ?? 0) >= 80 }
+        accounts = others.filter { !othersAt80 || ($0.inside ?? 0) >= 80 }
         let pct = { (p: Int?) in p.map { f.t("num.pct", "\($0)") } ?? "–" }
         let used = { (p: Int?) in p.map { f.t("limit.usedPct", f.t("num.pct", "\($0)")) } ?? f.t("limit.noData") }
         guard known else {
@@ -119,8 +128,8 @@ public final class StatusIcon<Image> {
     /// Reads the limits and draws if the picture would differ; a failed drawing (nil) is tried again next time. True
     /// when `image` changed.
     @discardableResult
-    public func update(colors: (Tool) -> RingColors, mono: Bool, dark: Bool, _ f: Fmt) -> Bool {
-        let next = Look(vm: MenuBarVM(limits(), colors: colors, f), mono: mono, dark: dark)
+    public func update(colors: (Tool) -> RingColors, othersAt80: Bool = false, mono: Bool, dark: Bool, _ f: Fmt) -> Bool {
+        let next = Look(vm: MenuBarVM(limits(), colors: colors, othersAt80: othersAt80, f), mono: mono, dark: dark)
         guard next != look, let drawn = draw(next) else { return false }
         look = next
         image = drawn
