@@ -158,16 +158,27 @@ final class StoreDataProviderTests: XCTestCase {
         _ = try p.reader.db.run("UPDATE limit_snapshot SET ts = ?, resets_at = ? WHERE account = 'corp'",
                                 [.real(now - 9 * 86400), .real(now - 8 * 86400)])
         XCTAssertTrue(p.limits().others.isEmpty)
-        // Only another account reads limits (its sessions too): no rings, no hint, its line.
+        // Claude Code run only under another account (no default reading within 8 days): the rings are that account's,
+        // say so, and it has no line of its own; its sessions count for the hint.
         _ = try p.reader.db.run("UPDATE limit_snapshot SET ts = ?, resets_at = ? WHERE account = 'corp'", [.real(now - 60), .real(now + 3600)])
-        _ = try p.reader.db.run("DELETE FROM limit_snapshot WHERE account = 'default'")
+        _ = try p.reader.db.run("UPDATE limit_snapshot SET ts = ts - 9 * 86400, resets_at = resets_at - 9 * 86400 WHERE account = 'default'")
         _ = try p.reader.db.run("UPDATE session SET account = 'corp' WHERE tool = 'claude'")
         let only = p.limits()
-        XCTAssertNil(only.claude.fiveHour)
-        XCTAssertNil(only.claude.week)
-        XCTAssertNil(only.claudeSeen)
+        XCTAssertEqual([only.claude.fiveHour?.usedPct, only.claude.week?.usedPct], [23, 97])
+        XCTAssertEqual(only.claude.fiveHour?.from, LimitFrom(account: "corp"))
+        XCTAssertTrue(only.others.isEmpty)
+        XCTAssertNotNil(only.claudeSeen)
         XCTAssertFalse(only.claudeHint(at: p.now))
-        XCTAssertEqual(only.others.map(\.account), ["corp"])
+        let ringsOnly = MainVM(p, f)
+        XCTAssertEqual(ringsOnly.five?.pct, 23)
+        XCTAssertEqual(ringsOnly.limitsSource, "this Mac · corp")
+        XCTAssertTrue(ringsOnly.accounts.isEmpty)
+        XCTAssertFalse(ringsOnly.limitsMissing)
+        // The default account reads again: back in the rings, the other account on its line.
+        _ = try p.reader.db.run("UPDATE limit_snapshot SET ts = ts + 9 * 86400, resets_at = resets_at + 9 * 86400 WHERE account = 'default'")
+        XCTAssertEqual(p.limits().claude.fiveHour?.usedPct, before.claude.fiveHour?.usedPct)
+        XCTAssertNil(p.limits().claude.fiveHour?.from)
+        XCTAssertEqual(p.limits().others.map(\.account), ["corp"])
     }
 
     /// A session of another Claude Code account carries its tag in the panel, the day's lanes and its project's sessions.

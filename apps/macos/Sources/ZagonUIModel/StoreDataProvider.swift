@@ -308,21 +308,31 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
 
     // MARK: menu bar
 
-    /// The rings: the default Claude Code account's readings (`~/.claude`; the only one before accounts). The other
-    /// accounts' with a reading within 8 days (`Accounts.labeled`) go to `Limits.others`.
+    /// The rings: per AI the default Claude Code account's readings (`~/.claude`; the only one before accounts), or,
+    /// without one within 8 days, the first other account's that has one (Claude Code run only under
+    /// `CLAUDE_CONFIG_DIR`), named on the rings. The other accounts with a reading within 8 days (as `Accounts.labeled`
+    /// leaves them) go to `Limits.others`.
     public func limits() -> Limits {
         read(Limits()) {
             let all = try query.limits(now: now.timeIntervalSince1970)
             // Whose reading each is, said only with more than one source; a failed read loses only the labels.
             let sources = (try? query.limitSources(now: now.timeIntervalSince1970,
                                                    localAccount: Settings.limitsAccount(paths))) ?? []
+            func recent(_ r: LimitReading) -> Bool { now.timeIntervalSince1970 - r.ts <= 8 * 86400 }
+            // The account of each AI's rings.
+            func ringAccount(_ tool: ToolKind) -> String {
+                let rs = all.filter { $0.tool == tool && recent($0) }
+                return rs.contains { $0.account == Accounts.defaultName } ? Accounts.defaultName : rs.first?.account ?? Accounts.defaultName
+            }
+            let rings = [ToolKind.claude: ringAccount(.claude), .codex: ringAccount(.codex)]
             func window(_ tool: ToolKind, _ name: String, _ account: String) -> LimitWindow? {
                 guard let r = all.first(where: { $0.tool == tool && $0.window == name && $0.account == account }) else { return nil }
                 let reset = r.resetsAt ?? r.ts + Double((r.windowMinutes ?? 0) * 60)
-                // The sources of the default account's rings; another account's line is named by its account.
-                let from = account != Accounts.defaultName ? nil
-                    : sources.first { $0.tool == tool && $0.window == name && $0.limitAccount == account && $0.several }
-                    .map { LimitFrom(server: $0.source.isEmpty ? nil : $0.source, account: $0.account) }
+                // The rings say whose they are: the default account's only with more than one source, another account's
+                // always. An account's own line is named by the line.
+                let src = sources.first { $0.tool == tool && $0.window == name && $0.limitAccount == account }
+                let from = rings[tool] != account || account == Accounts.defaultName && src?.several != true ? nil
+                    : LimitFrom(server: src.flatMap { $0.source.isEmpty ? nil : $0.source }, account: src?.account ?? account)
                 return LimitWindow(usedPct: r.usedPct, resetsAt: Self.date(reset), pctPerHour: r.pctPerHour,
                                    tool: tool == .codex ? .codex : .claude, readAt: Self.date(r.ts), from: from)
             }
@@ -348,17 +358,17 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 }
                 return a
             }
-            var l = Limits(claude: ai(.claude), codex: ai(.codex))
+            var l = Limits(claude: ai(.claude, rings[.claude]!), codex: ai(.codex, rings[.codex]!))
             var listed = Set<String>()
-            for r in all where r.account != Accounts.defaultName && now.timeIntervalSince1970 - r.ts <= 8 * 86400
-                && (r.tool == .claude || r.tool == .codex) && listed.insert(r.tool.rawValue + ":" + r.account).inserted {
+            for r in all where r.account != Accounts.defaultName && recent(r) && rings[r.tool] != nil && rings[r.tool] != r.account
+                && listed.insert(r.tool.rawValue + ":" + r.account).inserted {
                 l.others.append(AccountLimits(account: r.account, tool: r.tool == .codex ? .codex : .claude, limits: ai(r.tool, r.account)))
             }
-            // For `Limits.claudeHint`: the default account's sessions (unknown = before accounts); a failed read loses only
-            // the hint.
+            // For `Limits.claudeHint`: the sessions of the rings' account (unknown = the default one, before accounts); a
+            // failed read loses only the hint.
             try? query.db.query("""
                 SELECT max(last_at) FROM session WHERE tool = 'claude' AND last_at >= ? AND coalesce(account, ?) = ?
-                """, [.real(now.timeIntervalSince1970 - 7 * 86400), .text(Accounts.defaultName), .text(Accounts.defaultName)]) { r in
+                """, [.real(now.timeIntervalSince1970 - 7 * 86400), .text(Accounts.defaultName), .text(rings[.claude]!)]) { r in
                 l.claudeSeen = r.optReal(0).map(Self.date)
             }
             // A few small files, only under the hint and at most once a minute; a failure loses only the hint.
