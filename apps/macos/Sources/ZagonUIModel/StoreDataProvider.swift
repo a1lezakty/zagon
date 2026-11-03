@@ -423,7 +423,7 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
         read(Totals(sessionSec: 0, tokens: 0, cost: 0)) {
             let z = timeZone, key = Self.day(now, z)
             let d = try query.day(key, detail: false) { Self.bounds($0, z) }
-            var t = Totals(sessionSec: d.sessionSec, userSec: d.userSec, tokens: d.tokens.total, cost: d.cost)
+            var t = Totals(sessionSec: d.workedSec, agentSec: d.sessionSec, userSec: d.userSec, tokens: d.tokens.total, cost: d.cost)
             // Per AI: whose session the tokens are (its id starts with the tool), priced as `Query.day` prices them. A failed
             // split loses only the split.
             guard let (s, e) = Self.bounds(key, z) else { return t }
@@ -482,7 +482,8 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 hostProjects[h] = Self.projects(part, branches: branches, accounts: accounts)
             }
             return DayData(
-                day: start, totals: Totals(sessionSec: d.sessionSec, userSec: d.userSec, tokens: d.tokens.total, cost: d.cost),
+                day: start, totals: Totals(sessionSec: d.workedSec, agentSec: d.sessionSec, userSec: d.userSec, tokens: d.tokens.total,
+                                           cost: d.cost),
                 limitHits: d.limitHits.map { Interval(Self.date($0.start), Self.date($0.end)) },
                 weekPctStart: d.weekPctStart, weekPctEnd: d.weekPctEnd, lanes: lanes,
                 usage: [.project: rows(d.byProject), .model: rows(d.byModel, name: Self.modelName), .agent: rows(d.byAgent),
@@ -600,7 +601,9 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 let cur = n.isEmpty ? sec.filter { !top.contains($0.key) }.values.reduce(0, +) : sec[n] ?? 0
                 return ProjectWeek(n, sec: cur, cost: cost[n] ?? 0, prevSec: prev > 0 ? prev : nil)
             }
-            func totals(_ p: PeriodTotals) -> Totals { Totals(sessionSec: p.sessionSec, userSec: p.userSec, tokens: p.tokens, cost: p.cost) }
+            func totals(_ p: PeriodTotals) -> Totals {
+                Totals(sessionSec: p.workedSec, agentSec: p.sessionSec, userSec: p.userSec, tokens: p.tokens, cost: p.cost)
+            }
             return WeekData(start: monday, projects: names, days: days, totals: totals(w.totals), previous: totals(w.previous),
                             projectRows: rows, limitByDay: w.limitByDay)
         }

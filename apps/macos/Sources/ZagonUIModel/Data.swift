@@ -262,14 +262,18 @@ public struct LiveSession: Sendable, Identifiable {
 }
 
 public struct Totals: Sendable, Equatable {
+    /// Sessions worked, wall-clock: parallel sessions count once (`DayDetail.workedSec`).
     public var sessionSec: Double
+    /// Agent time: the sessions' working time summed over sessions (0 = not known).
+    public var agentSec = 0.0
     public var userSec: Double
     public var tokens: Int
     public var cost: Double
     /// The cost per AI; empty where nobody split it.
     public var costByTool: [Tool: Double]
-    public init(sessionSec: Double, userSec: Double = 0, tokens: Int, cost: Double, costByTool: [Tool: Double] = [:]) {
-        self.sessionSec = sessionSec; self.userSec = userSec; self.tokens = tokens; self.cost = cost; self.costByTool = costByTool
+    public init(sessionSec: Double, agentSec: Double = 0, userSec: Double = 0, tokens: Int, cost: Double,
+                costByTool: [Tool: Double] = [:]) {
+        self.sessionSec = sessionSec; self.agentSec = agentSec; self.userSec = userSec; self.tokens = tokens; self.cost = cost; self.costByTool = costByTool
     }
 }
 

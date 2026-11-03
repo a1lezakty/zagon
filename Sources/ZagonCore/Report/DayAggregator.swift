@@ -71,6 +71,21 @@ struct DayAggregator {
 }
 
 enum SessionTime {
+    /// Wall-clock time the sessions worked inside each range (ranges must not overlap): the union of every session's
+    /// working intervals on all machines, so parallel sessions and sub-agents count once ("sessions worked"). The sum
+    /// over sessions is agent time (`sessionSec`).
+    static func wall(_ db: SQLite, _ ranges: [(Timestamp, Timestamp)]) throws -> [Double] {
+        let real = ranges.filter { $0.1 > $0.0 }
+        guard let lo = real.map(\.0).min(), let hi = real.map(\.1).max() else { return ranges.map { _ in 0 } }
+        var all: [Interval] = []
+        try db.query("""
+            SELECT start, "end" FROM activity
+            WHERE kind = 'working' AND start < ?1 AND start > ?2 - \(Query.longestStretch) AND "end" > ?2
+            """, [.real(hi), .real(lo)]) { all.append(Interval($0.real(0), $0.real(1))) }
+        let merged = Intervals.merge(all)
+        return ranges.map { r in merged.reduce(0) { $0 + max(0, min($1.end, r.1) - max($1.start, r.0)) } }
+    }
+
     struct Entry {
         var tool: String; var project: String; var intervals: [Interval]
         /// The same intervals by the project of the directory they were worked in.

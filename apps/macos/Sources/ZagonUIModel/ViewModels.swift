@@ -252,7 +252,7 @@ public struct MainVM: Sendable {
         idleHideButton = idle.isEmpty ? nil : f.t("sessions.idle.hide", String(idle.count))
 
         let today = p.todayTotals()
-        totals = [Stat(f.duration(today.sessionSec), f.t("stat.sessionsWorked")),
+        totals = [Stat(f.duration(today.sessionSec), f.t("stat.sessionsWorked"), delta: f.agentTime(today)),
                   Stat(f.tokens(today.tokens), f.t("stat.tokensToday")),
                   Stat(f.cost(today.cost), f.t("stat.apiPrices"))]
         let split = Tool.allCases.compactMap { t in
@@ -364,7 +364,7 @@ public struct DayVM: Sendable {
     public init(_ d: DayData, _ f: Fmt) {
         data = d; self.f = f
         title = f.dayTitle(d.day)
-        stats = [Stat(f.duration(d.totals.sessionSec), f.t("stat.sessionsWorked")),
+        stats = [Stat(f.duration(d.totals.sessionSec), f.t("stat.sessionsWorked"), delta: f.agentTime(d.totals)),
                  Stat(f.duration(d.totals.userSec), f.t("stat.you")),
                  Stat(f.tokens(d.totals.tokens), f.t("stat.tokens")),
                  Stat(f.cost(d.totals.cost), f.t("stat.apiPrices"))]

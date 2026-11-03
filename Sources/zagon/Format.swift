@@ -51,10 +51,13 @@ enum Fmt {
             + " · cache write \(tokens(t.cacheWrite)) · \(t.requests) requests"
     }
 
+    /// " (agent time X)" when the sessions' summed time is a minute or more over the wall-clock time they worked.
+    static func agent(_ worked: Double, _ sum: Double) -> String { sum - worked < 60 ? "" : " (agent time \(dur(sum)))" }
+
     static func day(_ r: DayReport) {
         print("\(r.day)   \(tokenLine(r.tokens))")
         print("cost       \(usd(r.cost, unpriced: r.unpriced)) \(apiNote)" + unpricedNote(r))
-        print("time       sessions \(dur(r.sessionSec)) · you \(dur(r.userSec)) · \(r.toolCalls) tool calls")
+        print("time       sessions \(dur(r.workedSec))\(agent(r.workedSec, r.sessionSec)) · you \(dur(r.userSec)) · \(r.toolCalls) tool calls")
         print("hours      |\(spark(r.hours))|  0h…23h")
         if !r.models.isEmpty {
             print("models")
@@ -104,13 +107,13 @@ enum Fmt {
         print("cost       \(usd(r.cost, unpriced: r.unpriced)) \(apiNote); previous 7 days "
               + usd(r.previousCost, unpriced: r.previousUnpriced)
               + (r.unpriced + r.previousUnpriced > 0 ? "; ? = tokens of models with no known price" : ""))
-        print("time       sessions \(dur(r.sessionSec)) · you \(dur(r.userSec))   (previous 7 days: \(tokens(r.previous.total)) tokens, "
-              + "sessions \(dur(r.previousSessionSec)), you \(dur(r.previousUserSec)))")
+        print("time       sessions \(dur(r.workedSec))\(agent(r.workedSec, r.sessionSec)) · you \(dur(r.userSec))   (previous 7 days: "
+              + "\(tokens(r.previous.total)) tokens, sessions \(dur(r.previousWorkedSec)), you \(dur(r.previousUserSec)))")
         let m = r.days.map { $0.tokens.total }.max() ?? 0
         for d in r.days {
             let w = m == 0 ? 0 : Int((Double(d.tokens.total) / Double(m) * 30).rounded())
             print("  \(d.day)  \(pad(String(repeating: "█", count: w), 30)) \(lpad(tokens(d.tokens.total), 7))"
-                  + "  sessions \(lpad(dur(d.sessionSec), 7))  you \(lpad(dur(d.userSec), 7))"
+                  + "  sessions \(lpad(dur(d.workedSec), 7))  you \(lpad(dur(d.userSec), 7))"
                   + "  \(lpad(usd(d.cost, unpriced: d.unpriced), 7))")
         }
         if !r.projects.isEmpty {

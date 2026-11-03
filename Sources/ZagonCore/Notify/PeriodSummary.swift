@@ -72,7 +72,9 @@ extension DaySummary {
         var docs: [SummaryDoc] = []
         for d in worked { if let k = try kept(d) { docs.append(k.doc) } }
         let w = words
-        var doc = DaySummary.merge(docs, from: from, to: to, w), engine = "none"
+        // "Sessions worked": wall-clock summed over the days (the cards' times add up parallel sessions).
+        let wall = try Query(store: store).hours(from: from, count: DaySummary.range(from, to).count).reduce(0, +) * 3600
+        var doc = DaySummary.merge(docs, from: from, to: to, w, worked: wall), engine = "none"
         if !docs.isEmpty,
            let r = complete(DaySummary.periodInstruction(w) + DaySummary.periodDigest(docs, from: from, to: to, w), what: "period summary") {
             let all = docs.flatMap(\.items)
@@ -98,7 +100,8 @@ extension DaySummary {
     }
 
     /// The days' cards without AI: one per project and task (or theme), time and price added up, the latest points.
-    static func merge(_ docs: [SummaryDoc], from: String, to: String, _ w: Words) -> SummaryDoc {
+    /// `worked`: the period's wall-clock session time for the overview (nil = the cards' times added up).
+    static func merge(_ docs: [SummaryDoc], from: String, to: String, _ w: Words, worked: Double? = nil) -> SummaryDoc {
         var items: [SummaryDoc.Item] = []
         for i in docs.flatMap(\.items) {
             guard let j = items.firstIndex(where: { $0.project == i.project && ($0.key ?? $0.title) == (i.key ?? i.title) }) else {
@@ -110,7 +113,7 @@ extension DaySummary {
         }
         for j in items.indices { items[j].done = Array(items[j].done.suffix(SummaryDoc.maxDone)) }
         items.sort { ($0.sec, $1.heading) > ($1.sec, $0.heading) }
-        let sec = items.reduce(0) { $0 + $1.sec }
+        let sec = worked ?? items.reduce(0) { $0 + $1.sec }
         let overview = docs.isEmpty ? w.t("За период сессий не было.", "No sessions in this period.")
             : w.t("Дней с работой: \(docs.count), сессии работали \(w.dur(sec)), направлений: \(items.count).",
                   "Days with work: \(docs.count), sessions worked \(w.dur(sec)), lines of work: \(items.count).")

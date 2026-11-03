@@ -73,6 +73,7 @@ enum Strings {
         "status.session": "waits for session {0}", "status.otherSession": "waits for another session",
 
         "stat.sessionsWorked": "sessions worked", "stat.tokensToday": "tokens today", "stat.apiPrices": "at API prices",
+        "stat.agentTime": "agent time {0}",
         "stat.you": "you replied and reviewed", "stat.tokens": "tokens",
 
         "main.openWindow": "Open window", "main.daySummary": "Day summary", "main.settings": "Settings",
@@ -431,6 +432,7 @@ enum Strings {
         "status.session": "ждёт сессию {0}", "status.otherSession": "ждёт другую сессию",
 
         "stat.sessionsWorked": "сессии работали", "stat.tokensToday": "токенов сегодня", "stat.apiPrices": "по ценам API",
+        "stat.agentTime": "агентного времени {0}",
         "stat.you": "ты отвечал и смотрел", "stat.tokens": "токенов",
 
         "main.openWindow": "Открыть окно", "main.daySummary": "Сводка дня", "main.settings": "Настройки",

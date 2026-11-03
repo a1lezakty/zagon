@@ -177,7 +177,8 @@ public final class Bot {
 
     func day(_ d: String) throws -> Message {
         let r = try Reports(store: store).day(d)
-        var lines = [w.t("Сессии \(w.dur(r.sessionSec)) · ты \(w.dur(r.userSec))", "Sessions \(w.dur(r.sessionSec)) · you \(w.dur(r.userSec))"),
+        var lines = [w.t("Сессии \(w.dur(r.workedSec))\(w.agent(r.workedSec, r.sessionSec)) · ты \(w.dur(r.userSec))",
+                         "Sessions \(w.dur(r.workedSec))\(w.agent(r.workedSec, r.sessionSec)) · you \(w.dur(r.userSec))"),
                      w.t("\(w.tokens(r.tokens.total)) токенов · \(r.tokens.requests) запросов",
                          "\(w.tokens(r.tokens.total)) tokens · \(r.tokens.requests) requests")]
         for p in r.projects.prefix(6) {
@@ -198,15 +199,15 @@ public final class Bot {
 
     func week(_ end: String) throws -> String {
         let r = try Reports(store: store).week(ending: end)
-        var head = w.t("Сессии \(w.dur(r.sessionSec)) · ты \(w.dur(r.userSec)) · \(w.tokens(r.tokens.total)) токенов",
-                       "Sessions \(w.dur(r.sessionSec)) · you \(w.dur(r.userSec)) · \(w.tokens(r.tokens.total)) tokens")
+        var head = w.t("Сессии \(w.dur(r.workedSec))\(w.agent(r.workedSec, r.sessionSec)) · ты \(w.dur(r.userSec)) · \(w.tokens(r.tokens.total)) токенов",
+                       "Sessions \(w.dur(r.workedSec))\(w.agent(r.workedSec, r.sessionSec)) · you \(w.dur(r.userSec)) · \(w.tokens(r.tokens.total)) tokens")
         if r.previous.total > 0 {
             let d = (Double(r.tokens.total) / Double(r.previous.total) - 1) * 100
             head += " (\(d >= 0 ? "+" : "−")\(w.pct(abs(d))) " + w.t("к прошлой)", "vs last week)")
         }
         var lines = [head]
         for d in r.days {
-            lines.append("\(w.weekday(d.day)) \(d.day.suffix(5)) · \(w.dur(d.sessionSec)) · \(w.tokens(d.tokens.total))")
+            lines.append("\(w.weekday(d.day)) \(d.day.suffix(5)) · \(w.dur(d.workedSec)) · \(w.tokens(d.tokens.total))")
         }
         let top = r.projects.prefix(4).map { "\($0.project.isEmpty ? w.tool($0.tool) : $0.project) \(w.tokens($0.tokens.total))" }
         if !top.isEmpty { lines.append(w.t("Проекты: ", "Projects: ") + top.joined(separator: ", ")) }

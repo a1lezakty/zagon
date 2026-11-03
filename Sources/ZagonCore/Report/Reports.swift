@@ -78,7 +78,9 @@ public struct DayReport: Codable, Sendable {
     public var tokens = TokenTotals()
     public var cost = 0.0, unpriced = 0
     public var toolCalls = 0
-    /// Sum over sessions of each session's merged working time.
+    /// Sessions worked, wall-clock (`SessionTime.wall`): parallel sessions count once. The day's main number.
+    public var workedSec = 0.0
+    /// Agent time: sum over sessions of each session's merged working time.
     public var sessionSec = 0.0
     /// Your time: union of activity around your actions across all sessions.
     public var userSec = 0.0
@@ -92,17 +94,19 @@ public struct DayReport: Codable, Sendable {
 
 public struct WeekReport: Codable, Sendable {
     public struct DayLine: Codable, Sendable {
-        public var day: String; public var tokens: TokenTotals; public var sessionSec: Double; public var userSec: Double
+        public var day: String; public var tokens: TokenTotals; public var workedSec: Double; public var sessionSec: Double
+        public var userSec: Double
         public var cost = 0.0, unpriced = 0
     }
     public var from: String, to: String
     public var days: [DayLine]
     public var tokens: TokenTotals
     public var cost = 0.0, unpriced = 0
-    public var sessionSec: Double, userSec: Double
+    /// `workedSec`: wall-clock summed over the days; `sessionSec`: agent time.
+    public var workedSec: Double, sessionSec: Double, userSec: Double
     public var previous: TokenTotals
     public var previousCost = 0.0, previousUnpriced = 0
-    public var previousSessionSec: Double, previousUserSec: Double
+    public var previousWorkedSec: Double, previousSessionSec: Double, previousUserSec: Double
     public var projects: [ProjectLine]
 }
 
@@ -141,6 +145,7 @@ public struct Reports {
         r.models.sort { $0.tokens.total > $1.tokens.total }
         r.projects.sort { ($0.tokens.total, $0.sessionSec) > ($1.tokens.total, $1.sessionSec) }
         guard let (s, e) = Time.dayBounds(day) else { return r }
+        r.workedSec = try SessionTime.wall(db, [(s, e)])[0]
         try db.query("SELECT name, sum(n) FROM tool_use WHERE hour >= ? AND hour < ? GROUP BY name ORDER BY 2 DESC",
                      [.real(s), .real(e)]) { r.tools.append(NameCount(name: $0.text(0) ?? "?", count: $0.int(1))) }
         try db.query("""
@@ -209,13 +214,13 @@ public struct Reports {
         let start = Time.addDays(end, -6) ?? end
         var days: [WeekReport.DayLine] = []
         var projects: [ProjectLine] = []
-        var tokens = TokenTotals(), ss = 0.0, us = 0.0, cost = 0.0, unpriced = 0
+        var tokens = TokenTotals(), ws = 0.0, ss = 0.0, us = 0.0, cost = 0.0, unpriced = 0
         for k in 0..<7 {
             let d = Time.addDays(start, k) ?? start
             let r = try self.day(d, withSessions: false)
-            days.append(.init(day: d, tokens: r.tokens, sessionSec: r.sessionSec, userSec: r.userSec, cost: r.cost,
-                              unpriced: r.unpriced))
-            tokens.add(r.tokens); ss += r.sessionSec; us += r.userSec; cost += r.cost; unpriced += r.unpriced
+            days.append(.init(day: d, tokens: r.tokens, workedSec: r.workedSec, sessionSec: r.sessionSec, userSec: r.userSec,
+                              cost: r.cost, unpriced: r.unpriced))
+            tokens.add(r.tokens); ws += r.workedSec; ss += r.sessionSec; us += r.userSec; cost += r.cost; unpriced += r.unpriced
             for p in r.projects {
                 if let i = projects.firstIndex(where: { $0.tool == p.tool && $0.project == p.project }) {
                     projects[i].tokens.add(p.tokens); projects[i].sessionSec += p.sessionSec; projects[i].toolCalls += p.toolCalls
@@ -223,13 +228,14 @@ public struct Reports {
                 } else { projects.append(p) }
             }
         }
-        var prev = TokenTotals(), pss = 0.0, pus = 0.0, pcost = 0.0, punpriced = 0
+        var prev = TokenTotals(), pws = 0.0, pss = 0.0, pus = 0.0, pcost = 0.0, punpriced = 0
         for k in 1...7 {
             let r = try self.day(Time.addDays(start, -k) ?? start, withSessions: false)
-            prev.add(r.tokens); pss += r.sessionSec; pus += r.userSec; pcost += r.cost; punpriced += r.unpriced
+            prev.add(r.tokens); pws += r.workedSec; pss += r.sessionSec; pus += r.userSec; pcost += r.cost; punpriced += r.unpriced
         }
         projects.sort { ($0.tokens.total, $0.sessionSec) > ($1.tokens.total, $1.sessionSec) }
-        return WeekReport(from: start, to: end, days: days, tokens: tokens, cost: cost, unpriced: unpriced, sessionSec: ss, userSec: us,
-                          previous: prev, previousCost: pcost, previousUnpriced: punpriced, previousSessionSec: pss, previousUserSec: pus, projects: projects)
+        return WeekReport(from: start, to: end, days: days, tokens: tokens, cost: cost, unpriced: unpriced, workedSec: ws, sessionSec: ss,
+                          userSec: us, previous: prev, previousCost: pcost, previousUnpriced: punpriced, previousWorkedSec: pws,
+                          previousSessionSec: pss, previousUserSec: pus, projects: projects)
     }
 }

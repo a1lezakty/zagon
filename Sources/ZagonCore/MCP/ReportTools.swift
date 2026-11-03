@@ -246,10 +246,11 @@ final class ReportTools {
     func day(_ a: MCPArgs) throws -> String {
         let d = try a.day("date", old: "day") ?? Time.dayString(now())
         let r = try reports.day(d)
-        if r.tokens.total == 0 && r.sessionSec == 0 && r.sessions.isEmpty { return "\(d): no activity recorded." }
+        if r.tokens.total == 0 && r.workedSec == 0 && r.sessions.isEmpty { return "\(d): no activity recorded." }
         var out: [String] = ["\(d) (\(Txt.weekday(d))): " + Txt.tokenLine(r.tokens) + ", \(r.toolCalls) tool calls",
                    "cost: \(Txt.usd(r.cost, unpriced: r.unpriced)) \(Txt.apiNote)",
-                   "time: sessions \(Txt.dur(r.sessionSec)), the user \(Txt.dur(r.userSec)); \(Txt.count(r.sessions.count, "session"))"]
+                   "time: sessions worked \(Txt.dur(r.workedSec))\(Txt.agent(r.workedSec, r.sessionSec)), the user \(Txt.dur(r.userSec)); "
+                   + Txt.count(r.sessions.count, "session")]
         if !r.models.isEmpty {
             out.append("models: " + r.models.prefix(5).map {
                 "\($0.model) \(Txt.tokens($0.tokens.total)) (\(Txt.share($0.tokens.total, r.tokens.total)), \(Txt.usd($0.cost, unpriced: $0.unpriced)))"
@@ -305,12 +306,12 @@ final class ReportTools {
                    + " (\(Txt.change(w.tokens.total, w.previous.total)) vs the 7 days before: \(Txt.tokens(w.previous.total)))",
                    "cost: \(Txt.usd(w.cost, unpriced: w.unpriced)) (the 7 days before: \(Txt.usd(w.previousCost, unpriced: w.previousUnpriced))) "
                    + Txt.apiNote,
-                   "time: sessions \(Txt.dur(w.sessionSec)) (before \(Txt.dur(w.previousSessionSec))), the user "
+                   "time: sessions worked \(Txt.dur(w.workedSec))\(Txt.agent(w.workedSec, w.sessionSec)) (before \(Txt.dur(w.previousWorkedSec))), the user "
                    + "\(Txt.dur(w.userSec)) (before \(Txt.dur(w.previousUserSec)))",
                    "days:"]
         for d in w.days {
             out.append("- \(d.day) \(Txt.weekday(d.day)): \(Txt.tokens(d.tokens.total)) tokens, \(Txt.usd(d.cost, unpriced: d.unpriced)), "
-                       + "sessions \(Txt.dur(d.sessionSec)), the user \(Txt.dur(d.userSec))")
+                       + "sessions worked \(Txt.dur(d.workedSec)), the user \(Txt.dur(d.userSec))")
         }
         if !w.projects.isEmpty { out.append("top projects: " + Txt.projects(w.projects.prefix(5))) }
         return out.joined(separator: "\n")
@@ -325,11 +326,11 @@ final class ReportTools {
             guard days.count < 366, let n = Time.addDays(last, 1) else { throw MCPToolError("at most 366 days") }
             days.append(n)
         }
-        var tokens = TokenTotals(), ss = 0.0, us = 0.0, calls = 0, cost = 0.0, unpriced = 0
+        var tokens = TokenTotals(), ws = 0.0, ss = 0.0, us = 0.0, calls = 0, cost = 0.0, unpriced = 0
         var models: [String: ModelLine] = [:], projects: [ProjectLine] = [], perDay: [(String, TokenTotals, Double)] = []
         for d in days {
             let r = try reports.day(d, withSessions: false)
-            tokens.add(r.tokens); ss += r.sessionSec; us += r.userSec; calls += r.toolCalls; cost += r.cost; unpriced += r.unpriced
+            tokens.add(r.tokens); ws += r.workedSec; ss += r.sessionSec; us += r.userSec; calls += r.toolCalls; cost += r.cost; unpriced += r.unpriced
             for m in r.models {
                 models[m.model, default: ModelLine(model: m.model, tokens: TokenTotals())].tokens.add(m.tokens)
                 models[m.model]!.cost += m.cost; models[m.model]!.unpriced += m.unpriced
@@ -340,11 +341,11 @@ final class ReportTools {
                     projects[i].cost += p.cost; projects[i].unpriced += p.unpriced
                 } else { projects.append(p) }
             }
-            if r.tokens.total > 0 || r.sessionSec > 0 { perDay.append((d, r.tokens, r.sessionSec)) }
+            if r.tokens.total > 0 || r.workedSec > 0 { perDay.append((d, r.tokens, r.workedSec)) }
         }
         var out: [String] = ["\(from) … \(to) (\(days.count) days, \(perDay.count) active): " + Txt.tokenLine(tokens) + ", \(calls) tool calls",
                    "cost: \(Txt.usd(cost, unpriced: unpriced)) \(Txt.apiNote)",
-                   "time: sessions \(Txt.dur(ss)), the user \(Txt.dur(us))"]
+                   "time: sessions worked \(Txt.dur(ws))\(Txt.agent(ws, ss)), the user \(Txt.dur(us))"]
         if !models.isEmpty {
             out.append("models: " + models.values.sorted { $0.tokens.total > $1.tokens.total }.prefix(5).map {
                 "\($0.model) \(Txt.tokens($0.tokens.total)) (\(Txt.share($0.tokens.total, tokens.total)), \(Txt.usd($0.cost, unpriced: $0.unpriced)))"
@@ -431,15 +432,15 @@ final class ReportTools {
         guard Sys.mkdirs(exportDir), Sys.writeFile(exportDir + "/\(d).md", Array(md.utf8), mode: 0o600) else {
             throw MCPToolError("could not write \(exportDir)/\(d).md")
         }
-        return "Wrote \(exportDir)/\(d).md (\(md.utf8.count) bytes): \(Txt.tokens(r.tokens.total)) tokens, sessions "
-            + "\(Txt.dur(r.sessionSec)), the user \(Txt.dur(r.userSec)), \(r.sessions.count) sessions."
+        return "Wrote \(exportDir)/\(d).md (\(md.utf8.count) bytes): \(Txt.tokens(r.tokens.total)) tokens, sessions worked "
+            + "\(Txt.dur(r.workedSec)), the user \(Txt.dur(r.userSec)), \(r.sessions.count) sessions."
     }
 
     func markdown(_ r: DayReport) throws -> String {
         func cell(_ s: String) -> String { Txt.oneLine(s, 120).split(separator: "|", omittingEmptySubsequences: false).joined(separator: "\\|") }
         var md = "# \(r.day) (\(Txt.weekday(r.day)))\n\n"
         md += "- Tokens: \(Txt.tokenLine(r.tokens)), \(r.toolCalls) tool calls\n"
-        md += "- Time: sessions \(Txt.dur(r.sessionSec)), you \(Txt.dur(r.userSec))\n"
+        md += "- Time: sessions worked \(Txt.dur(r.workedSec))\(Txt.agent(r.workedSec, r.sessionSec)), you \(Txt.dur(r.userSec))\n"
         if let k = try kept(r.day) {
             md += "\n## What was done\n\n"
             if let why = k.whyNoAI { md += "_Made without AI: \(why)._\n\n" }
@@ -515,6 +516,9 @@ enum Txt {
         if m < 48 * 60 { return "\(m / 60)h \(m % 60 < 10 ? "0" : "")\(m % 60)m" }
         return "\(m / 1440)d \(m % 1440 / 60)h"
     }
+
+    /// " (agent time X)" when the sessions' summed time is a minute or more over the wall-clock time they worked.
+    static func agent(_ worked: Double, _ sum: Double) -> String { sum - worked < 60 ? "" : " (agent time \(dur(sum)))" }
 
     static func ago(_ s: Double) -> String { s < 90 ? "just now" : dur(s) + " ago" }
 

@@ -150,6 +150,11 @@ public struct Words: Sendable, Equatable {
     /// `чт` / `Thu`.
     func weekday(_ day: String) -> String { en ? String(date(day).prefix(3)) : Ru.date(day).prefix(2).lowercased() }
 
+    /// " (агентного времени X)" when the sessions' summed time is a minute or more over the wall-clock time they worked.
+    func agent(_ worked: Double, _ sum: Double) -> String {
+        sum - worked < 60 ? "" : t(" (агентного времени \(dur(sum)))", " (agent time \(dur(sum)))")
+    }
+
     /// `12 min`, `1 h 50 min`, `40 h`.
     func dur(_ sec: Double) -> String {
         guard en else { return Ru.dur(sec) }

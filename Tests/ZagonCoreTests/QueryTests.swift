@@ -104,11 +104,12 @@ enum QueryFixture {
     @Test func daysInAnyZone() throws {
         let days = (0..<45).map { Time.addDays("2026-09-20", $0)! }
         let r = q.reports
-        var total = (tokens: 0, session: 0.0, user: 0.0)
+        var total = (tokens: 0, session: 0.0, user: 0.0), worked = 0.0
         for day in days {
             let a = try r.day(day, withSessions: false), b = try q.day(day, detail: false)
             #expect(a.tokens.total == b.tokens.total && abs(a.sessionSec - b.sessionSec) < 1e-6 && abs(a.userSec - b.userSec) < 1e-6)
-            total.tokens += b.tokens.total; total.session += b.sessionSec; total.user += b.userSec
+            #expect(abs(a.workedSec - b.workedSec) < 1e-6 && b.workedSec <= b.sessionSec + 1e-6)
+            total.tokens += b.tokens.total; total.session += b.sessionSec; total.user += b.userSec; worked += b.workedSec
         }
         #expect(total.tokens > 0 && total.session > 0 && total.user > 0)
         let shifted: DayBounds = { Time.dayBounds($0).map { ($0.0 + 5.5 * 3600, $0.1 + 5.5 * 3600) } }
@@ -121,7 +122,7 @@ enum QueryFixture {
         #expect(changed)
         #expect(moved.tokens == total.tokens && abs(moved.session - total.session) < 1e-3 && abs(moved.user - total.user) < 1e-3)
         let h = try q.hours(from: "2026-09-20", count: 45, bounds: shifted)
-        #expect(abs(h.reduce(0, +) * 3600 - total.session) < 1e-3)
+        #expect(worked > 0 && abs(h.reduce(0, +) * 3600 - worked) < 1e-3)   // hours are wall-clock
     }
 
     /// Your time on two machines at once counts once: a server's imported stretch over the same minutes adds nothing.

@@ -30,6 +30,9 @@ public struct DayDetail: Sendable {
     public var day: String
     public var tokens = TokenTotals()
     public var cost = 0.0
+    /// Sessions worked, wall-clock (`SessionTime.wall`): parallel sessions count once.
+    public var workedSec = 0.0
+    /// Agent time: each session's working time summed over sessions.
     public var sessionSec = 0.0
     public var userSec = 0.0
     public var lanes: [SessionLane] = []
@@ -56,7 +59,8 @@ public struct ProjectDay: Sendable, Equatable {
 }
 
 public struct PeriodTotals: Sendable, Equatable {
-    public var sessionSec = 0.0, userSec = 0.0, tokens = 0, cost = 0.0
+    /// `workedSec`: wall-clock, summed over days; `sessionSec`: agent time (see `DayDetail`).
+    public var workedSec = 0.0, sessionSec = 0.0, userSec = 0.0, tokens = 0, cost = 0.0
     public init() {}
 }
 
@@ -79,7 +83,7 @@ public typealias DayBounds = (String) -> (Timestamp, Timestamp)?
 /// follows the zone of each machine that scanned), so the caller's zone cuts the days. Usage is kept by UTC hour: an
 /// hour belongs to the stretch it starts in, so with an offset that is not whole hours the edges are rounded to it.
 struct Span {
-    var tokens = TokenTotals(), cost = 0.0, sessionSec = 0.0, userSec = 0.0
+    var tokens = TokenTotals(), cost = 0.0, workedSec = 0.0, sessionSec = 0.0, userSec = 0.0
     var project: [String: UsageLine] = [:], model: [String: UsageLine] = [:], agent: [String: UsageLine] = [:]
     var host: [String: UsageLine] = [:]
     var tools: [String: Int] = [:]
@@ -98,7 +102,7 @@ extension Query {
         var d = DayDetail(day: day)
         guard let (s, e) = bounds(day) else { return d }
         let x = try spans([(s, e)])[0]
-        d.tokens = x.tokens; d.cost = x.cost; d.sessionSec = x.sessionSec; d.userSec = x.userSec
+        d.tokens = x.tokens; d.cost = x.cost; d.workedSec = x.workedSec; d.sessionSec = x.sessionSec; d.userSec = x.userSec
         d.byTool = x.tools.map { NameCount(name: $0.key, count: $0.value) }.sorted { ($0.count, $1.name) > ($1.count, $0.name) }
         guard detail else { return d }
         func ranked(_ x: [String: UsageLine]) -> [UsageLine] { x.values.sorted { ($0.tokens, $1.name) > ($1.tokens, $0.name) } }
@@ -116,8 +120,9 @@ extension Query {
         return d
     }
 
-    /// One `Span` per range (ranges must not overlap; an empty one stays empty). Session time is the union per session
-    /// summed over sessions (what `day_agg` holds); your time is one union over all machines (`day_agg` keeps it per
+    /// One `Span` per range (ranges must not overlap; an empty one stays empty). Worked time is wall-clock
+    /// (`SessionTime.wall`); session time is the union per session summed over sessions (agent time, what `day_agg`
+    /// holds); your time is one union over all machines (`day_agg` keeps it per
     /// host, so its sum counts an hour on two machines twice).
     func spans(_ ranges: [(Timestamp, Timestamp)]) throws -> [Span] {
         var out = ranges.map { _ in Span() }
@@ -185,6 +190,7 @@ extension Query {
             """, [.real(hi), .real(lo)]) { user.append(Interval($0.real(0), $0.real(1))) }
         let merged = Intervals.merge(user)
         for i in ranges.indices { out[i].userSec = covered(merged, ranges[i]) }
+        for (i, sec) in try SessionTime.wall(db, ranges).enumerated() { out[i].workedSec = sec }
         return out
     }
 
@@ -248,7 +254,7 @@ extension Query {
         let x = try spans(ranges)
         func totals(_ xs: ArraySlice<Span>) -> PeriodTotals {
             var t = PeriodTotals()
-            for s in xs { t.sessionSec += s.sessionSec; t.userSec += s.userSec; t.tokens += s.tokens.total; t.cost += s.cost }
+            for s in xs { t.workedSec += s.workedSec; t.sessionSec += s.sessionSec; t.userSec += s.userSec; t.tokens += s.tokens.total; t.cost += s.cost }
             return t
         }
         // Projects of each day merged over tools: session time and the tokens of their sessions.
@@ -273,8 +279,8 @@ extension Query {
                           previousSec: previousSec, limitByDay: limit)
     }
 
-    /// Session hours of each day from `first` for `count` days.
+    /// Hours the sessions worked (wall-clock) on each day from `first` for `count` days.
     public func hours(from first: String, count: Int, bounds: DayBounds = Time.dayBounds) throws -> [Double] {
-        try spans((0..<count).map { bounds(Time.addDays(first, $0) ?? first) ?? (0, 0) }).map { $0.sessionSec / 3600 }
+        try spans((0..<count).map { bounds(Time.addDays(first, $0) ?? first) ?? (0, 0) }).map { $0.workedSec / 3600 }
     }
 }

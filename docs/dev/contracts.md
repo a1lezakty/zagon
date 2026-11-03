@@ -230,7 +230,11 @@ Claude Code runs under several accounts on one machine: each `CLAUDE_CONFIG_DIR`
   (tool, project); the `tool = project = model = ''` row holds the day totals `session_sec` and `user_sec`. `seq`
   = change counter. The project of tokens is the one of each request's `usage_hour.cwd`, of session time the one of
   each interval's `activity.cwd` (union per session and project, so parallel sub-agents in two directories count in
-  both; the totals row stays the union per session), by `Projects.of`. The session's own project is the
+  both; the totals row stays the union per session), by `Projects.of`. `session_sec` is agent time (summed over
+  sessions); "sessions worked" in every output (0.1.7: `today`/`day`/`week`, MCP, the bot, summaries, the Mac) is
+  wall-clock instead, the union of all sessions' `activity` working intervals, computed when read (`SessionTime.wall`,
+  not stored): `worked_sec` next to `session_sec` in `--json` / `DayReport`, `WeekReport` (`previous_worked_sec`),
+  `DayDetail`, `PeriodTotals`; `Query.hours` is wall-clock. The session's own project is the
   `dir_project.project` of the folder it started in (`session.cwd`), else `session.project`: an unknown directory
   counts for it; for a session that started in a folder that is not `home` in `dir_project`, so does a directory
   inside that folder (`cd src`); any other directory, and every directory of a session started in the home directory

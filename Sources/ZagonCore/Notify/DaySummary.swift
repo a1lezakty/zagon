@@ -29,7 +29,8 @@ public struct DaySummary {
     }
     public struct Facts: Sendable {
         public var day: String
-        public var sessionSec = 0.0, userSec = 0.0, tokens = 0
+        /// `workedSec`: wall-clock (`DayReport.workedSec`); `sessionSec`: agent time.
+        public var workedSec = 0.0, sessionSec = 0.0, userSec = 0.0, tokens = 0
         public var sessions: [SessionFacts] = []
         /// Repository name → your commit subjects of the day.
         public var commits: [(repo: String, subjects: [String])] = []
@@ -70,7 +71,7 @@ public struct DaySummary {
     public func facts(_ day: String, now: Double = Sys.now()) throws -> Facts {
         var f = Facts(day: day)
         let r = try Reports(store: store).day(day)
-        f.sessionSec = r.sessionSec; f.userSec = r.userSec; f.tokens = r.tokens.total
+        f.workedSec = r.workedSec; f.sessionSec = r.sessionSec; f.userSec = r.userSec; f.tokens = r.tokens.total
         guard let (s, e) = Time.dayBounds(day) else { return f }
         var waiting: [String: Double] = [:]
         try store.db.query("""
@@ -184,8 +185,8 @@ public struct DaySummary {
 
     /// The day in numbers, one line.
     public static func headline(_ f: Facts, _ w: Words) -> String {
-        var s = "\(w.date(f.day)). " + w.t("Сессии работали \(w.dur(f.sessionSec)), ты — \(w.dur(f.userSec)). \(w.tokens(f.tokens)) токенов.",
-                                          "Sessions worked \(w.dur(f.sessionSec)), you \(w.dur(f.userSec)). \(w.tokens(f.tokens)) tokens.")
+        var s = "\(w.date(f.day)). " + w.t("Сессии работали \(w.dur(f.workedSec))\(w.agent(f.workedSec, f.sessionSec)), ты — \(w.dur(f.userSec)). \(w.tokens(f.tokens)) токенов.",
+                                          "Sessions worked \(w.dur(f.workedSec))\(w.agent(f.workedSec, f.sessionSec)), you \(w.dur(f.userSec)). \(w.tokens(f.tokens)) tokens.")
         if let p = f.weekPct { s += w.t(" Неделя: ", " Week: ") + w.pct(p) + "." }
         return s
     }
