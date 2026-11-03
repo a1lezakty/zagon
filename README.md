@@ -231,8 +231,8 @@ opened, the menu bar, then the Day, Week and Calendar windows.
   (`<dir>/projects`), its sessions are marked with the account (`(work)` next to the title in the CLI, MCP, the bot
   and the Mac), and its limits are read, shown and notified separately ("Claude (work): weekly limit — 95%"). The
   account's name is its folder's (`.claude-work` → `work`) unless `[accounts]` in `~/.zagon/config.toml` names it;
-  the usual account is `default`, or `[limits] account`. The rings of the Mac app show the usual account, the others
-  are listed below them. The same account on two machines (say, a personal one on the Mac and on a server) still
+  the usual account is `default`, or `[limits] account`. The rings of the Mac app show the usual account (another one
+  when only that one was used in the last 8 days), the others are listed below them, one line each. The same account on two machines (say, a personal one on the Mac and on a server) still
   mixes, as before: the reading whose window resets last is shown, and the Mac names where it came from next to the
   rings ("build-box · work"); the name is `[limits] account = "work"` in that machine's `~/.zagon/config.toml`.
 - The database does not hold the text of your conversations. It holds numbers, times, project names, git branches
