@@ -605,7 +605,7 @@ public final class StoreDataProvider: ZagonDataProvider, @unchecked Sendable {
                 Totals(sessionSec: p.workedSec, agentSec: p.sessionSec, userSec: p.userSec, tokens: p.tokens, cost: p.cost)
             }
             return WeekData(start: monday, projects: names, days: days, totals: totals(w.totals), previous: totals(w.previous),
-                            projectRows: rows, limitByDay: w.limitByDay)
+                            projectRows: rows, limitByDay: w.limitByDay, workedByDay: w.workedByDay)
         }
     }
 

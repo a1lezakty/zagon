@@ -247,7 +247,7 @@ struct StatTile: View {
             Text(stat.label).font(.system(size: 12)).foregroundColor(highlight ? Z.blueInk : Z.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let d = stat.delta {
-                Text(d).font(.system(size: 12)).foregroundColor(stat.good == false ? Z.bad : Z.good)
+                Text(d).font(.system(size: 12)).foregroundColor(stat.good.map { $0 ? Z.good : Z.bad } ?? Z.secondary)
             }
         }
         .padding(.vertical, size >= 22 ? 14 : 12).padding(.horizontal, size >= 22 ? 16 : 14)

@@ -69,11 +69,13 @@ extension DaySummary {
                        now: Double = Sys.now()) throws -> (doc: SummaryDoc, engine: String) {
         let (worked, missing) = try days(from, to)
         if make { for (i, d) in missing.enumerated() { progress(i + 1, missing.count, d); try self.make(d, now: now) } }
-        var docs: [SummaryDoc] = []
-        for d in worked { if let k = try kept(d) { docs.append(k.doc) } }
+        var docs: [SummaryDoc] = [], docDays: Set<String> = []
+        for d in worked { if let k = try kept(d) { docs.append(k.doc); docDays.insert(d) } }
         let w = words
-        // "Sessions worked": wall-clock summed over the days (the cards' times add up parallel sessions).
-        let wall = try Query(store: store).hours(from: from, count: DaySummary.range(from, to).count).reduce(0, +) * 3600
+        // "Sessions worked": wall-clock summed over the days with a card (the cards' times add up parallel sessions).
+        let range = DaySummary.range(from, to)
+        let wall = zip(range, try Query(store: store).hours(from: from, count: range.count))
+            .reduce(0) { $0 + (docDays.contains($1.0) ? $1.1 * 3600 : 0) }
         var doc = DaySummary.merge(docs, from: from, to: to, w, worked: wall), engine = "none"
         if !docs.isEmpty,
            let r = complete(DaySummary.periodInstruction(w) + DaySummary.periodDigest(docs, from: from, to: to, w), what: "period summary") {

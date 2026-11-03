@@ -409,10 +409,12 @@ public struct WeekData: Sendable {
     public var projectRows: [ProjectWeek]
     /// Weekly limit at the end of each day; nil = no reading (future).
     public var limitByDay: [Double?]
+    /// Per day, the seconds the sessions worked, wall-clock; empty = not known (the projects' times are added up).
+    public var workedByDay: [Double]
     public init(start: Date, projects: [String], days: [[Totals]], totals: Totals, previous: Totals,
-                projectRows: [ProjectWeek], limitByDay: [Double?]) {
+                projectRows: [ProjectWeek], limitByDay: [Double?], workedByDay: [Double] = []) {
         self.start = start; self.projects = projects; self.days = days; self.totals = totals
-        self.previous = previous; self.projectRows = projectRows; self.limitByDay = limitByDay
+        self.previous = previous; self.projectRows = projectRows; self.limitByDay = limitByDay; self.workedByDay = workedByDay
     }
 }
 

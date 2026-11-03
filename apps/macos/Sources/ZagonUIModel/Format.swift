@@ -116,10 +116,10 @@ public struct Fmt: Sendable {
 
     // MARK: durations
 
-    /// 41m · 1h 05m · 7h 20m · 2d 21h. Below a minute rounds up to 1m when positive.
     /// "agent time X" under "sessions worked" when the sessions' summed time is a minute or more over the wall clock.
     public func agentTime(_ t: Totals) -> String? { t.agentSec - t.sessionSec < 60 ? nil : self.t("stat.agentTime", duration(t.agentSec)) }
 
+    /// 41m · 1h 05m · 7h 20m · 2d 21h. Below a minute rounds up to 1m when positive.
     public func duration(_ sec: Double) -> String {
         let m = max(0, Int((sec / 60).rounded()))
         if m >= 48 * 60 { return t("dur.dh", String(m / 1440), String(m % 1440 / 60)) }

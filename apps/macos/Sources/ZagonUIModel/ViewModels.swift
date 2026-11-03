@@ -522,11 +522,17 @@ public struct WeekVM: Sendable {
             let day = f.addDays(i, to: data.start)
             let parts = i < data.days.count ? data.days[i] : []
             let today = f.calendar.isDate(day, inSameDayAs: f.now)
-            let vals = parts.enumerated().map { j, t in
+            var vals = parts.enumerated().map { j, t in
                 WeekPartVM(project: f.t.nonEmpty(j < data.projects.count ? data.projects[j] : "", "other"),
                            value: value(t, m), color: Palette.series(j))
             }.filter { $0.value > 0 }
-            let sum = vals.reduce(0) { $0 + $1.value }
+            var sum = vals.reduce(0) { $0 + $1.value }
+            // Hours are wall-clock: the projects' parts (summed over parallel sessions) share the day's real hours.
+            if m == .hours, !parts.isEmpty, i < data.workedByDay.count, sum > 0 {
+                let worked = data.workedByDay[i] / 3600
+                for j in vals.indices { vals[j].value *= worked / sum }
+                sum = worked
+            }
             let total: String
             switch m {
             case .hours: total = sum > 0 ? f.duration(sum * 3600) : "—"

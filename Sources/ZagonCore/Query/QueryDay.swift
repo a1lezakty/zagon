@@ -68,6 +68,8 @@ public struct WeekDetail: Sendable {
     public var days: [String]
     /// Per day, per project (merged over tools).
     public var projects: [[ProjectDay]]
+    /// Per day, the sessions' wall-clock working seconds (`Span.workedSec`).
+    public var workedByDay: [Double]
     public var totals: PeriodTotals
     public var previous: PeriodTotals
     /// Previous week's session seconds per project.
@@ -275,7 +277,7 @@ extension Query {
             }
             limit.append(last)
         }
-        return WeekDetail(days: days, projects: projects, totals: totals(x.prefix(7)), previous: totals(x.suffix(7)),
+        return WeekDetail(days: days, projects: projects, workedByDay: x.prefix(7).map(\.workedSec), totals: totals(x.prefix(7)), previous: totals(x.suffix(7)),
                           previousSec: previousSec, limitByDay: limit)
     }
 
