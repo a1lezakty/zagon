@@ -12,6 +12,7 @@ import Darwin
 ///     enabled = true              # this host sends notifications (keep it on one host only)
 ///     limit_reset = true          # "limit reset" after a window that reached its first threshold
 ///     waiting_minutes = 10        # a session waits for you longer than this (0 = off)
+///     waiting_background_minutes = 60  # the same while its background tasks still run (0 = never)
 ///     long_work_minutes = 15      # a turn that worked longer than this has finished (0 = off)
 ///     summary_at = "20:00"        # day summary ("" = off)
 ///     worklog_at = "19:00"        # worklog plan (the tasks package provides it; "" = off)
@@ -53,6 +54,8 @@ public struct NotifyConfig: Sendable, Equatable {
     /// `[limits] account`: the label of the default account where several accounts' limits are shown; nil = not set.
     public var limitsAccount: String?
     public var waitingMinutes = 10.0
+    /// The wait before "waiting for you" when the session's background tasks still run (`Background`); 0 = never.
+    public var waitingBackgroundMinutes = 60.0
     public var longWorkMinutes = 15.0
     /// Minutes after local midnight; nil = off.
     public var summaryAt: Int? = 20 * 60
@@ -104,6 +107,7 @@ public struct NotifyConfig: Sendable, Equatable {
         if let v = s("limits", "account"), !v.isEmpty { c.limitsAccount = v }
         if let v = b("notify", "limit_reset") { c.limitReset = v }
         if let v = n("notify", "waiting_minutes") { c.waitingMinutes = v }
+        if let v = n("notify", "waiting_background_minutes") { c.waitingBackgroundMinutes = v }
         if let v = n("notify", "long_work_minutes") { c.longWorkMinutes = v }
         if let v = s("notify", "summary_at") { c.summaryAt = clock(v) }
         if let v = s("notify", "worklog_at") { c.worklogAt = clock(v) }

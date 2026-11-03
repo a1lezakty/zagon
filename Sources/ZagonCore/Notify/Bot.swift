@@ -161,7 +161,7 @@ public final class Bot {
             let state: String
             switch r.text(3) {
             case "waiting_input" where r.int(8) != 0:  // the turn ended, its background tasks still run
-                state = w.t("▶ работает в фоне", "▶ working in background")
+                state = w.t("▶ работает в фоне · ", "▶ working in background · ") + w.dur(now - since)
             case "waiting_permission": state = w.t("⏳ ждёт разрешения ", "⏳ waits for permission ") + w.dur(now - since)
             case "waiting_input":
                 if let d = r.text(6) {  // a worker driven by another session: that one watches it

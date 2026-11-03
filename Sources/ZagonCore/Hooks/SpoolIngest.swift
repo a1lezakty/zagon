@@ -103,21 +103,18 @@ public enum SpoolIngest {
         switch v["kind"]?.string {
         case "hook":
             guard let sid = v["session_id"]?.string, let event = v["event"]?.string else { res.bad += 1; return }
-            if tool == .claude, event == "SessionStart", v["source"]?.string != "compact" {
-                // A new process: the background tasks of the one before died with it (transcripts are read first).
-                let id = "claude:\(sid)"
-                let stored = try store.db.one("SELECT bg_tasks FROM session WHERE id = ?", [.text(id)]) { $0.text(0) } ?? nil
-                if let e = Background.restart(stored, at: ts) {
-                    try store.db.run("UPDATE session SET bg_tasks = ?, bg_until = ?, seq = ? WHERE id = ?",
-                                     [.of(e.tasks), .of(e.until), .int(Int64(try store.nextSeq())), .text(id)])
-                }
-            }
             guard let st = status(tool: tool.rawValue, event: event, notificationType: v["notification_type"]?.string,
                                   source: v["source"]?.string) else { return }
             if try setStatus(store: store, id: "\(tool.rawValue):\(sid)", tool: tool, status: st, at: ts,
                              cwd: v["cwd"]?.string, detail: st == "waiting_permission" ? v["tool_name"]?.string : nil,
                              account: names.name(configDir)) {
                 res.statuses += 1
+            }
+            if tool == .claude, event == "SessionStart", v["source"]?.string != "compact" {
+                // A new process: the background tasks of the one before died with it. `bg_since` keeps launches
+                // before it out when the transcript is read after this line, so the order does not matter.
+                let id = "claude:\(sid)"
+                if let e = Background.restart(try store.background(id), at: ts) { try store.setBackground(id, e) }
             }
         case "limits":
             // A status line of a zagon before accounts sent no `config_dir`: the account of its session, when known.

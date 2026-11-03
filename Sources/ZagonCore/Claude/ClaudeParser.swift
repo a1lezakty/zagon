@@ -50,6 +50,9 @@ struct ClaudeRecord: Decodable {
     /// `queue-operation` records: `enqueue` with `content` = a message queued for the agent (task notifications).
     var operation: LenientString?
     var content: LenientString?
+    /// `history-suppression` records: `cause` (`fork_inherit` = a fork's copy of the history follows) and their time `ts`.
+    var cause: LenientString?
+    var ts: LenientString?
 
     struct LenientString: Decodable {
         var value: String?
@@ -166,9 +169,11 @@ public struct ClaudeParser: LineParser {
         let isQueued = !isAssistant && !isUser && !isSub && contains(line, "\"queued_command\"")
         let isQueueOp = !isAssistant && !isUser && !isQueued && !isSub && contains(line, "\"queue-operation\"")
             && contains(line, "<task-notification>")
-        let isTitle = !isAssistant && !isUser && !isQueued && !isQueueOp && !isSub &&
+        let isFork = !isAssistant && !isUser && !isSub && contains(line, "\"history-suppression\"")
+            && contains(line, "\"fork_inherit\"")
+        let isTitle = !isAssistant && !isUser && !isQueued && !isQueueOp && !isFork && !isSub &&
             (contains(line, "\"customTitle\"") || contains(line, "\"agentName\"") || contains(line, "\"aiTitle\""))
-        guard isAssistant || isUser || isQueued || isQueueOp || isTitle else {
+        guard isAssistant || isUser || isQueued || isQueueOp || isFork || isTitle else {
             // JSON written with spaces (`"type": "user"`) never matches the checks above: compact it and look again.
             // Only lines whose first separator has a space pay for this (none in any version seen so far).
             if Self.spaced(line) {
@@ -231,6 +236,10 @@ public struct ClaudeParser: LineParser {
             for id in Self.finishedTasks(text) {
                 out.background.append(BackgroundTask(sessionId: sessionId, id: id, ts: ts, until: nil))
             }
+        case "history-suppression":
+            // A fork: the history copied after this record keeps its launches but none of their ends.
+            guard !isSub, r.cause?.value == "fork_inherit", let t = (r.ts?.value).flatMap({ Time.parseISO($0) }) else { return }
+            out.background.append(BackgroundTask(sessionId: sessionId, id: "", ts: t, until: nil))
         case "custom-title", "agent-name", "ai-title":
             guard !isSub else { return }
             let t: (String, Int)? = r.customTitle.map { ($0, TitleRank.customTitle) }
@@ -250,6 +259,8 @@ public struct ClaudeParser: LineParser {
         let cap = ts + UserTime.driverIdle
         if let id = t.backgroundTaskId { return BackgroundTask(sessionId: sessionId, id: id, ts: ts, until: cap) }
         if t.isAsync == true, let id = t.agentId { return BackgroundTask(sessionId: sessionId, id: id, ts: ts, until: cap) }
+        // A non-persistent Monitor counts until its `timeoutMs`; a `taskId` without `persistent` (Workflow and other
+        // tools) is not counted.
         if let id = t.taskId, let persistent = t.persistent {
             let ends = !persistent ? t.timeoutMs.map { ts + Double($0) / 1000 } : nil
             return BackgroundTask(sessionId: sessionId, id: id, ts: ts, until: min(cap, ends ?? cap))
@@ -453,6 +464,11 @@ public struct ClaudeParser: LineParser {
             else if keyIs(k, "customTitle") { r.customTitle = c.string() }
             else if keyIs(k, "agentName") { r.agentName = c.string() }
             else if keyIs(k, "aiTitle") { r.aiTitle = c.string() }
+            else if keyIs(k, "cause") || keyIs(k, "ts") {
+                guard r.type == "history-suppression", c.peek == 0x22 else { return false }
+                let v = ClaudeRecord.LenientString(c.string())
+                if keyIs(k, "ts") { r.ts = v } else { r.cause = v }
+            }
             else if keyIs(k, "operation") {
                 guard c.peek == 0x22 else { return false }
                 r.operation = ClaudeRecord.LenientString(c.string())

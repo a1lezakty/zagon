@@ -261,7 +261,7 @@ extension Query {
                    (SELECT max(start) FROM activity a WHERE a.session_id = session.id AND a.kind = 'working'),
                    \(UserTime.driverSQL("session", now: now)), account, bg_tasks
             FROM session
-            WHERE (max(coalesce(last_at, 0), coalesce(status_at, 0)) >= ?1 OR bg_until > ?2) AND coalesce(archived, 0) = 0
+            WHERE max(coalesce(last_at, 0), coalesce(status_at, 0)) >= ?1 AND coalesce(archived, 0) = 0
               AND coalesce(status, '') <> 'ended'
             """, [.real(now - window), .real(now)]) { r in
             let status = r.text(7), statusAt = r.optReal(8), lastAt = r.optReal(9)

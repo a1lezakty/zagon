@@ -27,6 +27,11 @@ func bgDone(_ t: Timestamp, _ id: String, status: String? = "completed", session
     return #"{"type":"queue-operation","operation":"enqueue","timestamp":"\#(iso(t))","sessionId":"\#(session)","content":\#(js(body))}"#
 }
 
+/// The first record of a fork's transcript.
+func forkMark(_ t: Timestamp, session: String = "S") -> String {
+    #"{"type":"history-suppression","sessionId":"\#(session)","cause":"fork_inherit","ts":"\#(iso(t))"}"#
+}
+
 @Suite struct BackgroundTests {
     @Test func launchesAndEndsFromTheTranscript() {
         let out = parse([bgBash(T0, "b1"), bgAgent(T0 + 1, "a1"), bgMonitor(T0 + 2, "m1", persistent: false, timeoutMs: 600_000),
@@ -46,6 +51,17 @@ func bgDone(_ t: Timestamp, _ id: String, status: String? = "completed", session
         // The fallback decoder reads the same (a spaced line), and a sub-agent's tasks are not the session's.
         #expect(parse([bgBash(T0, "b1").replacingOccurrences(of: #"{"parentUuid""#, with: #"{ "parentUuid""#)]).background.count == 1)
         #expect(parse([bgBash(T0, "b1"), bgDone(T0 + 1, "b1")], agent: "agent-x").background.isEmpty)
+        #expect(parse([forkMark(T0)]).background == [BackgroundTask(sessionId: "claude:S", id: "", ts: T0, until: nil)])
+        #expect(parse([forkMark(T0).replacingOccurrences(of: "fork_inherit", with: "restored_owner_mismatch")]).background.isEmpty)
+    }
+
+    /// A fork copies the history with its launches but without their ends: only its own launches count.
+    @Test func aForkDoesNotInheritTheTasks() {
+        let env = ClaudeEnv()
+        env.write("-w-alpha/F.jsonl", lines: [forkMark(T0 + 100, session: "F"), bgBash(T0 + 10, "b1", session: "F"),
+                                              typed(T0 + 110, session: "F"), bgBash(T0 + 120, "b2", session: "F")])
+        env.scan()
+        #expect(Background.count(open(env, "F"), now: T0 + 200) == 1 && open(env, "F")?.hasPrefix("b2@") == true)
     }
 
     func open(_ env: ClaudeEnv, _ s: String = "S") -> String? {
@@ -59,13 +75,18 @@ func bgDone(_ t: Timestamp, _ id: String, status: String? = "completed", session
         #expect(Background.count(open(env), now: T0 + 30) == 2)
         env.append("-w-alpha/S.jsonl", bgDone(T0 + 40, "b1") + "\n")
         env.scan()
-        #expect(Background.count(open(env), now: T0 + 50) == 1 && open(env)?.hasPrefix("b2@") == true)
+        // An ended task counts for the grace period more.
+        #expect(Background.count(open(env), now: T0 + 50) == 2 && Background.count(open(env), now: T0 + 40 + 121) == 1)
         // Past the cap it stops counting; the next record drops it.
         #expect(Background.count(open(env), now: T0 + 20 + UserTime.driverIdle + 1) == 0)
         env.append("-w-alpha/S.jsonl", bgDone(T0 + 50, "b2", status: "failed") + "\n")
         env.scan()
-        #expect(open(env) == nil)
-        #expect(try (env.store.db.one("SELECT bg_until FROM session WHERE id = 'claude:S'") { $0.optReal(0) } ?? nil) == nil)
+        #expect(Background.count(open(env), now: T0 + 50 + 121) == 0)
+        #expect(try (env.store.db.one("SELECT bg_until FROM session WHERE id = 'claude:S'") { $0.optReal(0) } ?? nil) == T0 + 50 + 120)
+        // Ended tasks go with the next task record after their grace.
+        env.append("-w-alpha/S.jsonl", bgBash(T0 + 10 * minute, "b3") + "\n")
+        env.scan()
+        #expect(open(env)?.hasPrefix("b3@") == true && Background.count(open(env), now: T0 + 11 * minute) == 1)
     }
 
     @Test func aNewProcessDropsTheTasksOfTheOldOne() throws {
@@ -81,6 +102,17 @@ func bgDone(_ t: Timestamp, _ id: String, status: String? = "completed", session
         #expect(Background.count(open(env), now: T0 + 400) == 1)
     }
 
+    /// The hook of the new process read before the transcript of the old one (`zagon notify`, a spool-only batch).
+    @Test func theRestartHoldsWhenTheHookIsReadFirst() throws {
+        let env = ClaudeEnv()
+        var res = SpoolIngest.Result()
+        let line = #"{"kind":"hook","tool":"claude","event":"SessionStart","source":"resume","session_id":"S","ts":\#(T0 + 50)}"#
+        try SpoolIngest.apply(Array(line.utf8), store: env.store, into: &res)
+        env.write("-w-alpha/S.jsonl", lines: [typed(T0), bgBash(T0 + 10, "b1"), bgBash(T0 + 100, "b2")])
+        env.scan()
+        #expect(Background.count(open(env), now: T0 + 200) == 1 && open(env)?.hasPrefix("b2@") == true)
+    }
+
     /// The v9 upgrade: files already read past their launches are recounted once; tokens stay as they were.
     @Test func theUpgradeRecountFindsTasksLaunchedBefore() throws {
         let env = ClaudeEnv()
@@ -94,7 +126,7 @@ func bgDone(_ t: Timestamp, _ id: String, status: String? = "completed", session
             try env.store.db.exec(String(st))
         }
         env.scan()
-        #expect(open(env)?.hasPrefix("b2@") == true && Background.count(open(env), now: T0 + 40) == 1)
+        #expect(Background.count(open(env), now: T0 + 40) == 2 && Background.count(open(env), now: T0 + 200) == 1)
         #expect(try tokens() == before && before == 15)
     }
 
@@ -106,6 +138,9 @@ func bgDone(_ t: Timestamp, _ id: String, status: String? = "completed", session
         try env.store.setStatus(sessionId: "claude:S", tool: .claude, status: "waiting_input", at: T0 + minute)
         try env.store.mergeSession(SessionMeta(id: "claude:L", tool: .claude, title: "lead"))
         try env.store.setStatus(sessionId: "claude:L", tool: .claude, status: "working", at: T0 + 39 * minute)
+        env.write("-w-beta/W.jsonl", lines: [typed(T0, session: "W", cwd: "/w/beta"),
+                                             assistantLine(T0 + 5, id: "w1", output: 1, session: "W", cwd: "/w/beta")])
+        env.scan()
         try env.store.mergeSession(SessionMeta(id: "claude:W", tool: .claude, title: "worker"))
         try env.store.db.run("UPDATE session SET driver = 'claude:L' WHERE id = 'claude:W'")
         try env.store.setStatus(sessionId: "claude:W", tool: .claude, status: "waiting_input", at: T0 + 35 * minute)
@@ -115,8 +150,11 @@ func bgDone(_ t: Timestamp, _ id: String, status: String? = "completed", session
         #expect(s.state == .working && s.background == 1 && s.since == T0 + minute)  // past idleAfter: still working
         #expect(live.first { $0.id == "claude:W" }?.background == 0)
         let lines = try Reports(store: env.store).sessions(from: T0 - hour, to: T0 + hour, now: now)
-        let ls = try #require(lines.first { $0.id == "claude:S" })
-        #expect(ls.background == 1 && !ReportTools.waiting(ls))
+        let ls = try #require(lines.first { $0.id == "claude:S" }), lw = try #require(lines.first { $0.id == "claude:W" })
+        #expect(ls.background == 1 && lw.background == nil && !ReportTools.waiting(ls) && !ReportTools.waiting(lw))
+        // CLI and MCP lines.
+        #expect(ls.turnState(now: now) == "working in background (1 task) · 39m")
+        #expect(lw.turnState(now: now) == "driven by lead · turn ended 5m ago")
 
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
@@ -126,19 +164,25 @@ func bgDone(_ t: Timestamp, _ id: String, status: String? = "completed", session
         c.telegramTokenFile = dir + "/token"; c.telegramChatId = "1"
         let bot = Bot(telegram: try #require(Telegram(c, curl: Curl(searchPath: dir), tmpDir: dir)), store: env.store, lang: .en)
         let text = try bot.sessions(now: now)
-        #expect(text.contains("▶ working in background · alpha"))
-        #expect(text.contains("· driven by lead · turn ended 5 min ago · worker"))
+        #expect(text.contains("▶ working in background · 39 min · alpha"))
+        #expect(text.contains("· driven by lead · turn ended 5 min ago · "))
         #expect(!text.contains("waits"))
         bot.lang = .ru
         let ru = try bot.sessions(now: now)
-        #expect(ru.contains("▶ работает в фоне") && ru.contains("под управлением lead · ход окончен 5 мин назад"))
+        #expect(ru.contains("▶ работает в фоне · 39 мин") && ru.contains("под управлением lead · ход окончен 5 мин назад"))
 
         var nc = NotifyConfig(); nc.quiet = nil; nc.summaryAt = nil; nc.worklogAt = nil; nc.waitingMinutes = 5
         let n = Notifier(store: env.store, config: nc, channels: [])
+        // While its task runs the wait is `waiting_background_minutes` (60), not 5.
         #expect(try n.waitingEvents(now: now).isEmpty)
-        // The task ends: the session waits for you again.
+        #expect(try n.waitingEvents(now: T0 + 62 * minute).map(\.key) == ["wait:claude:S"])
+        // The task ended (and its grace passed): the usual wait.
         env.append("-w-alpha/S.jsonl", bgDone(T0 + 20 * minute, "b1") + "\n")
         env.scan()
         #expect(try n.waitingEvents(now: now).map(\.key) == ["wait:claude:S"])
+        // The agent took up the notification (the transcript moved past the stop before its hooks): no alert.
+        env.append("-w-alpha/S.jsonl", toolResult(T0 + 20 * minute + 4) + "\n")
+        env.scan()
+        #expect(try n.waitingEvents(now: now).isEmpty)
     }
 }

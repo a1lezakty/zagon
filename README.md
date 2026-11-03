@@ -614,7 +614,8 @@ The service sends alerts through your own Telegram bot or an [ntfy](https://ntfy
   another session drives over `tmux send-keys` is watched by that session, not by you, so it is shown as "driven by
   … · turn ended … ago" and sends no such alert; a leader killed without `SessionEnd` releases its workers after 12
   hours; a session whose turn ended while its background tasks (shells, agents, monitors) still run is "working in
-  background" and sends neither alert until they end (12 hours at most);
+  background": its waiting alert comes after `waiting_background_minutes` (60) instead, and the "finished" alert
+  for that turn is not sent while they run (and usually not after);
 - a turn that worked longer than 15 minutes has finished, and its sub-agents and background commands too (not for
   a worker another session drives: that session watches it);
 - the day summary at 20:00, with a picture of the day (written at that time even with no channel configured).
@@ -632,6 +633,7 @@ timezone = ""               # e.g. "Europe/Berlin"; empty = system zone. Days ar
 enabled = true              # this host sends notifications
 limit_reset = true
 waiting_minutes = 10        # 0 = off
+waiting_background_minutes = 60  # the same while its background tasks still run (0 = never)
 long_work_minutes = 15      # 0 = off
 summary_at = "20:00"        # "" = off
 quiet = "23:00-08:00"       # "" = off
