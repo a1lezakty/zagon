@@ -17,7 +17,7 @@ others, not fail.
 | `ActivityEvent` | the agent did something at `ts` | feeds `working` intervals; `cwd` = the record's working directory (Claude: every transcript line, so sub-agents get their own; Codex: `session_meta.cwd`, then `turn_context.cwd`) |
 | `UserMessage` | the human typed a message at `ts` | starts a turn, counts as a user action (unless a `Relay` says another session typed it, see Time rules); `cwd` as for events; parsers always pass `text`: Ingest puts it into the contentless FTS index (only with `index_prompts`) and extracts task keys from it; it is never stored. Claude: `user` records typed by the human, messages through a channel plugin (`origin.kind = channel`, Telegram…; `channel = true`: always the human's) and messages sent while the agent was working (`attachment` `queued_command`, `commandMode = prompt`, origin `human` / `channel`, or no origin and not a generated prefix such as `<task-notification`; they never become `user` records) |
 | `Relay` | the agent typed into a terminal at `ts` | Claude `Bash` tool calls that run `tmux send-keys` / `send` / `paste-buffer`; `targets` = the session names of their `-t` (lower case, `=`, `:window`, `.pane` cut off), `""` = no `-t` or not a plain name (`$s`, `%3`). Only the targets are kept, never the command |
-| `BackgroundTask` | a background task of a Claude session launched or finished at `ts` | main transcript only. Launch (`until` = when it stops counting: `ts` + 12 h, `UserTime.driverIdle`; a non-persistent Monitor at its `timeoutMs` if sooner) from a `user` record's `toolUseResult`: `backgroundTaskId` (Bash in the background), `isAsync` + `agentId` (async Agent), `taskId` + `persistent` (Monitor). End (`until` nil): a `queue-operation` `enqueue` whose `content` holds `<task-notification>` blocks with a `<task-id>` and a `<status>` (completed / failed / killed …; a Monitor `<event>` without `<status>` is not an end), or a TaskStop result (`toolUseResult.task_id` + `task_type`). |
+| `BackgroundTask` | a background task of a Claude session launched or finished at `ts` | main transcript only. Launch (`until` = when it stops counting: `ts` + 12 h, `UserTime.driverIdle`; a non-persistent Monitor at its `timeoutMs` if sooner) from a `user` record's `toolUseResult`: `backgroundTaskId` (Bash in the background), `isAsync` + `agentId` (async Agent), `taskId` + `persistent` (Monitor). End (`until` nil): a `queue-operation` `enqueue` whose `content` holds `<task-notification>` blocks with a `<task-id>` and a `<status>` (completed / failed / killed …; a Monitor `<event>` without `<status>` is not an end), or a TaskStop result (`toolUseResult.task_id` + `task_type`). A `taskId` without `persistent` (Workflow and other tools) is not counted. Fork mark (`id` "", `until` nil): a `history-suppression` record with `cause: fork_inherit` (its `ts`): the history a fork copies after it carries launches without their ends, so launches before `ts` do not count. |
 | `LimitSnapshot` | subscription limit reading | Claude windows `five_hour` / `seven_day`. Codex: the main limit (`rate_limits.limit_id` absent or `codex`) as `primary` (300 min ≈ 5 h) / `secondary` (10 080 min = week); any other `limit_id` (e.g. `premium`) as `<limit_id>:primary` / `<limit_id>:secondary`. Ingest stores them as readings (`limit_snapshot`, key tool + account + window + ts), not as file contributions. `account` (v8): whose subscription, `default` unless a Claude status line ran under another `CLAUDE_CONFIG_DIR` (Codex: always `default`). |
 
 ## Parsers (`Model/Parsing.swift`)
@@ -192,16 +192,26 @@ Claude Code runs under several accounts on one machine: each `CLAUDE_CONFIG_DIR`
   driver watches it). The v6 migration also
   drops the Mac's `remote_seq:` cursors, so it pulls its servers' sessions (with their drivers) once again.
   `bg_tasks` (v9) = background tasks still running (`Background`: `id@launched@until` entries, epoch seconds, space
-  separated), `bg_until` = the latest `until`; written by transcript ingest from `BackgroundTask` (a launch adds, an
-  end removes, entries past their `until` by the batch's last record go), and on a Claude `SessionStart` that is not
-  `compact` by the spool, which drops the entries launched before it (a new process: the old one's tasks died with
-  it; transcripts are read before the spool in a pass). Hooks keep owning `status`. A session `waiting_input` with
-  `bg_until > now` is "working in background" (`LiveSessionInfo.background`, `SessionLine.background` = the number
-  of entries with `until > now`): the CLI, MCP and the bot say "working in background" / «работает в фоне», list it
-  with the working ones, the Mac in its working group, and no "waiting for you" or "finished" notification is sent.
-  Driven without background tasks it is neutral: "driven by <name> · turn ended N min ago" / «под управлением … ·
-  ход окончен N мин». The v9 migration recounts (`recount`) the main Claude transcripts changed in the last 12 h, so
-  tasks launched before the upgrade are known.
+  separated), `bg_until` = the latest `until`, `bg_since` = launches before it are not this process's. Transcript
+  ingest applies `BackgroundTask` in order: a launch at or after `bg_since` adds, an end keeps the task 120 s more
+  (`Background.grace`: Claude Code starts a turn on its notification seconds later), a fork mark moves `bg_since`,
+  entries past their `until` by the batch's last record go. A Claude `SessionStart` that is not `compact` (spool)
+  moves `bg_since` to its time and drops the entries launched before it (a new process: the old one's tasks died
+  with it). Either can be read first (`zagon notify` and a spool-only daemon batch read the spool before the
+  transcript): the result is the same. Hooks keep owning `status`. A session `waiting_input` with `bg_until > now`
+  is "working in background" (`LiveSessionInfo.background` with state `working` since the turn ended,
+  `SessionLine.background` = the number of entries with `until > now`, `SessionLine.statusAt`): the CLI and MCP
+  (`SessionLine.turnState`) and the bot say "working in background · <time since the turn ended>" / «работает в
+  фоне», list it with the working ones, the Mac in its working group; the live list keeps its 6 h window (a killed
+  process stops showing after 6 h of silence). Its "waiting for you" alert comes after
+  `[notify] waiting_background_minutes` (60; 0 = never) instead of `waiting_minutes`, and the "finished" alert is
+  not sent while the tasks run. No waiting alert either for a session whose transcript moved past the stop
+  (`last_at > status_at + 5`: a turn on a task notification has begun before its hooks came). Driven without
+  background tasks it is neutral: "driven by <name> · turn ended N min ago" / «под управлением … · ход окончен N мин
+  назад». The v9 migration recounts (`recount`) the main Claude transcripts changed in the last 12 h, so tasks
+  launched before the upgrade are known; it re-reads those files whole (about 390 MB, 7 s on a busy machine), and a
+  file whose recount comes out with other token totals is rolled back, its earlier tasks with it (they show again
+  only when launched anew).
 - `activity(kind = working | waiting)`, `user_action(kind = msg | channel | read)`, `user_activity` (derived: your
   time, see Time rules).
 - `relay(file_id, session_id, ts, target)` (v5) — one row per `Relay` target.
@@ -437,6 +447,7 @@ key_pattern = "[A-Z][A-Z0-9]+-\\d+"   # task keys in typed messages and branches
 enabled = true            # this host sends notifications (one host per user, or they come twice)
 limit_reset = true        # "limit reset" after a window that reached the first threshold of its category
 waiting_minutes = 10      # a session waits for you longer than this (0 = off)
+waiting_background_minutes = 60  # the same while its background tasks still run (Background; 0 = never)
 long_work_minutes = 15    # a turn that worked longer than this has finished (0 = off); not sent while the
                           # session's own sub-agents or `run_in_background` calls of that turn still run; a sent
                           # done also covers the wait of the same stop
