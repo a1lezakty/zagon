@@ -86,9 +86,12 @@ public struct RingVM: Sendable, Equatable {
     }
 }
 
-/// One AI in the panel when both have a current reading: a ring in a ring, the week outside, 5 hours inside.
+/// One AI (or another account of it) in the panel when more than one is shown: a ring in a ring, the week outside,
+/// 5 hours inside.
 public struct AIRingsVM: Sendable, Equatable {
     public var tool: Tool
+    /// "Claude", "Codex"; another Claude Code account: "Claude · corp".
+    public var name: String
     public var five: RingVM
     public var week: RingVM
     /// No 5-hour window on the plan (`Limits.weekOnly`): the week ring alone with its number, no 5-hour line.
@@ -102,8 +105,9 @@ public struct AIRingsVM: Sendable, Equatable {
     public var spoken: String
     public var spokenLeft: String
 
-    init(_ tool: Tool, _ l: AILimits, _ c: RingColors, _ f: Fmt) {
+    init(_ tool: Tool, _ l: AILimits, _ c: RingColors, _ f: Fmt, account: String? = nil) {
         self.tool = tool
+        name = tool.name + (account.map { " · " + $0 } ?? "")
         source = LimitFrom.label([l.fiveHour, l.week], f)
         five = l.fiveHour.map { RingVM(title: f.t("limit.five"), window: $0, base: c.five, f: f) } ?? .empty(f.t("limit.five"), f)
         week = l.week.map { RingVM(title: f.t("limit.week"), window: $0, base: c.week, f: f) } ?? .empty(f.t("limit.week"), f)
@@ -113,7 +117,7 @@ public struct AIRingsVM: Sendable, Equatable {
         weekLine = f.t("limit.ai.week", week.pct.map { f.pct(Double($0)) } ?? "–")
         weekLeftLine = f.t("limit.ai.week", week.leftPct.map { f.pct(Double($0)) } ?? "–")
         let noFive = " (" + f.t("limit.noFive") + ")"
-        let name = tool.name + (source.map { " (" + $0 + ")" } ?? "")
+        let name = name + (source.map { " (" + $0 + ")" } ?? "")
         spoken = name + ": " + (weekOnly ? week.spoken + noFive : five.spoken + "; " + week.spoken)
         spokenLeft = name + ": " + (weekOnly ? week.spokenLeft + noFive : five.spokenLeft + "; " + week.spokenLeft)
     }
@@ -131,45 +135,14 @@ public struct SessionRowVM: Sendable, Identifiable, Equatable {
     public var server: String? = nil
 }
 
-/// Another Claude Code account's limits in one line under the rings: "Claude · corp", "5h 23% · week 58%" (what is
-/// left in `left`), the next reset.
-public struct AccountLineVM: Sendable, Equatable {
-    public var name: String
-    public var used: String
-    public var left: String
-    public var reset: String
-    /// A window at 95 % or over (red, as the rings).
-    public var warn: Bool
-    public var spoken: String
-    public var spokenLeft: String
-
-    init(_ a: AccountLimits, _ f: Fmt) {
-        let l = a.limits
-        name = a.tool.name + " · " + a.account
-        // Without a 5-hour window on the plan (`AILimits.weekOnly`) the week alone.
-        let windows: [(key: String, window: LimitWindow?)] = (l.weekOnly(at: f.now) ? [] : [("limit.other.five", l.fiveHour)])
-            + [("limit.ai.week", l.week)]
-        func line(_ left: Bool) -> String {
-            windows.map { w in
-                f.t(w.key, w.window?.pct(at: f.now).map { f.pct(Double(left ? 100 - $0 : $0)) } ?? "–")
-            }.joined(separator: " · ")
-        }
-        used = line(false); left = line(true)
-        let current = windows.compactMap { $0.window }.filter { $0.pct(at: f.now) != nil }
-        reset = current.map(\.resetsAt).min().map { f.t("limit.resets", f.resetMoment($0)) } ?? f.t("limit.noReading")
-        warn = current.contains { $0.usedPct >= 95 }
-        spoken = name + ": " + used + ", " + reset
-        spokenLeft = name + ", " + f.t("limit.left") + ": " + left + ", " + reset
-    }
-}
-
 public struct MainVM: Sendable {
     /// One AI (or none with a current reading): its pair of rings.
     public var five: RingVM?
     public var week: RingVM?
     /// That one AI has no 5-hour window (`Limits.weekOnly`): the week ring alone, `five` is nil.
     public var weekOnly: Bool
-    /// Both AIs with a current reading: a ring in a ring each, Claude first; then `five` and `week` serve the pace view.
+    /// Both AIs with a current reading, or another Claude Code account with any: a ring in a ring each, by AI (Claude
+    /// first), each AI's default account before its others; then `five` and `week` serve the pace view.
     public var ais: [AIRingsVM]
     /// The pace view follows Claude's windows (Codex's without them): it stands in for the rings only when they are that
     /// AI's, not Codex's next to Claude's old history.
@@ -194,16 +167,16 @@ public struct MainVM: Sendable {
     /// Next to the header, one AI shown: whose limits the rings or the pace are ("build-box · work"), only when readings
     /// come from more than one source (both AIs: `AIRingsVM.source`).
     public var limitsSource: String?
-    /// A window has no current reading: the panel says when one comes.
+    /// A window has no current reading: the panel says when one comes (`waitHint`).
     public var limitsMissing: Bool
+    /// Whose reading comes with the next reply: the AI or account when one has a window without a current reading.
+    public var waitHint: String
     /// Claude was used without a reading (`Limits.claudeHint`): where its limits come from, said instead of when a
     /// reading comes; and whether to offer turning it on in the editors found (`Limits.claudeEnable`).
     public var claudeHint: String?
     public var claudeEnable: Bool
     /// No sessions at all: one line instead of an empty block.
     public var noSessions: String?
-    /// The other Claude Code accounts' limits, a line each under the rings (the rings are the default account's).
-    public var accounts: [AccountLineVM]
 
     public init(_ p: ZagonDataProvider, _ f: Fmt, colors: (Tool) -> RingColors = RingColors.standard) {
         let limits = p.limits().forRings(at: f.now), current = limits.tools(at: f.now), shown = limits.shown(at: f.now)
@@ -214,12 +187,24 @@ public struct MainVM: Sendable {
         let oneTool = current.first ?? (shown.fiveHour ?? shown.week)?.tool ?? .claude, one = colors(oneTool)
         five = shown.fiveHour.map { RingVM(title: f.t("limit.five"), window: $0, base: one.five, f: f) }
         week = shown.week.map { RingVM(title: f.t("limit.week"), window: $0, base: one.week, f: f) }
-        let ais = current.count > 1 ? current.map { AIRingsVM($0, limits[$0], colors($0), f) } : []
+        // The other accounts (`Limits.others`) as rings too: then the default one is a ring in a ring as well (Claude
+        // when nothing is current), each AI's accounts together.
+        let others = limits.others.map { o in
+            var l = o.limits
+            if l.weekOnly(at: f.now) { l.fiveHour = nil }
+            return (ring: AIRingsVM(o.tool, l, colors(o.tool), f, account: o.account), limits: l)
+        }
+        let mine = current.count > 1 || !others.isEmpty ? (current.isEmpty ? [Tool.claude] : current) : []
+        let rings = Tool.allCases.flatMap { t in
+            mine.filter { $0 == t }.map { (ring: AIRingsVM($0, limits[$0], colors($0), f), limits: limits[$0]) }
+                + others.filter { $0.ring.tool == t }
+        }
+        let ais = rings.map(\.ring)
         self.ais = ais
         paceFits = ais.isEmpty && oneTool == ((weekOnly ? limits.week : limits.fiveHour ?? limits.week)?.tool ?? .claude)
-        forecast = ais.isEmpty ? shown.fiveHour.flatMap { MainVM.forecast($0, f) } : ais.lazy.compactMap { a in
-            limits[a.tool].fiveHour.flatMap { MainVM.forecast($0, f) }
-                .map { Emphasis(before: a.tool.name + ": " + $0.before, bold: $0.bold, after: $0.after) }
+        forecast = ais.isEmpty ? shown.fiveHour.flatMap { MainVM.forecast($0, f) } : rings.lazy.compactMap { r in
+            r.limits.fiveHour.flatMap { MainVM.forecast($0, f) }
+                .map { Emphasis(before: r.ring.name + ": " + $0.before, bold: $0.bold, after: $0.after) }
         }.first
 
         let sessions = p.liveSessions().sorted { $0.since < $1.since }
@@ -238,9 +223,11 @@ public struct MainVM: Sendable {
             default: return nil
             }
         }
-        // The turn ended but its background tasks run: working, in background.
-        working = sessions.filter { $0.status == .working }
-            .map { row($0, cursor($0, $0.background > 0 ? f.t("status.background") : $0.model)) }
+        // The turn ended but its background tasks run: working, in background, for as long as the turn has been over.
+        working = sessions.filter { $0.status == .working }.map {
+            row($0, cursor($0, $0.background > 0
+                ? f.t.plural("status.background", $0.background, f.duration(f.now.timeIntervalSince($0.since))) : $0.model))
+        }
         idle = sessions.compactMap {
             if driven($0), let d = $0.drivenBy {
                 let ended = f.duration(f.now.timeIntervalSince($0.since))
@@ -277,13 +264,16 @@ public struct MainVM: Sendable {
         if ais.isEmpty {
             limitsAge = age(windows).map { f.t("limit.updated", f.duration($0)) }
         } else {
-            let each = ais.compactMap { a in age([limits[a.tool].fiveHour, limits[a.tool].week]).map { a.tool.name + " " + f.duration($0) } }
+            let each = rings.compactMap { r in age([r.limits.fiveHour, r.limits.week]).map { r.ring.name + " " + f.duration($0) } }
             limitsAge = each.isEmpty ? nil : f.t("limit.updatedEach", each.joined(separator: " · "))
         }
-        limitsMissing = ais.isEmpty ? five?.pct == nil && !weekOnly || week?.pct == nil
-            : ais.contains { $0.five.pct == nil && !$0.weekOnly || $0.week.pct == nil }
+        let missing = ais.isEmpty ? five?.pct == nil && !weekOnly || week?.pct == nil ? [oneTool.name] : []
+            : ais.filter { $0.five.pct == nil && !$0.weekOnly || $0.week.pct == nil }.map(\.name)
+        limitsMissing = !missing.isEmpty
+        // Named when it is one: "… next reply" under a Claude ring at 0 % read as Claude's when it was Codex's.
+        waitHint = missing.count == 1 && (!ais.isEmpty || current.count == 1) ? f.t("limit.hint.waitFor", missing[0])
+            : f.t("limit.hint.wait")
         noSessions = sessions.isEmpty ? f.t("sessions.none") : nil
-        accounts = limits.others.map { AccountLineVM($0, f) }
     }
 
     /// Warn only when the current pace hits 100 % before the reset.

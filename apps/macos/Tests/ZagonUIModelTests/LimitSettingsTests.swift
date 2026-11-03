@@ -30,24 +30,40 @@ final class LimitSettingsTests: XCTestCase {
         XCTAssertEqual(Limits(fiveHour: nil, week: LimitWindow(usedPct: 5, resetsAt: soon, tool: .codex)).codex.week?.usedPct, 5)
     }
 
-    /// A second Claude Code account: the rings and the icon stay the default account's, the account gets a line under
-    /// them and its session a tag; with one account nothing changes.
+    /// A second Claude Code account: a ring-in-ring of its own next to the default account's (both then nested), its
+    /// session a tag; the icon stays the default account's below 80 %, the tip names it; with one account nothing
+    /// changes.
     func testOtherAccounts() {
         var p = MockDataProvider(lang: .en, timeZone: utc)
         let f = Fmt(lang: .en, timeZone: utc, now: p.now)
         let one = MainVM(p, f)
-        XCTAssertTrue(one.accounts.isEmpty)
+        XCTAssertTrue(one.ais.isEmpty)
         XCTAssertTrue((one.waiting + one.working + one.idle).allSatisfy { $0.tag.isEmpty })
         p.otherAccounts = true
         let two = MainVM(p, f)
         XCTAssertEqual([two.five?.pct, two.week?.pct], [one.five?.pct, one.week?.pct])
-        XCTAssertEqual(MenuBarVM(p.limits(), f), MenuBarVM(MockDataProvider(lang: .en, timeZone: utc).limits(), f))
-        XCTAssertEqual(two.accounts.map(\.name), ["Claude · corp"])
-        XCTAssertEqual(two.accounts.first?.used, "5h 23% · week 58%")
-        XCTAssertEqual(two.accounts.first?.reset, "resets at 15:30")
-        XCTAssertEqual(two.accounts.first?.warn, false)
+        let icon = MenuBarVM(p.limits(), f), single = MenuBarVM(MockDataProvider(lang: .en, timeZone: utc).limits(), f)
+        XCTAssertEqual([icon.ais, icon.accounts], [single.ais, []])
+        XCTAssertEqual(icon.tip, "Claude: 5 hours 62%, week 41% · Claude · corp: 5 hours 23%, week 58%")
+        XCTAssertEqual(two.ais.map(\.name), ["Claude", "Claude · corp"])
+        XCTAssertEqual(two.ais.map { [$0.five.pct, $0.week.pct] }, [[62, 41], [23, 58]])
+        XCTAssertEqual(two.ais[1].fiveLine, "5h until 15:30")
+        XCTAssertEqual(two.ais[1].weekLine, "week 58%")
+        XCTAssertFalse(two.limitsMissing)
         XCTAssertEqual(two.working.filter { !$0.tag.isEmpty }.map { $0.title + $0.tag }, ["cli-tool — parser (corp)"])
-        XCTAssertEqual(MainVM(p, Fmt(lang: .ru, timeZone: utc, now: p.now)).accounts.first?.used, "5 ч 23 % · неделя 58 %")
+        XCTAssertEqual(MainVM(p, Fmt(lang: .ru, timeZone: utc, now: p.now)).ais[1].weekLine, "неделя 58 %")
+        // With Codex: Claude's accounts together, then Codex.
+        p.codexLimits = true
+        XCTAssertEqual(MainVM(p, f).ais.map(\.name), ["Claude", "Claude · corp", "Codex"])
+
+        // The icon: another account at 80 % or over follows the default one's rings, its higher number inside.
+        var hot = p.limits()
+        hot.others[0].limits.week?.usedPct = 85
+        let warm = MenuBarVM(hot, f)
+        XCTAssertEqual(warm.ais.map(\.tool), [.claude, .codex])
+        XCTAssertEqual(warm.accounts.map { [$0.five, $0.week, $0.inside] }, [[23, 85, 85]])
+        XCTAssertTrue(warm.alarm)
+        XCTAssertTrue(warm.spoken.hasSuffix("Claude · corp: 5 hours 23% used, week 85% used"), warm.spoken)
     }
 
     /// The status item: a pair of rings for one AI, a ring-in-ring per AI for two; the tip names the AIs.

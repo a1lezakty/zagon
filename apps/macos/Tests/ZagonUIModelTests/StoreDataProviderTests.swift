@@ -127,15 +127,15 @@ final class StoreDataProviderTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(p.limits().claude.weekAlone).timeIntervalSince1970, now - 200, accuracy: 0.01)
     }
 
-    /// Claude Code accounts: the rings stay the default account's; the others with a reading within 8 days get a line
-    /// under them; with readings of another account only, the rings have none and no hint.
+    /// Claude Code accounts: the default account's rings stay its own; the others with a reading within 8 days get a
+    /// ring-in-ring each next to it; with readings of another account only, the rings are that account's and no hint.
     func testAccountLimits() throws {
         let p = try StoreDataProvider.fixture(Self.fixtures)
         let f = Fmt(lang: .en, timeZone: TimeZone(identifier: "UTC")!, now: p.now)
         let now = p.now.timeIntervalSince1970
         let before = p.limits()
         XCTAssertTrue(before.others.isEmpty)
-        XCTAssertTrue(MainVM(p, f).accounts.isEmpty)
+        XCTAssertTrue(MainVM(p, f).ais.isEmpty)
         // Another account, fuller and read later than the default one.
         for (window, pct, resets) in [("five_hour", 23.0, now + 3 * 3600), ("seven_day", 97, now + 5 * 86400)] {
             try p.reader.addLimitSnapshot(LimitSnapshot(tool: .claude, window: window, usedPct: pct, resetsAt: resets,
@@ -149,11 +149,12 @@ final class StoreDataProviderTests: XCTestCase {
         let main = MainVM(p, f)
         XCTAssertEqual(main.five?.pct, 62)
         XCTAssertNil(main.limitsSource)
-        XCTAssertEqual(main.accounts.map(\.name), ["Claude · corp"])
-        XCTAssertEqual(main.accounts.first?.used, "5h 23% · week 97%")
-        XCTAssertEqual(main.accounts.first?.left, "5h 77% · week 3%")
-        XCTAssertEqual(main.accounts.first?.reset, "resets at 14:42")
-        XCTAssertEqual(main.accounts.first?.warn, true)
+        XCTAssertEqual(main.ais.map(\.name), ["Claude", "Claude · corp"])
+        XCTAssertEqual(main.ais.map { [$0.five.pct, $0.week.pct] }, [[62, 41], [23, 97]])
+        XCTAssertEqual(main.ais[1].fiveLine, "5h until 14:42")
+        XCTAssertEqual(main.ais[1].weekLeftLine, "week 3%")
+        XCTAssertEqual(main.ais[1].week.color, Palette.waiting)   // red from 95 %, as the default account's
+        XCTAssertTrue(main.ais[1].spoken.hasPrefix("Claude · corp: 5 hours: 23% used"))
         // Over 8 days old: not listed.
         _ = try p.reader.db.run("UPDATE limit_snapshot SET ts = ?, resets_at = ? WHERE account = 'corp'",
                                 [.real(now - 9 * 86400), .real(now - 8 * 86400)])
@@ -172,7 +173,7 @@ final class StoreDataProviderTests: XCTestCase {
         let ringsOnly = MainVM(p, f)
         XCTAssertEqual(ringsOnly.five?.pct, 23)
         XCTAssertEqual(ringsOnly.limitsSource, "this Mac · corp")
-        XCTAssertTrue(ringsOnly.accounts.isEmpty)
+        XCTAssertTrue(ringsOnly.ais.isEmpty)
         XCTAssertFalse(ringsOnly.limitsMissing)
         // The default account reads again: back in the rings, the other account on its line.
         _ = try p.reader.db.run("UPDATE limit_snapshot SET ts = ts + 9 * 86400, resets_at = resets_at + 9 * 86400 WHERE account = 'default'")

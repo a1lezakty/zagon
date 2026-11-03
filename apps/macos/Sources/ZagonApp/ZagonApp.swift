@@ -735,7 +735,7 @@ struct ZagonApp: App {
 /// The status item, rasterised because a menu bar label shows only images and text. Monochrome without a warning is
 /// a template image (the menu bar tints it); otherwise it is drawn in the bar's text colour. Drawn at 1x and 2x: the bar
 /// is on every screen, and each picks its own. 44 × 20 pt for a pair of rings or two ring-in-rings, 20 × 20 for a week
-/// ring alone (`MenuBarVM.AI.weekOnly`).
+/// ring alone (`MenuBarVM.AI.weekOnly`), 24 pt more per other account shown (`MenuBarVM.accounts`).
 ///
 /// Only `StatusIcon` calls this, when the picture changes; nil if nothing got drawn.
 @MainActor
@@ -892,8 +892,9 @@ struct MainPanel: View {
 
 /// Rings or pace charts; a click switches between used + reset time and left + time until the reset. Whose limits they
 /// are on top; a window with no current reading shows "–" and a line on when one comes, not 0 %. Both AIs with a current
-/// reading: a ring in a ring each (the pace view follows one AI, so it gives way; also to rings of the other AI). Claude
-/// used without readings (`Limits.claudeHint`) is shown too, and the line says where its limits come from.
+/// reading, or another Claude Code account: a ring in a ring each, two to a row (the pace view follows one AI, so it
+/// gives way; also to rings of the other AI). Claude used without readings (`Limits.claudeHint`) is shown too, and the
+/// line says where its limits come from.
 struct LimitsBlock: View {
     @EnvironmentObject private var app: AppState
     @Environment(\.isSnapshot) private var snapshot
@@ -915,8 +916,9 @@ struct LimitsBlock: View {
                 }
                 Group {
                     if !vm.ais.isEmpty {
-                        HStack(spacing: 12) {
-                            ForEach(vm.ais, id: \.tool) { nested($0).frame(maxWidth: .infinity, alignment: .leading) }
+                        let column = GridItem(.flexible(), spacing: 12, alignment: .leading)
+                        LazyVGrid(columns: [column, column], alignment: .leading, spacing: 12) {
+                            ForEach(vm.ais, id: \.name) { nested($0) }
                         }
                     } else if app.pace && vm.paceFits {
                         let paces = PaceVM.both(app.provider, weekdaysOnly: app.paceWeekdays, f)
@@ -937,7 +939,7 @@ struct LimitsBlock: View {
                 .onTapGesture { app.showLeft.toggle() }
                 if vm.limitsMissing {
                     let unconnected = app.localTools && !(app.cli?.connected ?? true)
-                    Text(unconnected ? f.t("limit.hint.connect") : vm.claudeHint ?? f.t("limit.hint.wait"))
+                    Text(unconnected ? f.t("limit.hint.connect") : vm.claudeHint ?? vm.waitHint)
                         .font(.system(size: 12)).foregroundColor(Z.muted)
                         .fixedSize(horizontal: false, vertical: true)
                     if !unconnected, vm.claudeEnable, AppState.cliPath != nil || snapshot {
@@ -948,7 +950,6 @@ struct LimitsBlock: View {
                         .disabled(app.cliBusy)
                     }
                 }
-                ForEach(vm.accounts, id: \.name) { account($0) }
             }
             if let fc = vm.forecast { Banner.amber(fc) }
         }
@@ -997,7 +998,7 @@ struct LimitsBlock: View {
                 Text(pct.map { "\($0)%" } ?? "–").font(mono(14, .semibold)).foregroundColor(pct == nil ? Z.secondary : Z.text)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(a.tool.name).font(.system(size: 14, weight: .semibold)).foregroundColor(Z.text)
+                Text(a.name).font(.system(size: 14, weight: .semibold)).foregroundColor(Z.text)
                 if let s = a.source { Text(s).font(.system(size: 12)).foregroundColor(Z.muted) }
                 if !a.weekOnly { windowLine(a.five.color, a.fiveLine) }
                 windowLine(a.week.color, left ? a.weekLeftLine : a.weekLine)
@@ -1008,20 +1009,6 @@ struct LimitsBlock: View {
         .accessibilityLabel(left ? a.spokenLeft : a.spoken)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { app.showLeft.toggle() }
-    }
-
-    /// Another Claude Code account: its name, both windows in one line and the next reset.
-    func account(_ a: AccountLineVM) -> some View {
-        let left = app.showLeft
-        return HStack(spacing: 8) {
-            Text(a.name).font(.system(size: 12, weight: .semibold)).foregroundColor(Z.text)
-            Text(left ? a.left : a.used).font(mono(12)).foregroundColor(a.warn ? Z.bad : Z.secondary)
-            Spacer(minLength: 4)
-            Text(a.reset).font(.system(size: 12)).foregroundColor(Z.muted)
-        }
-        .lineLimit(1).minimumScaleFactor(0.85)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(left ? a.spokenLeft : a.spoken)
     }
 
     func windowLine(_ color: UInt32, _ text: String) -> some View {

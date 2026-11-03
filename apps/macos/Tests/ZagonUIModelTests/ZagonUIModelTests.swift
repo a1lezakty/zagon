@@ -119,6 +119,8 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertEqual([reset.ais[1].five.pct, reset.ais[1].week.pct], [nil, 71])
         XCTAssertEqual(reset.ais[1].fiveLine, "5h –")
         XCTAssertTrue(reset.limitsMissing)
+        // The line under the rings says whose reading is missing: not Claude's next to its ring at 0 %.
+        XCTAssertEqual(reset.waitHint, "Codex: new readings come with its next reply.")
         l.codex = AILimits(fiveHour: LimitWindow(usedPct: 90, resetsAt: p.now.addingTimeInterval(-60), tool: .codex))
         let one = MainVM(Fixed(base: p, l: l), f, colors: { $0 == .codex ? violet : .standard($0) })
         XCTAssertTrue(one.ais.isEmpty)
@@ -139,8 +141,8 @@ final class ZagonUIModelTests: XCTestCase {
 
     /// A session whose turn ended with background tasks running is listed as working; a driven one is neutral.
     func testBackgroundAndDrivenSessions() {
-        for (lang, bg, driven) in [(Lang.en, "working in background", "driven by lead · turn ended 5m ago"),
-                                   (Lang.ru, "работает в фоне", "под управлением lead · ход окончен 5 мин назад")] {
+        for (lang, bg, driven) in [(Lang.en, "in background (2 tasks) · 1h 00m", "driven by lead · turn ended 5m ago"),
+                                   (Lang.ru, "в фоне (2 задачи) · 1 ч 00 м", "под управлением lead · ход окончен 5 мин назад")] {
             let (p, f) = env(lang)
             var live = Fixed(base: p, l: p.limits())
             live.sessions = [
@@ -219,6 +221,7 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertNil(old.five?.pct)
         XCTAssertEqual(old.week?.pct, 47)
         XCTAssertTrue(old.limitsMissing)
+        XCTAssertEqual(old.waitHint, "Claude: данные появятся после следующего ответа.")
         XCTAssertEqual(old.limitsAge, "обновлено 6 ч 30 м назад")
         XCTAssertEqual(old.five?.spoken, "5 часов: сброшен в 09:20, нет новых данных")
 
@@ -226,6 +229,7 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertNil(empty.five)
         XCTAssertEqual(empty.limitsHeader, "ЛИМИТЫ")
         XCTAssertTrue(empty.limitsMissing)
+        XCTAssertEqual(empty.waitHint, "Данные появятся после следующего ответа Claude Code или Codex.")
         XCTAssertEqual(empty.noSessions, "Сейчас ни одна сессия не работает.")
         XCTAssertEqual(old.five?.spokenLeft, old.five?.spoken)
 

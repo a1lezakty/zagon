@@ -2,8 +2,8 @@ import Foundation
 import ZagonCore
 
 /// Servers: `zagon export --since <seq>` over ssh (`docs/dev/contracts.md`, Export), imported into the local database
-/// by `ExportImport`. The cursor per ssh alias lives in `meta` (`remote_seq:<alias>`), the alias of each server host
-/// name in `remote_alias:<host>`.
+/// by `ExportImport`. The cursor per ssh alias lives in `meta` (`remote_seq:<alias>`, with the schemas it was moved
+/// under in `remote_schema:<alias>`), the alias of each server host name in `remote_alias:<host>`.
 public enum Remote {
     /// Host aliases from `~/.ssh/config` (patterns with `*`, `?` or `!` skipped), in file order.
     public static func sshHosts(_ config: String) -> [String] {
@@ -134,7 +134,12 @@ public enum Remote {
             let since = try cursor(alias, db: store.db)
             let imp = try ExportImport(store: store, source: alias)
             try imp.apply(lines)
-            try set("remote_seq:" + alias, .int(Int64(imp.seq < since ? 0 : imp.seq)), store.db)
+            // A schema new on either side since the cursor moved brings columns the rows pulled before lack (a Mac 0.1.6
+            // kept no `bg_tasks` of a 0.1.7 server's sessions, and an unchanged session is not sent again): from zero.
+            let schemas = "\(Store.schemaVersion)/" + (JValue.parse(lines[0])?["schema"]?.double.map { String(Int($0)) } ?? "")
+            let same = try store.db.one("SELECT value FROM meta WHERE key = ?", [.text("remote_schema:" + alias)]) { $0.text(0) } == schemas
+            try set("remote_seq:" + alias, .int(Int64(imp.seq < since || since > 0 && !same ? 0 : imp.seq)), store.db)
+            try set("remote_schema:" + alias, .text(schemas), store.db)
             for h in hosts { try set("remote_alias:" + h, .text(alias), store.db) }
             // Days without usage came from a zagon before export2; once it is updated, everything is pulled again.
             let wasOld = try store.db.one("SELECT 1 FROM meta WHERE key = ?", [.text("remote_old:" + alias)]) { _ in true } ?? false
@@ -159,7 +164,8 @@ public enum Remote {
             if let file = try db.one("SELECT id FROM source_file WHERE path = ?", [.text("export:" + alias)], { $0.int64(0) }) {
                 for t in ["usage_hour", "tool_use", "activity"] { try db.run("DELETE FROM \(t) WHERE file_id = ?", [.int(file)]) }
             }
-            try db.run("DELETE FROM meta WHERE key IN (?, ?)", [.text("remote_seq:" + alias), .text("remote_old:" + alias)])
+            try db.run("DELETE FROM meta WHERE key IN (?, ?, ?)",
+                       [.text("remote_seq:" + alias), .text("remote_old:" + alias), .text("remote_schema:" + alias)])
             // Its limit source (`Store.addLimitSnapshot`): an alias gone must not keep the rings labelled.
             try db.run("""
                 DELETE FROM meta WHERE key = 'limit_account:' || ?1

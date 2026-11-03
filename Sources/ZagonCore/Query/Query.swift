@@ -130,13 +130,15 @@ extension Store {
     /// within a period, so its highest reading is the latest. A reading without `resets_at` counts as a period of its
     /// own ending at its `ts`: it wins only when newer than the end of every known period.
     /// Accounts of one machine are told apart (`account`, from `CLAUDE_CONFIG_DIR`); readings imported from other
-    /// machines under the same account name (`default` on each) still mix: the one whose window resets last is shown
-    /// (`Query.limitSources` says from where).
+    /// machines under the same account name (`default` on each) still mix: while both are read, the one whose window
+    /// resets last is shown (`Query.limitSources` says from where); one not read for `superseded` seconds gives way.
     /// A reading is out of the series once a running period (`resets_at` after its own `ts`) that resets earlier than
     /// its own was read `superseded` seconds or more after it: one account's periods only move forward, so it belongs
     /// to another series (another account's 5-hour window, mixed in by a zagon before 0.1.6 and imported by a Mac, would
     /// otherwise stay current until it resets). A late report of a period that has already reset supersedes nothing.
     /// Ordered by tool, then the default account first, then the other accounts by name.
+    // ponytail: the window runs over the whole table (~35 ms at 8k rows, ~0.45 s at 100k); limit it to each series'
+    // last 8 days if `limit_snapshot` grows that far.
     static func latestLimits(_ db: SQLite) throws -> [LimitSnapshot] {
         var out: [LimitSnapshot] = []
         try db.query("""
