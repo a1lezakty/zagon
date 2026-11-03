@@ -187,16 +187,17 @@ public struct MainVM: Sendable {
         let oneTool = current.first ?? (shown.fiveHour ?? shown.week)?.tool ?? .claude, one = colors(oneTool)
         five = shown.fiveHour.map { RingVM(title: f.t("limit.five"), window: $0, base: one.five, f: f) }
         week = shown.week.map { RingVM(title: f.t("limit.week"), window: $0, base: one.week, f: f) }
-        // The other accounts (`Limits.others`) as rings too: then the default one is a ring in a ring as well (Claude
-        // when nothing is current), each AI's accounts together.
+        // The other accounts (`Limits.others`) as rings too: then the default one is a ring in a ring as well (Claude's
+        // whenever another Claude account is shown, with "–" when not current), each AI's accounts together.
         let others = limits.others.map { o in
             var l = o.limits
             if l.weekOnly(at: f.now) { l.fiveHour = nil }
-            return (ring: AIRingsVM(o.tool, l, colors(o.tool), f, account: o.account), limits: l)
+            return (ring: AIRingsVM(o.tool, l, colors(o.tool), f, account: o.account), limits: l, other: true)
         }
-        let mine = current.count > 1 || !others.isEmpty ? (current.isEmpty ? [Tool.claude] : current) : []
+        let mine = current.count > 1 || !others.isEmpty
+            ? Tool.allCases.filter { t in current.contains(t) || others.contains { $0.ring.tool == t } } : []
         let rings = Tool.allCases.flatMap { t in
-            mine.filter { $0 == t }.map { (ring: AIRingsVM($0, limits[$0], colors($0), f), limits: limits[$0]) }
+            mine.filter { $0 == t }.map { (ring: AIRingsVM($0, limits[$0], colors($0), f), limits: limits[$0], other: false) }
                 + others.filter { $0.ring.tool == t }
         }
         let ais = rings.map(\.ring)
@@ -267,8 +268,9 @@ public struct MainVM: Sendable {
             let each = rings.compactMap { r in age([r.limits.fiveHour, r.limits.week]).map { r.ring.name + " " + f.duration($0) } }
             limitsAge = each.isEmpty ? nil : f.t("limit.updatedEach", each.joined(separator: " · "))
         }
+        // An idle other account has a "–" of its own and no line: it would stand there for days.
         let missing = ais.isEmpty ? five?.pct == nil && !weekOnly || week?.pct == nil ? [oneTool.name] : []
-            : ais.filter { $0.five.pct == nil && !$0.weekOnly || $0.week.pct == nil }.map(\.name)
+            : rings.filter { !$0.other }.map(\.ring).filter { $0.five.pct == nil && !$0.weekOnly || $0.week.pct == nil }.map(\.name)
         limitsMissing = !missing.isEmpty
         // Named when it is one: "… next reply" under a Claude ring at 0 % read as Claude's when it was Codex's.
         waitHint = missing.count == 1 && (!ais.isEmpty || current.count == 1) ? f.t("limit.hint.waitFor", missing[0])

@@ -108,7 +108,12 @@ final class RemoteTests: XCTestCase {
         let n = try Remote.apply(Data(text.utf8), alias: "build-box", store: client, checked: ["build-box"])
         XCTAssertFalse(n.old)
         XCTAssertGreaterThan(try Query(store: client).day("2026-10-29").tokens.total, 0)
+        func schema() throws -> String? {
+            try client.db.one("SELECT value FROM meta WHERE key = 'remote_schema:build-box'") { $0.text(0) } ?? nil
+        }
+        XCTAssertEqual(try schema(), "\(Store.schemaVersion)/\(Store.schemaVersion)")
         try Remote.drop("build-box", db: client.db)
+        XCTAssertNil(try schema())
         let gone = try Query(store: client).day("2026-10-29")
         XCTAssertEqual(gone.tokens.total, 0)
         XCTAssertEqual(gone.sessionSec, 0)

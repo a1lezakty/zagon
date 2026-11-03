@@ -55,6 +55,18 @@ final class LimitSettingsTests: XCTestCase {
         // With Codex: Claude's accounts together, then Codex.
         p.codexLimits = true
         XCTAssertEqual(MainVM(p, f).ais.map(\.name), ["Claude", "Claude · corp", "Codex"])
+        // The default Claude account without a current reading stays next to its other account, with "–"; the other
+        // account idle since its reset has its "–" and no line under the rings.
+        var l = p.limits()
+        l.claude.fiveHour?.resetsAt = p.now.addingTimeInterval(-60)
+        l.claude.week?.resetsAt = p.now.addingTimeInterval(-60)
+        l.others[0].limits.fiveHour?.resetsAt = p.now.addingTimeInterval(-60)
+        let idle = MainVM(ZagonUIModelTests.Fixed(base: p, l: l), f)
+        XCTAssertEqual(idle.ais.map(\.name), ["Claude", "Claude · corp", "Codex"])
+        XCTAssertEqual(idle.ais.map { [$0.five.pct, $0.week.pct] }, [[nil, nil], [nil, 58], [18, 71]])
+        XCTAssertEqual(idle.waitHint, "Claude: new readings come with its next reply.")
+        l.claude = p.limits().claude
+        XCTAssertFalse(MainVM(ZagonUIModelTests.Fixed(base: p, l: l), f).limitsMissing)
 
         // The icon: another account at 80 % or over follows the default one's rings, its higher number inside.
         var hot = p.limits()
