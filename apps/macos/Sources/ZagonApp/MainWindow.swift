@@ -172,7 +172,8 @@ struct WelcomeBar: View {
                 Banner.blue(Emphasis(before: f.t("welcome.text") + (hider ? "\n" + f.t("welcome.settings") : "")))
                 HStack(alignment: .top, spacing: 6) {
                     if let vm = app.icon.look?.vm {
-                        MenuBarLabel(vm: vm, colored: !app.monoIcon, tint: Z.text).scaleEffect(2).frame(width: 88, height: 40)
+                        MenuBarLabel(vm: vm, colored: !app.monoIcon, tint: Z.text).scaleEffect(2)
+                            .frame(width: 2 * MenuBarLabel.width(vm), height: 40)
                     }
                     Image(systemName: "arrow.up.right").font(.system(size: 16, weight: .semibold)).foregroundColor(Z.secondary)
                 }

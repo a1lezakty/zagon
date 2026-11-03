@@ -84,6 +84,16 @@ final class LimitSettingsTests: XCTestCase {
         XCTAssertTrue(warm.alarm)
         XCTAssertEqual(MenuBarVM(hot, othersAt80: true, f).accounts, warm.accounts)
         XCTAssertFalse(MenuBarVM(p.limits(), f).alarm)
+        // Claude alone keeps its pair, the account after it; one without a 5-hour window shows (and warns by) its week.
+        let pair = { (o: MenuBarVM.AI) in MenuBarVM(ais: [MenuBarVM.AI(tool: .claude, five: 3, week: 50, colors: .standard(.claude))],
+                                                    others: [o], f) }
+        let calm = pair(MenuBarVM.AI(tool: .claude, account: "corp", five: 23, week: 13, colors: .standard(.claude)))
+        XCTAssertFalse(calm.nested)
+        XCTAssertEqual(calm.accounts.map(\.inside), [23])
+        XCTAssertFalse(calm.alarm)
+        let weekly = pair(MenuBarVM.AI(tool: .claude, account: "corp", five: nil, week: 85, colors: .standard(.claude), weekOnly: true))
+        XCTAssertEqual(weekly.accounts.map(\.inside), [85])
+        XCTAssertTrue(weekly.alarm)
         XCTAssertTrue(warm.spoken.hasSuffix("Claude · corp: 5 hours 23% used, week 85% used"), warm.spoken)
     }
 

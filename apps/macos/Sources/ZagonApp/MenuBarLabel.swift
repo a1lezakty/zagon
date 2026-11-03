@@ -32,6 +32,12 @@ struct MenuBarLabel: View {
         .fixedSize()
     }
 
+    /// Points wide: 20 per ring or ring-in-ring, 4 between (the welcome bar's 2x preview takes its frame from this).
+    static func width(_ vm: MenuBarVM) -> CGFloat {
+        let n = vm.nested ? vm.row.count : (vm.ais.first.map { $0.weekOnly ? 1 : 2 } ?? 0) + vm.accounts.count
+        return CGFloat(n) * size + CGFloat(max(n - 1, 0)) * 4
+    }
+
     /// 20 pt rings with a 2 pt rim leave a 16 pt hole; "88", the widest pair, is about 11 × 6.4 pt in 9 pt bold, so
     /// its corners stay ~1.5 pt off the rim. A whole-point inset keeps the rim on pixels: 0.75 got rounded off-centre.
     static let size: CGFloat = 20, line: CGFloat = 2
