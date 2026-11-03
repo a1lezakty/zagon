@@ -137,13 +137,32 @@ final class ZagonUIModelTests: XCTestCase {
         XCTAssertFalse(MainVM(Fixed(base: p, l: l), f).paceFits)
     }
 
+    /// A session whose turn ended with background tasks running is listed as working; a driven one is neutral.
+    func testBackgroundAndDrivenSessions() {
+        for (lang, bg, driven) in [(Lang.en, "working in background", "driven by lead · turn ended 5m ago"),
+                                   (Lang.ru, "работает в фоне", "под управлением lead · ход окончен 5 мин назад")] {
+            let (p, f) = env(lang)
+            var live = Fixed(base: p, l: p.limits())
+            live.sessions = [
+                LiveSession(id: "claude:b", title: "jobs", host: "build-box", model: "Opus", status: .working,
+                            since: p.now.addingTimeInterval(-3600), command: "", background: 2),
+                LiveSession(id: "claude:w", title: "worker", host: "build-box", model: "Opus", status: .waitingInput,
+                            since: p.now.addingTimeInterval(-300), command: "", drivenBy: "lead")]
+            let vm = MainVM(live, f)
+            XCTAssertEqual(vm.working.map(\.subtitle), ["build-box · " + bg])
+            XCTAssertEqual(vm.waiting.count, 0)
+            XCTAssertEqual(vm.idle.map(\.subtitle), ["build-box · " + driven])
+        }
+    }
+
     /// The mock with other limits.
     struct Fixed: ZagonDataProvider {
         var base: MockDataProvider
         var l: Limits
         var now: Date { base.now }
         func limits() -> Limits { l }
-        func liveSessions() -> [LiveSession] { base.liveSessions() }
+        var sessions: [LiveSession]? = nil
+        func liveSessions() -> [LiveSession] { sessions ?? base.liveSessions() }
         func todayTotals() -> Totals { base.todayTotals() }
         func hosts() -> [ZagonUIModel.Host] { base.hosts() }
         func day(_ d: Date) -> DayData { base.day(d) }

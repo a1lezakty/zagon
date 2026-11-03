@@ -70,7 +70,8 @@ enum Strings {
         "sessions.idle.show": "Idle · {0} — show", "sessions.idle.hide": "Idle · {0} — hide",
         "sessions.one": "{0} session", "sessions.many": "{0} sessions",
         "status.permission": "asks for permission", "status.input": "answered, waiting for input",
-        "status.session": "waits for session {0}", "status.otherSession": "waits for another session",
+        "status.session": "driven by {0} · turn ended {1} ago",
+        "status.otherSession": "driven by another session · turn ended {0} ago", "status.background": "working in background",
 
         "stat.sessionsWorked": "sessions worked", "stat.tokensToday": "tokens today", "stat.apiPrices": "at API prices",
         "stat.agentTime": "agent time {0}",
@@ -429,7 +430,8 @@ enum Strings {
         "sessions.idle.show": "Простаивают · {0} — показать", "sessions.idle.hide": "Простаивают · {0} — скрыть",
         "sessions.one": "{0} сессия", "sessions.few": "{0} сессии", "sessions.many": "{0} сессий",
         "status.permission": "просит разрешение", "status.input": "ответил, ждёт ввода",
-        "status.session": "ждёт сессию {0}", "status.otherSession": "ждёт другую сессию",
+        "status.session": "под управлением {0} · ход окончен {1} назад",
+        "status.otherSession": "под управлением другой сессии · ход окончен {0} назад", "status.background": "работает в фоне",
 
         "stat.sessionsWorked": "сессии работали", "stat.tokensToday": "токенов сегодня", "stat.apiPrices": "по ценам API",
         "stat.agentTime": "агентного времени {0}",

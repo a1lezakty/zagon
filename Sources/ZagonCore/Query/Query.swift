@@ -233,6 +233,9 @@ public struct LiveSessionInfo: Sendable, Equatable {
     /// Another session typed its last typed message (a worker driven over `tmux send-keys`): waiting for input, it waits
     /// for that session, not for you. Its title or project ("" = neither); nil = the human (`UserTime.driverSQL`).
     public var drivenBy: String?
+    /// Background tasks still running (`Background`): the turn ended (`waiting_input`) but the work goes on, so the
+    /// state is `working` (since the turn ended) however long they run.
+    public var background: Int = 0
     /// When the current state began.
     public var since: Timestamp
     public var lastAt: Timestamp?
@@ -256,18 +259,21 @@ extension Query {
         try db.query("""
             SELECT id, tool, title, \(Projects.sessionSQL("session")), cwd, host, model, status, status_at, last_at,
                    (SELECT max(start) FROM activity a WHERE a.session_id = session.id AND a.kind = 'working'),
-                   \(UserTime.driverSQL("session", now: now)), account
+                   \(UserTime.driverSQL("session", now: now)), account, bg_tasks
             FROM session
-            WHERE max(coalesce(last_at, 0), coalesce(status_at, 0)) >= ?1 AND coalesce(archived, 0) = 0
+            WHERE (max(coalesce(last_at, 0), coalesce(status_at, 0)) >= ?1 OR bg_until > ?2) AND coalesce(archived, 0) = 0
               AND coalesce(status, '') <> 'ended'
-            """, [.real(now - window)]) { r in
+            """, [.real(now - window), .real(now)]) { r in
             let status = r.text(7), statusAt = r.optReal(8), lastAt = r.optReal(9)
+            let background = status == "waiting_input" ? Background.count(r.text(13), now: now) : 0
             let seen = max(lastAt ?? 0, statusAt ?? 0)
             let overtaken = (lastAt ?? 0) > (statusAt ?? 0) + 5
             var state = LiveState.idle, since = seen
             switch (status, statusAt) {
             case ("waiting_permission"?, let at?) where !overtaken:
                 state = now - at <= Self.idleAfter ? .waitingPermission : .idle; since = at
+            case ("waiting_input"?, let at?) where !overtaken && background > 0:
+                state = .working; since = at
             case ("waiting_input"?, let at?) where !overtaken:
                 state = now - at <= Self.idleAfter ? .waitingInput : .idle; since = at
             case ("working"?, let at?) where now - seen <= Self.idleAfter:
@@ -279,7 +285,8 @@ extension Query {
             }
             out.append(LiveSessionInfo(id: r.text(0) ?? "", tool: r.text(1) ?? "", title: r.text(2), project: r.text(3),
                                        cwd: r.text(4), host: r.text(5), model: r.text(6), state: state, drivenBy: r.text(11),
-                                       since: since, lastAt: lastAt, account: r.text(12)))
+                                       background: state == .working ? background : 0, since: since, lastAt: lastAt,
+                                       account: r.text(12)))
         }
         return out.sorted { $0.since < $1.since }
     }

@@ -121,6 +121,18 @@ public struct Relay: Sendable, Equatable {
     }
 }
 
+/// A background task of a Claude session (a shell run in the background, an async agent, a monitor): launched
+/// (`until` = when it counts as gone at the latest) or finished (`until` nil: its notification came, or it was stopped).
+public struct BackgroundTask: Sendable, Equatable {
+    public var sessionId: String
+    public var id: String
+    public var ts: Timestamp
+    public var until: Timestamp?
+    public init(sessionId: String, id: String, ts: Timestamp, until: Timestamp?) {
+        self.sessionId = sessionId; self.id = id; self.ts = ts; self.until = until
+    }
+}
+
 /// Subscription limit reading (Claude status line `rate_limits`, Codex `token_count.rate_limits`).
 public struct LimitSnapshot: Sendable, Equatable {
     public var tool: ToolKind

@@ -45,6 +45,37 @@ struct ClaudeRecord: Decodable {
     var aiTitle: String?
     var message: Message?
     var attachment: Attachment?
+    /// What a tool call returned; only the keys that launch or stop a background task are read.
+    var toolUseResult: ToolResult?
+    /// `queue-operation` records: `enqueue` with `content` = a message queued for the agent (task notifications).
+    var operation: LenientString?
+    var content: LenientString?
+
+    struct LenientString: Decodable {
+        var value: String?
+        init(_ v: String?) { value = v }
+        init(from d: Decoder) throws { value = try? d.singleValueContainer().decode(String.self) }
+    }
+    /// Background Bash: `backgroundTaskId`; async Agent: `isAsync` + `agentId`; Monitor: `taskId` + `persistent`
+    /// (+ `timeoutMs`); TaskStop: `task_id` + `task_type`.
+    struct ToolResult: Decodable {
+        var backgroundTaskId: String?, isAsync: Bool?, agentId: String?, taskId: String?, persistent: Bool?
+        var timeoutMs: Int?, task_id: String?, task_type: String?
+        enum K: String, CodingKey { case backgroundTaskId, isAsync, agentId, taskId, persistent, timeoutMs, task_id, task_type }
+        init() {}
+        // lenient: most tools return a string or another shape here
+        init(from d: Decoder) throws {
+            guard let c = try? d.container(keyedBy: K.self) else { return }
+            backgroundTaskId = try? c.decodeIfPresent(String.self, forKey: .backgroundTaskId)
+            isAsync = try? c.decodeIfPresent(Bool.self, forKey: .isAsync)
+            agentId = try? c.decodeIfPresent(String.self, forKey: .agentId)
+            taskId = try? c.decodeIfPresent(String.self, forKey: .taskId)
+            persistent = try? c.decodeIfPresent(Bool.self, forKey: .persistent)
+            timeoutMs = try? c.decodeIfPresent(Int.self, forKey: .timeoutMs)
+            task_id = try? c.decodeIfPresent(String.self, forKey: .task_id)
+            task_type = try? c.decodeIfPresent(String.self, forKey: .task_type)
+        }
+    }
 
     struct Origin: Decodable {
         var kind: String?
@@ -133,9 +164,11 @@ public struct ClaudeParser: LineParser {
         let isAssistant = contains(line, "\"type\":\"assistant\"")
         let isUser = !isAssistant && contains(line, "\"type\":\"user\"")
         let isQueued = !isAssistant && !isUser && !isSub && contains(line, "\"queued_command\"")
-        let isTitle = !isAssistant && !isUser && !isQueued && !isSub &&
+        let isQueueOp = !isAssistant && !isUser && !isQueued && !isSub && contains(line, "\"queue-operation\"")
+            && contains(line, "<task-notification>")
+        let isTitle = !isAssistant && !isUser && !isQueued && !isQueueOp && !isSub &&
             (contains(line, "\"customTitle\"") || contains(line, "\"agentName\"") || contains(line, "\"aiTitle\""))
-        guard isAssistant || isUser || isQueued || isTitle else {
+        guard isAssistant || isUser || isQueued || isQueueOp || isTitle else {
             // JSON written with spaces (`"type": "user"`) never matches the checks above: compact it and look again.
             // Only lines whose first separator has a space pay for this (none in any version seen so far).
             if Self.spaced(line) {
@@ -173,6 +206,7 @@ public struct ClaudeParser: LineParser {
         case "user":
             guard let ts else { return }
             meta(r, model: nil, into: &out)
+            if !isSub, let t = r.toolUseResult, let b = Self.background(t, sessionId: sessionId, ts: ts) { out.background.append(b) }
             if !isSub, let text = humanText(r) {
                 // The text also feeds task keys; Ingest indexes it only when prompts are indexed.
                 out.userMessages.append(UserMessage(sessionId: sessionId, ts: ts, text: text, cwd: r.cwd,
@@ -191,6 +225,12 @@ public struct ClaudeParser: LineParser {
             if kind == "channel" { text = Self.channelBody(text) }
             out.userMessages.append(UserMessage(sessionId: sessionId, ts: ts, text: Self.clip(text), cwd: r.cwd,
                                                 channel: kind == "channel"))
+        case "queue-operation":
+            // A task notification is queued the moment its task ends, whether or not the agent is busy.
+            guard !isSub, let ts, r.operation?.value == "enqueue", let text = r.content?.value else { return }
+            for id in Self.finishedTasks(text) {
+                out.background.append(BackgroundTask(sessionId: sessionId, id: id, ts: ts, until: nil))
+            }
         case "custom-title", "agent-name", "ai-title":
             guard !isSub else { return }
             let t: (String, Int)? = r.customTitle.map { ($0, TitleRank.customTitle) }
@@ -200,6 +240,37 @@ public struct ClaudeParser: LineParser {
             out.meta.append(SessionMeta(id: sessionId, tool: .claude, title: title, titleRank: rank))
         default: break
         }
+    }
+
+    /// A background task launched (`until` = when it stops counting) or stopped (TaskStop: `until` nil) by a tool call.
+    static func background(_ t: ClaudeRecord.ToolResult, sessionId: String, ts: Timestamp) -> BackgroundTask? {
+        if let id = t.task_id, t.task_type != nil { return BackgroundTask(sessionId: sessionId, id: id, ts: ts, until: nil) }
+        // ponytail: a task of a process that died never reports; after this long it stops counting (a new process
+        // clears them earlier, `SpoolIngest`). Per-kind caps if long jobs outlive it.
+        let cap = ts + UserTime.driverIdle
+        if let id = t.backgroundTaskId { return BackgroundTask(sessionId: sessionId, id: id, ts: ts, until: cap) }
+        if t.isAsync == true, let id = t.agentId { return BackgroundTask(sessionId: sessionId, id: id, ts: ts, until: cap) }
+        if let id = t.taskId, let persistent = t.persistent {
+            let ends = !persistent ? t.timeoutMs.map { ts + Double($0) / 1000 } : nil
+            return BackgroundTask(sessionId: sessionId, id: id, ts: ts, until: min(cap, ends ?? cap))
+        }
+        return nil
+    }
+
+    /// Ids of the tasks a queued message reports as finished: each `<task-notification>` with a `<status>` (a
+    /// monitor's `<event>` without one is not an end).
+    static func finishedTasks(_ s: String) -> [String] {
+        var out: [String] = []
+        var rest = s[...]
+        while let open = rest.firstRange(of: "<task-notification>") {
+            rest = rest[open.upperBound...]
+            let n = rest.firstRange(of: "</task-notification>").map { rest[..<$0.lowerBound] } ?? rest
+            guard n.firstRange(of: "<status>") != nil, let a = n.firstRange(of: "<task-id>"),
+                  let b = n[a.upperBound...].firstRange(of: "</task-id>") else { continue }
+            let id = String(n[a.upperBound..<b.lowerBound])
+            if !id.isEmpty, !out.contains(id) { out.append(id) }
+        }
+        return out
     }
 
     /// Text of a message typed by the human, or nil for tool results, meta records, notifications.
@@ -382,6 +453,31 @@ public struct ClaudeParser: LineParser {
             else if keyIs(k, "customTitle") { r.customTitle = c.string() }
             else if keyIs(k, "agentName") { r.agentName = c.string() }
             else if keyIs(k, "aiTitle") { r.aiTitle = c.string() }
+            else if keyIs(k, "operation") {
+                guard c.peek == 0x22 else { return false }
+                r.operation = ClaudeRecord.LenientString(c.string())
+            }
+            else if keyIs(k, "content") {
+                guard r.type == "queue-operation", c.peek == 0x22 else { return false }
+                r.content = ClaudeRecord.LenientString(c.string(limit: 1 << 16))
+            }
+            else if keyIs(k, "toolUseResult") {
+                guard c.peek == 0x7B else { return false }
+                var t = ClaudeRecord.ToolResult()
+                ok = ok && c.object { c, k in
+                    if keyIs(k, "backgroundTaskId") { t.backgroundTaskId = c.string() }
+                    else if keyIs(k, "isAsync") { t.isAsync = c.bool() }
+                    else if keyIs(k, "agentId") { t.agentId = c.string() }
+                    else if keyIs(k, "taskId") { t.taskId = c.string() }
+                    else if keyIs(k, "persistent") { t.persistent = c.bool() }
+                    else if keyIs(k, "timeoutMs") { t.timeoutMs = c.int() }
+                    else if keyIs(k, "task_id") { t.task_id = c.string() }
+                    else if keyIs(k, "task_type") { t.task_type = c.string() }
+                    else { return false }
+                    return true
+                }
+                r.toolUseResult = t
+            }
             else if keyIs(k, "attachment") {
                 if c.peek != 0x7B { return false }
                 var a = ClaudeRecord.Attachment()

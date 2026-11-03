@@ -523,6 +523,7 @@ public final class Ingest {
         for u in out.usage { sessions.insert(u.messageId == nil ? u.sessionId : fileSession) }
         for e in out.events { sessions.insert(e.sessionId) }
         for m in out.userMessages { sessions.insert(m.sessionId) }
+        for b in out.background { sessions.insert(b.sessionId) }
         for s in sessions {
             let tool = s.split(separator: ":", maxSplits: 1).first.map(String.init) ?? "claude"
             try db.run("INSERT OR IGNORE INTO session(id, tool, host, seq) VALUES(?, ?, ?, 0)",
@@ -616,6 +617,14 @@ public final class Ingest {
                 INSERT INTO tool_use(file_id, session_id, hour, name, n) VALUES(?,?,?,?,?)
                 ON CONFLICT DO UPDATE SET n=n+excluded.n
                 """, [.int(f.id), .text(k.session), .int(Int64(k.hour)), .text(k.name), .int(Int64(n))])
+        }
+
+        // Background tasks still running (`Background`): the set of each session moves with its transcript.
+        for (id, xs) in Dictionary(grouping: out.background, by: \.sessionId) {
+            let stored = try db.one("SELECT bg_tasks FROM session WHERE id = ?", [.text(id)]) { $0.text(0) } ?? nil
+            guard let e = Background.apply(xs, to: stored) else { continue }
+            try db.run("UPDATE session SET bg_tasks = ?, bg_until = ?, seq = ? WHERE id = ?",
+                       [.of(e.tasks), .of(e.until), .int(Int64(try store.nextSeq())), .text(id)])
         }
 
         // Typing into a terminal: decides later whether a message in another session was the human's.
