@@ -24,7 +24,7 @@ final class WallClockTileTests: XCTestCase {
                          days: [[Totals(sessionSec: 4 * 3600, tokens: 0, cost: 0), Totals(sessionSec: 2 * 3600, tokens: 0, cost: 0)]]
                             + Array(repeating: [empty, empty], count: 6),
                          totals: empty, previous: empty, projectRows: [], limitByDay: Array(repeating: nil, count: 7),
-                         workedByDay: [2 * 3600, 0, 0, 0, 0, 0, 0])
+                         workedByDay: [7200.0, 0, 0, 0, 0, 0, 0])
         let d = WeekVM(w, weekLimit: nil, f).days(.hours)[0]
         XCTAssertEqual(d.total, f.duration(2 * 3600))
         XCTAssertEqual(d.value, 2, accuracy: 1e-9)
